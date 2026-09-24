@@ -6,6 +6,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
 import pyvista as pv
 from pyvistaqt import QtInteractor
@@ -23,6 +24,22 @@ from .skeleton import PARTS, SENSOR_KEYS
 MODEL_DIR = Path(__file__).resolve().parent.parent / "assets" / "models"
 
 
+def _axis_triad(length: float) -> pv.PolyData:
+    """One RGB mesh for the three local axes, avoiding 45 extra VTK actors."""
+    arrows = []
+    for direction, rgb in (((1, 0, 0), (255, 50, 50)),
+                           ((0, 1, 0), (50, 220, 50)),
+                           ((0, 0, 1), (50, 120, 255))):
+        arrow = pv.Arrow(direction=direction, scale=length,
+                         tip_length=0.24, tip_radius=0.09,
+                         shaft_radius=0.025)
+        arrow.point_data["axis_rgb"] = np.tile(
+            np.asarray(rgb, dtype=np.uint8), (arrow.n_points, 1))
+        arrows.append(arrow)
+    return arrows[0].merge(arrows[1], merge_points=False).merge(
+        arrows[2], merge_points=False)
+
+
 class BodyWindow(QtWidgets.QMainWindow):
     def __init__(self, source: GuiUdpSource | ReplaySource, settings_path: Path,
                  assignments: dict[str, str] | None = None) -> None:
@@ -31,6 +48,7 @@ class BodyWindow(QtWidgets.QMainWindow):
         self.settings_path = settings_path
         self.engine = PoseEngine(assignments)
         self.actors = []
+        self.axis_actors = []
         self.combos: dict[str, QtWidgets.QComboBox] = {}
         self.status_labels: dict[str, QtWidgets.QLabel] = {}
         self._render_dirty = True
@@ -79,6 +97,10 @@ class BodyWindow(QtWidgets.QMainWindow):
                 button.setEnabled(False)
             toolbar.addWidget(button)
         panel_layout.addLayout(toolbar)
+        self.axes_checkbox = QtWidgets.QCheckBox("显示部位坐标轴（红 X · 绿 Y · 蓝 Z）")
+        self.axes_checkbox.setChecked(True)
+        self.axes_checkbox.toggled.connect(self._toggle_axes)
+        panel_layout.addWidget(self.axes_checkbox)
         self.record_button = QtWidgets.QPushButton("开始录制 CSV")
         self.record_button.clicked.connect(self._toggle_recording)
         self.record_button.setEnabled(not self.replay_mode)
@@ -113,6 +135,7 @@ class BodyWindow(QtWidgets.QMainWindow):
         hint = QtWidgets.QLabel(
             "模型共有 15 个部件，目前仅躯干和双臂 7 处可绑定 IMU；"
             "未绑定部位跟随父部位。每只设备首次收到数据时自动建立中立位。"
+            "彩色箭头是模型各部位的局部轴，不是 WT901 外壳上的轴。"
             "空格：全部归零；R：重置视角。\n"
             "本窗口占用 UDP 1399，运行时请关闭手腕控制台。")
         hint.setWordWrap(True)
@@ -134,17 +157,24 @@ class BodyWindow(QtWidgets.QMainWindow):
         shortcut.activated.connect(self._zero_all)
         reset_view = QtGui.QShortcut(QtGui.QKeySequence("R"), self)
         reset_view.activated.connect(self.plotter.reset_camera)
+        toggle_axes = QtGui.QShortcut(QtGui.QKeySequence("A"), self)
+        toggle_axes.activated.connect(self.axes_checkbox.toggle)
 
     def _load_model(self) -> None:
         missing = [part.mesh for part in PARTS if not (MODEL_DIR / part.mesh).is_file()]
         if missing:
             raise FileNotFoundError(f"缺少人体 STL 模型：{', '.join(missing)}")
+        triad = _axis_triad(0.105)
         for part in PARTS:
             mesh = pv.read(MODEL_DIR / part.mesh)
             mesh.points *= 0.001  # Original mesh units are millimetres.
             actor = self.plotter.add_mesh(mesh, color=part.color,
                                           smooth_shading=False, show_edges=False)
             self.actors.append(actor)
+            axis_actor = self.plotter.add_mesh(
+                triad, scalars="axis_rgb", rgb=True, lighting=False,
+                show_scalar_bar=False, pickable=False)
+            self.axis_actors.append(axis_actor)
         self.plotter.set_background("#1a1d23")
         self.plotter.show_axes()
         self._render_pose()
@@ -155,11 +185,18 @@ class BodyWindow(QtWidgets.QMainWindow):
         self.plotter.reset_camera()
 
     def _render_pose(self) -> None:
-        for actor, matrix in zip(self.actors, self.engine.transforms()):
+        for actor, axis_actor, matrix in zip(
+                self.actors, self.axis_actors, self.engine.transforms()):
             actor.user_matrix = matrix
+            axis_actor.user_matrix = matrix
         self.plotter.render()
         self._render_dirty = False
         self._last_render = time.monotonic()
+
+    def _toggle_axes(self, visible: bool) -> None:
+        for actor in self.axis_actors:
+            actor.SetVisibility(visible)
+        self._render_dirty = True
 
     def _poll(self) -> None:
         try:
