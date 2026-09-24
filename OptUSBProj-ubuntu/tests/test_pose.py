@@ -12,6 +12,7 @@ sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT.parent))
 
 from optusbproj_ubuntu.pose import PoseEngine
+from optusbproj_ubuntu.axis_mapping import mapping_matrix
 from optusbproj_ubuntu.skeleton import PARTS, PART_BY_KEY
 
 
@@ -67,6 +68,39 @@ class PoseEngineTests(unittest.TestCase):
         self.assertNotIn("WT5500011408", engine.neutral)
         engine.feed(packet("WT5500011408", yaw=40))
         np.testing.assert_allclose(engine.rotation_for("left_hand"), np.eye(3), atol=1e-12)
+
+    def test_flat_sensor_yaw_rotates_about_model_blue_z_by_default(self):
+        engine = PoseEngine({"left_hand": "WT5500011381"})
+        engine.feed(packet("WT5500011381", yaw=25))
+        engine.feed(packet("WT5500011381", yaw=115))
+        rotated = engine.rotation_for("left_hand")
+        np.testing.assert_allclose(rotated @ [0, 0, -1], [0, 0, -1], atol=1e-12)
+        np.testing.assert_allclose(rotated @ [1, 0, 0], [0, 1, 0], atol=1e-12)
+
+    def test_custom_sensor_y_axis_can_drive_model_z(self):
+        engine = PoseEngine({"left_hand": "WT5500011381"},
+                            {"left_hand": ("+Y", "+Z", "+X")})
+        engine.feed(packet("WT5500011381"))
+        engine.feed(packet("WT5500011381", pitch=90))
+        rotated = engine.rotation_for("left_hand")
+        np.testing.assert_allclose(rotated @ [0, 0, -1], [0, 0, -1], atol=1e-12)
+        np.testing.assert_allclose(rotated @ [1, 0, 0], [0, 1, 0], atol=1e-12)
+
+    def test_custom_sensor_z_axis_can_drive_model_x(self):
+        engine = PoseEngine({"left_hand": "WT5500011381"},
+                            {"left_hand": ("+Y", "+Z", "+X")})
+        engine.feed(packet("WT5500011381"))
+        engine.feed(packet("WT5500011381", yaw=90))
+        np.testing.assert_allclose(engine.rotation_for("left_hand") @ [0, 0, -1],
+                                   [0, 1, 0], atol=1e-12)
+
+    def test_mapping_requires_three_unique_right_handed_axes(self):
+        with self.assertRaisesRegex(ValueError, "只能分配"):
+            mapping_matrix(("+X", "+X", "+Z"))
+        with self.assertRaisesRegex(ValueError, "镜像"):
+            mapping_matrix(("-X", "+Y", "+Z"))
+        np.testing.assert_allclose(mapping_matrix(("-X", "-Y", "+Z")),
+                                   np.diag([-1, -1, 1]))
 
 
 if __name__ == "__main__":

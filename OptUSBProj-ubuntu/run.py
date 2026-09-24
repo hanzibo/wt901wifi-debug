@@ -31,10 +31,10 @@ def main() -> int:
     from wt901.gui_udp import GuiUdpSource
     from optusbproj_ubuntu.gui import BodyWindow
     from optusbproj_ubuntu.recording import ReplaySource
-    from optusbproj_ubuntu.settings import load_assignments
+    from optusbproj_ubuntu.settings import load_config
 
     try:
-        assignments = load_assignments(args.settings)
+        assignments, axis_mappings = load_config(args.settings)
     except (OSError, ValueError) as exc:
         parser.exit(1, f"无法读取设备分配配置：{exc}\n")
     app = QtWidgets.QApplication(sys.argv[:1])
@@ -45,7 +45,7 @@ def main() -> int:
         parser.exit(1, f"无法打开数据源：{exc}\n"
                       "实时模式请先关闭手腕控制台或其他占用 UDP 端口的程序。\n")
     try:
-        window = BodyWindow(source, args.settings, assignments)
+        window = BodyWindow(source, args.settings, assignments, axis_mappings)
     except Exception:
         source.close()
         raise

@@ -13,12 +13,15 @@ import numpy as np
 from wt901.protocol import AttitudePacket
 from wt901_viz.orientation import rotation_matrix
 
-from .skeleton import PARTS, PART_BY_KEY, SENSOR_KEYS, SENSOR_TO_MODEL, transform
+from .axis_mapping import DEFAULT_AXIS_MAPPING, mapping_matrix, normalized_mapping
+from .skeleton import PARTS, PART_BY_KEY, SENSOR_KEYS, transform
 
 
 class PoseEngine:
-    def __init__(self, assignments: dict[str, str] | None = None) -> None:
+    def __init__(self, assignments: dict[str, str] | None = None,
+                 axis_mappings: dict[str, tuple[str, str, str]] | None = None) -> None:
         self.assignments: dict[str, str] = {key: "" for key in SENSOR_KEYS}
+        self.axis_mappings = {key: DEFAULT_AXIS_MAPPING for key in SENSOR_KEYS}
         self.neutral: dict[str, np.ndarray] = {}
         self.current: dict[str, np.ndarray] = {}
         self.packets: dict[str, AttitudePacket] = {}
@@ -28,6 +31,14 @@ class PoseEngine:
             for key, device_id in assignments.items():
                 if key in self.assignments and device_id:
                     self.assign(key, device_id)
+        if axis_mappings:
+            for key, mapping in axis_mappings.items():
+                self.set_axis_mapping(key, mapping)
+
+    def set_axis_mapping(self, key: str, mapping: tuple[str, str, str]) -> None:
+        if key not in self.axis_mappings:
+            raise KeyError(f"未知身体部位：{key}")
+        self.axis_mappings[key] = normalized_mapping(mapping)
 
     def assign(self, key: str, device_id: str) -> None:
         if key not in self.assignments:
@@ -76,9 +87,11 @@ class PoseEngine:
             parent_rotation = identity if parent_index is None else absolute_rotations[parent_index]
             device_id = self.assignments.get(part.key, "")
             if device_id and device_id in self.current and device_id in self.neutral:
-                # World-frame delta makes the neutral pose exactly the STL rest pose.
-                delta = self.current[device_id] @ self.neutral[device_id].T
-                absolute_rotation = SENSOR_TO_MODEL @ delta @ SENSOR_TO_MODEL.T
+                # Express the change in the sensor's *neutral local* frame.
+                # A chosen column maps each neutral sensor axis to the model.
+                delta_local = self.neutral[device_id].T @ self.current[device_id]
+                basis = mapping_matrix(self.axis_mappings[part.key])
+                absolute_rotation = basis @ delta_local @ basis.T
             else:
                 # Missing/unassigned parts follow their parent, including the head.
                 absolute_rotation = parent_rotation.copy()

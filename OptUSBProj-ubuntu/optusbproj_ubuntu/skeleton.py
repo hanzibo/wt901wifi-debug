@@ -43,10 +43,6 @@ PARTS: tuple[Part, ...] = (
 SENSOR_KEYS = tuple(part.key for part in PARTS if part.sensor_slot)
 PART_BY_KEY = {part.key: index for index, part in enumerate(PARTS)}
 
-# The original UI remaps WT sensor XYZ to model XYZ with this orthogonal basis.
-SENSOR_TO_MODEL = np.array([[0., 0., 1.], [1., 0., 0.], [0., 1., 0.]])
-
-
 def identity_transform() -> np.ndarray:
     return np.eye(4, dtype=float)
 

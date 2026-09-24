@@ -15,9 +15,10 @@ from wt901.gui_udp import GuiUdpSource
 from wt901_viz.device_list import ConnectedDevicesDialog
 from wt901_viz.onboarding import DeviceSetupDialog
 
+from .axis_mapping import DEFAULT_AXIS_MAPPING, mapping_matrix
 from .pose import PoseEngine
 from .recording import PacketRecorder, ReplaySource
-from .settings import save_assignments
+from .settings import save_config
 from .skeleton import PARTS, SENSOR_KEYS
 
 
@@ -40,16 +41,75 @@ def _axis_triad(length: float) -> pv.PolyData:
         arrows[2], merge_points=False)
 
 
+class AxisMappingDialog(QtWidgets.QDialog):
+    """Choose a proper signed permutation for one neutral sensor frame."""
+
+    CHOICES = (("+X", "模型 +X（前）"), ("-X", "模型 -X（后）"),
+               ("+Y", "模型 +Y（左）"), ("-Y", "模型 -Y（右）"),
+               ("+Z", "模型 +Z（上）"), ("-Z", "模型 -Z（下）"))
+
+    def __init__(self, part_label: str, mapping: tuple[str, str, str],
+                 parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"{part_label} · 设备轴映射")
+        self.setMinimumWidth(420)
+        layout = QtWidgets.QVBoxLayout(self)
+        instruction = QtWidgets.QLabel(
+            "设备固定后，先摆出模型默认姿势并归零。此时设备的每根正轴"
+            "分别指向模型的哪个方向？负轴请选择带 - 的方向。")
+        instruction.setWordWrap(True)
+        layout.addWidget(instruction)
+        form = QtWidgets.QFormLayout()
+        self.selectors: list[QtWidgets.QComboBox] = []
+        for device_axis, initial in zip("XYZ", mapping):
+            combo = QtWidgets.QComboBox()
+            for value, label in self.CHOICES:
+                combo.addItem(label, value)
+            combo.setCurrentIndex(combo.findData(initial))
+            combo.currentIndexChanged.connect(self._validate)
+            form.addRow(f"设备 +{device_axis} 轴 →", combo)
+            self.selectors.append(combo)
+        layout.addLayout(form)
+        self.message = QtWidgets.QLabel()
+        self.message.setWordWrap(True)
+        layout.addWidget(self.message)
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok |
+            QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.ok_button = buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Ok)
+        self.ok_button.setText("保存映射")
+        buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        self._validate()
+
+    def mapping(self) -> tuple[str, str, str]:
+        return tuple(combo.currentData() for combo in self.selectors)
+
+    def _validate(self, _index: int = 0) -> None:
+        try:
+            mapping_matrix(self.mapping())
+        except ValueError as exc:
+            self.message.setText(str(exc))
+            self.ok_button.setEnabled(False)
+        else:
+            self.message.setText("映射有效。模型坐标轴将按此规则随设备转动。")
+            self.ok_button.setEnabled(True)
+
+
 class BodyWindow(QtWidgets.QMainWindow):
     def __init__(self, source: GuiUdpSource | ReplaySource, settings_path: Path,
-                 assignments: dict[str, str] | None = None) -> None:
+                 assignments: dict[str, str] | None = None,
+                 axis_mappings: dict[str, tuple[str, str, str]] | None = None) -> None:
         super().__init__()
         self.source = source
         self.settings_path = settings_path
-        self.engine = PoseEngine(assignments)
+        self.engine = PoseEngine(assignments, axis_mappings)
         self.actors = []
         self.axis_actors = []
         self.combos: dict[str, QtWidgets.QComboBox] = {}
+        self.mapping_buttons: dict[str, QtWidgets.QPushButton] = {}
         self.status_labels: dict[str, QtWidgets.QLabel] = {}
         self._render_dirty = True
         self._last_render = 0.0
@@ -109,23 +169,30 @@ class BodyWindow(QtWidgets.QMainWindow):
         group = QtWidgets.QGroupBox("设备 ID → 身体部位（可先只连接 3 台）")
         grid = QtWidgets.QGridLayout(group)
         grid.addWidget(QtWidgets.QLabel("部位"), 0, 0)
-        grid.addWidget(QtWidgets.QLabel("设备 ID"), 0, 1)
-        grid.addWidget(QtWidgets.QLabel("中立位"), 0, 2)
+        grid.addWidget(QtWidgets.QLabel("轴映射"), 0, 1)
+        grid.addWidget(QtWidgets.QLabel("设备 ID"), 0, 2)
+        grid.addWidget(QtWidgets.QLabel("中立位"), 0, 3)
         for index, part in enumerate((p for p in PARTS if p.sensor_slot)):
             row = index * 2 + 1
             grid.addWidget(QtWidgets.QLabel(part.label), row, 0)
+            mapping_button = QtWidgets.QPushButton("轴映射")
+            mapping_button.clicked.connect(
+                lambda _checked=False, key=part.key: self._show_axis_mapping(key))
+            grid.addWidget(mapping_button, row, 1)
+            self.mapping_buttons[part.key] = mapping_button
+            self._update_mapping_button(part.key)
             combo = QtWidgets.QComboBox()
-            combo.setMinimumWidth(185)
+            combo.setMinimumWidth(165)
             combo.currentIndexChanged.connect(
                 lambda _index, key=part.key: self._assignment_changed(key))
-            grid.addWidget(combo, row, 1)
+            grid.addWidget(combo, row, 2)
             self.combos[part.key] = combo
             zero = QtWidgets.QPushButton("归零")
             zero.clicked.connect(lambda _checked=False, key=part.key: self._zero(key))
-            grid.addWidget(zero, row, 2)
+            grid.addWidget(zero, row, 3)
             status = QtWidgets.QLabel("未分配")
             status.setWordWrap(True)
-            grid.addWidget(status, row + 1, 0, 1, 3)
+            grid.addWidget(status, row + 1, 0, 1, 4)
             self.status_labels[part.key] = status
         panel_layout.addWidget(group)
         refresh = QtWidgets.QPushButton("刷新在线设备列表")
@@ -136,6 +203,7 @@ class BodyWindow(QtWidgets.QMainWindow):
             "模型共有 15 个部件，目前仅躯干和双臂 7 处可绑定 IMU；"
             "未绑定部位跟随父部位。每只设备首次收到数据时自动建立中立位。"
             "彩色箭头是模型各部位的局部轴，不是 WT901 外壳上的轴。"
+            "轴映射描述设备在归零姿势下的方向；更换绑法后需重新设置。"
             "空格：全部归零；R：重置视角。\n"
             "本窗口占用 UDP 1399，运行时请关闭手腕控制台。")
         hint.setWordWrap(True)
@@ -241,12 +309,39 @@ class BodyWindow(QtWidgets.QMainWindow):
     def _assignment_changed(self, key: str) -> None:
         combo = self.combos[key]
         device_id = combo.currentData() or ""
+        previous = self.engine.assignments[key]
         try:
             self.engine.assign(key, device_id)
-            save_assignments(self.settings_path, self.engine.assignments)
+            save_config(self.settings_path, self.engine.assignments,
+                        self.engine.axis_mappings)
         except (ValueError, OSError) as exc:
+            self.engine.assignments[key] = previous
             QtWidgets.QMessageBox.warning(self, "分配未保存", str(exc))
         self._refresh_choices(force=True)
+        self._render_dirty = True
+
+    def _update_mapping_button(self, key: str) -> None:
+        mapping = self.engine.axis_mappings[key]
+        button = self.mapping_buttons[key]
+        button.setText("轴映射*" if mapping != DEFAULT_AXIS_MAPPING else "轴映射")
+        button.setToolTip("；".join(f"设备 {axis} → 模型 {target}"
+                                for axis, target in zip("XYZ", mapping)))
+
+    def _show_axis_mapping(self, key: str) -> None:
+        part = next(part for part in PARTS if part.key == key)
+        dialog = AxisMappingDialog(part.label, self.engine.axis_mappings[key], self)
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        previous = self.engine.axis_mappings[key]
+        try:
+            self.engine.set_axis_mapping(key, dialog.mapping())
+            save_config(self.settings_path, self.engine.assignments,
+                        self.engine.axis_mappings)
+        except (ValueError, OSError) as exc:
+            self.engine.set_axis_mapping(key, previous)
+            QtWidgets.QMessageBox.warning(self, "轴映射未保存", str(exc))
+            return
+        self._update_mapping_button(key)
         self._render_dirty = True
 
     def _zero(self, key: str) -> None:

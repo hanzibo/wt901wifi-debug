@@ -11,7 +11,8 @@ sys.path.insert(0, str(PROJECT.parent))
 
 from wt901.protocol import AttitudePacket
 from optusbproj_ubuntu.recording import PacketRecorder, ReplaySource
-from optusbproj_ubuntu.settings import load_assignments, save_assignments
+from optusbproj_ubuntu.settings import (load_assignments, load_config,
+                                        save_assignments, save_config)
 
 
 def packet(device_id: str, roll: float) -> AttitudePacket:
@@ -52,6 +53,20 @@ class RecordingTests(unittest.TestCase):
                             '"left_hand":"WT5500011381"}}', encoding="utf-8")
             with self.assertRaises(ValueError):
                 load_assignments(path)
+
+    def test_axis_mappings_survive_binding_changes_and_legacy_config(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "local_config.json"
+            path.write_text('{"version":1,"assignments":{"left_hand":"WT5500011381"}}',
+                            encoding="utf-8")
+            assignments, mappings = load_config(path)
+            self.assertEqual(assignments["left_hand"], "WT5500011381")
+            self.assertEqual(mappings, {})
+            save_config(path, assignments, {"left_hand": ("+Y", "+Z", "+X")})
+            save_assignments(path, {"left_forearm": "WT5500011381"})
+            assignments, mappings = load_config(path)
+            self.assertEqual(assignments["left_forearm"], "WT5500011381")
+            self.assertEqual(mappings["left_hand"], ("+Y", "+Z", "+X"))
 
 
 if __name__ == "__main__":
