@@ -10,3 +10,8 @@ __pycache__/
 .firecrawl/
 .agents/
 .codex/
+
+# Per-machine body sensor assignments (never commit local device mapping).
+OptUSBProj-ubuntu/local_config.json
+OptUSBProj-ubuntu/local_config.json.tmp
+OptUSBProj-ubuntu/recordings/
