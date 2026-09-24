@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=WT901 双手手腕控制台
+Name[en_US]=WT901 Wrist Console
+Comment=在 wt901 Conda 环境中启动 IMU 手腕控制界面
+Comment[en_US]=Launch the IMU wrist console in the wt901 Conda environment
+Exec=/home/hzb/Work/WT901/launch_wt901.sh
+Path=/home/hzb/Work/WT901
+Icon=/home/hzb/Work/WT901/assets/wt901-wrist.svg
+Terminal=false
+Categories=Science;
+Keywords=WT901;IMU;Wrist;Sensor;
+StartupNotify=true

@@ -1,0 +1,103 @@
+"""One UDP socket for live WT901 packets and device register control.
+
+The GUI must not open a second listener on port 1399: two UDP listeners can
+split incoming datagrams. This source also binds device IDs to their current
+sender IPs, so calibration commands cannot be sent to a stale/unverified IP.
+"""
+
+from __future__ import annotations
+
+from collections import deque
+import socket
+import time
+
+from .protocol import AttitudePacket, extract_packets
+from .registers import CMD_READ, UNLOCK_KEY, UNLOCK_REG
+
+
+class GuiUdpSource:
+    def __init__(self, port: int = 1399, host: str = "0.0.0.0"):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind((host, port))
+        self.sock.setblocking(False)
+        self._buffers: dict[tuple[str, int], bytearray] = {}
+        self._devices: dict[str, tuple[str, float]] = {}
+        self._endpoints: dict[str, tuple[str, int, float]] = {}
+        self._replies: deque[tuple[str, tuple[int, int, int, int]]] = deque()
+
+    def poll(self) -> list[AttitudePacket]:
+        packets: list[AttitudePacket] = []
+        for _ in range(512):
+            try:
+                data, addr = self.sock.recvfrom(4096)
+            except BlockingIOError:
+                break
+            if len(data) == 11 and data[:2] == b"\x55\x5f" and sum(data[:10]) & 0xff == data[10]:
+                for device_id, (ip, seen) in self._devices.items():
+                    if ip == addr[0] and time.monotonic() - seen < 3.0:
+                        values = tuple(data[i] | data[i + 1] << 8 for i in (2, 4, 6, 8))
+                        self._replies.append((device_id, values))
+                        break
+                continue
+            buffer = self._buffers.setdefault(addr, bytearray())
+            buffer.extend(data)
+            for raw in extract_packets(buffer):
+                packet = AttitudePacket.parse(raw)
+                seen = time.monotonic()
+                self._devices[packet.device_id] = (addr[0], seen)
+                self._endpoints[packet.device_id] = (addr[0], addr[1], seen)
+                packets.append(packet)
+        return packets
+
+    def take_replies(self) -> list[tuple[str, tuple[int, int, int, int]]]:
+        out = list(self._replies)
+        self._replies.clear()
+        return out
+
+    def seen_devices(self, max_age: float = 3.0) -> dict[str, tuple[str, float]]:
+        """最近收过数据的设备 ID -> (sender IP, monotonic timestamp)。"""
+        now = time.monotonic()
+        return {device_id: (ip, seen) for device_id, (ip, seen) in self._devices.items()
+                if now - seen <= max_age}
+
+    def seen_endpoints(self, max_age: float = 3.0) -> dict[str, tuple[str, int, float]]:
+        """最近收到 WT 数据的设备 ID -> (sender IP, source port, monotonic timestamp)。"""
+        now = time.monotonic()
+        return {device_id: endpoint for device_id, endpoint in self._endpoints.items()
+                if now - endpoint[2] <= max_age}
+
+    def device_ip(self, device_id: str, max_age: float | None = 3.0) -> str:
+        ip, seen = self._devices.get(device_id, ("", 0.0))
+        if not ip or (max_age is not None and time.monotonic() - seen > max_age):
+            raise RuntimeError(f"{device_id} 当前不在线；不会发送配置指令")
+        if any(other_id != device_id and other_ip == ip and other_seen > seen
+               for other_id, (other_ip, other_seen) in self._devices.items()):
+            raise RuntimeError(f"{device_id} 原 IP 已被其他设备使用；不会发送配置指令")
+        return ip
+
+    def _send(self, device_id: str, payload: bytes, max_age: float | None = 3.0) -> None:
+        self.sock.sendto(payload, (self.device_ip(device_id, max_age), 9250))
+
+    def read_registers(self, device_id: str, address: int) -> None:
+        self._send(device_id, bytes((0xff, 0xaa, CMD_READ, address & 0xff, 0)))
+
+    def switch_to_ap_udp(self, device_id: str) -> None:
+        """Vendor ASCII command: leave STA and create the device's own AP/UDP hotspot."""
+        self._send(device_id, b"WITAPUDP\r\n")
+
+    def write_register(self, device_id: str, address: int, value: int,
+                       max_age: float | None = 3.0) -> None:
+        self._send(device_id, bytes((0xff, 0xaa, address & 0xff,
+                                     value & 0xff, value >> 8 & 0xff)), max_age)
+
+    def unlock(self, device_id: str, max_age: float | None = 3.0) -> None:
+        self.write_register(device_id, UNLOCK_REG, UNLOCK_KEY, max_age)
+
+    def close(self) -> None:
+        self.sock.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        self.close()
