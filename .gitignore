@@ -1,0 +1,12 @@
+# Local reference archive (vendor PDFs and example SDK are kept on this machine).
+no-improtent/
+
+# Python-generated files.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local tool/session caches, not project sources.
+.firecrawl/
+.agents/
+.codex/
