@@ -22,6 +22,13 @@
 | 实时稳定性 | UDP 缓冲与状态为类级共享变量；停止时 `recvfrom()` 阻塞；设备关闭按钮仍访问不存在的 USB `device` 属性 | 拆分采集、状态、计算、渲染线程；增加超时、退出与异常处理；按设备 ID 管理时间戳和掉线状态 |
 | 算法可验证性 | 姿态轴系、欧拉顺序、偏置与 FK/IK 分散在 GUI 文件；无针对性测试 | 将 4×4 变换、坐标系、关节限位、FK/IK 独立为纯计算模块，建立零位、单轴旋转、左右镜像和 FK→IK 回环测试 |
 
+### WT901 通信模块的复用边界
+
+- **直接复用**仓库根目录的 `wt901.protocol.AttitudePacket`、`extract_packets()` 和 `wt901.gui_udp.GuiUdpSource`。前者负责 54 字节报文定界、字段换算、电压等；后者以一个 `0.0.0.0:1399` UDP 套接字接收所有设备，并提供 `poll()`、`seen_devices()`、`seen_endpoints()` 与安全的设备寄存器通信。新项目不复制旧版 `DeviceModel`/`UdpService`，也不重写一份解析协议。
+- 主 GUI 定时器从**同一个** `GuiUdpSource.poll()` 取包，以 `packet.device_id` 为键保存最新样本，再经“设备 ID → 身体节点”配置送入姿态链。数据包模型直接使用 `roll/pitch/yaw`、`battery_v`、`rssi` 等字段；人体层只负责坐标系换算、安装偏置、中立位和运动学。
+- 热点设备发现与 AP→STA 接入可借用 `wt901_viz.device_list`、`wt901_viz.onboarding` 的现有逻辑；界面应按全身节点重新组织，不把手腕模型的左右手状态类当作全身通用数据结构。
+- **不能同时运行** `wrist_demo.py` 与新程序来分别监听 UDP 1399；两进程占用同一端口可能分走数据。需要同时查看手腕和全身时，应在一个进程内复用单一接收源并分发样本。
+
 ## 3. 本机环境调查
 
 - Conda 环境 `OptUSBProj`：Python 3.11.16。已验证可导入 `numpy`、`scipy`、`PySide6`、`pyvista`、`pyvistaqt`、`vtk`、`transforms3d`、`roboticstoolbox`、`spatialmath`、`numba`、`pyserial`、`openpyxl` 和 `matplotlib`。
