@@ -42,6 +42,16 @@ conda run --no-capture-output -n OptUSBProj python -u OptUSBProj-ubuntu/sim_conn
 
 2026-09-25 已在本机 CoppeliaSim 4.10 的独立空场景完成实测：连接 `127.0.0.1:23000`，dummy 位置读回 `[0.0, 0.0, 0.4] → [0.1, 0.0, 0.4]` 米，结果 `PASS`；测试后关闭了该仿真实例。测试使用 `-h` 无窗口模式和虚拟显示器，因此不会在当前桌面显示 CoppeliaSim 窗口；手动去掉 `-h` 并在桌面会话启动才会显示 GUI。此结果只验证远程 API 通信和普通对象位置命令，**尚未**验证机器人关节、FK/IK 或旧项目场景。
 
+若要肉眼观察指令生效，先在真实桌面启动 `coppeliaSim.sh`（不带 `-h`，并保持仿真停止），再运行：
+
+```bash
+conda run --no-capture-output -n OptUSBProj python -u OptUSBProj-ubuntu/sim_connectivity.py \
+  --coppelia-dir /home/hzb/Software/CoppeliaSim_Edu_V4_10_0_rev0_Ubuntu24_04 \
+  --visual-demo-seconds 60
+```
+
+这会创建较大的 `WT901_ZMQ_demo_dummy`，沿世界 X 轴左右往返，并逐次读回位置；60 秒后自动删除临时对象，不保存场景。GUI 保持打开，直到用户自行关闭。
+
 ## 实现边界
 
 - 接收层直接使用仓库已有的 `wt901.gui_udp.GuiUdpSource` 和 `wt901.protocol.AttitudePacket`，不运行旧目录的 `UdpService` 或 Windows DLL。

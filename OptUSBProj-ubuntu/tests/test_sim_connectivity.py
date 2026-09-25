@@ -6,7 +6,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sim_connectivity import probe
+from sim_connectivity import probe, visual_demo
 
 
 class FakeSim:
@@ -29,6 +29,9 @@ class FakeSim:
     def setObjectPosition(self, handle, position):
         if not self.ignore_writes:
             self.position = position.copy()
+
+    def setObjectAlias(self, handle, alias):
+        self.alias = alias
 
     def getObjectPosition(self, handle):
         return self.position.copy()
@@ -56,6 +59,12 @@ class ConnectivityProbeTests(unittest.TestCase):
         sim = FakeSim(ignore_writes=True)
         with self.assertRaisesRegex(RuntimeError, "未返回目标位置"):
             probe(sim)
+        self.assertTrue(sim.removed)
+
+    def test_visual_demo_removes_temporary_dummy(self):
+        sim = FakeSim()
+        visual_demo(sim, 0.001)
+        self.assertEqual(sim.alias, "WT901_ZMQ_demo_dummy")
         self.assertTrue(sim.removed)
 
 
