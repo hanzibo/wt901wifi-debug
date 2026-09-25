@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import math
 from datetime import datetime
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from wt901_viz.device_list import ConnectedDevicesDialog
 from wt901_viz.onboarding import DeviceSetupDialog
 
 from .axis_mapping import DEFAULT_AXIS_MAPPING, mapping_matrix
+from .device_settings import DeviceSettingsDialog
 from .pose import PoseEngine
 from .recording import PacketRecorder, ReplaySource
 from .settings import save_config
@@ -117,6 +119,7 @@ class BodyWindow(QtWidgets.QMainWindow):
         self._last_stats_at = time.monotonic()
         self._choice_state: tuple[tuple[str, bool], ...] | None = None
         self._dialogs: list[QtWidgets.QDialog] = []
+        self.settings_dialog: DeviceSettingsDialog | None = None
         self.recorder: PacketRecorder | None = None
         self.replay_mode = isinstance(source, ReplaySource)
 
@@ -149,6 +152,7 @@ class BodyWindow(QtWidgets.QMainWindow):
 
         toolbar = QtWidgets.QHBoxLayout()
         for label, callback in (("热点设备", self._show_devices),
+                                ("设备参数", self._show_settings),
                                 ("接入新设备", self._show_setup),
                                 ("全部归零", self._zero_all)):
             button = QtWidgets.QPushButton(label)
@@ -157,6 +161,29 @@ class BodyWindow(QtWidgets.QMainWindow):
                 button.setEnabled(False)
             toolbar.addWidget(button)
         panel_layout.addLayout(toolbar)
+        timed_zero_row = QtWidgets.QHBoxLayout()
+        timed_zero_row.addWidget(QtWidgets.QLabel("延时"))
+        self.zero_delay = QtWidgets.QSpinBox()
+        self.zero_delay.setRange(3, 120)
+        self.zero_delay.setValue(10)
+        self.zero_delay.setSuffix(" 秒")
+        self.zero_delay.setToolTip("点击开始后，可在倒计时期间穿戴设备并摆好中立姿势")
+        timed_zero_row.addWidget(self.zero_delay)
+        self.timed_zero_button = QtWidgets.QPushButton("定时全部归零")
+        self.timed_zero_button.clicked.connect(self._start_timed_zero)
+        timed_zero_row.addWidget(self.timed_zero_button, 1)
+        self.cancel_zero_button = QtWidgets.QPushButton("取消")
+        self.cancel_zero_button.setEnabled(False)
+        self.cancel_zero_button.clicked.connect(self._cancel_timed_zero)
+        timed_zero_row.addWidget(self.cancel_zero_button)
+        panel_layout.addLayout(timed_zero_row)
+        self.zero_countdown = QtWidgets.QLabel("定时归零未启动")
+        self.zero_countdown.setWordWrap(True)
+        panel_layout.addWidget(self.zero_countdown)
+        self._timed_zero_deadline: float | None = None
+        self.zero_countdown_timer = QtCore.QTimer(self)
+        self.zero_countdown_timer.setInterval(100)
+        self.zero_countdown_timer.timeout.connect(self._update_zero_countdown)
         self.axes_checkbox = QtWidgets.QCheckBox("显示部位坐标轴（红 X · 绿 Y · 蓝 Z）")
         self.axes_checkbox.setChecked(True)
         self.axes_checkbox.toggled.connect(self._toggle_axes)
@@ -204,7 +231,7 @@ class BodyWindow(QtWidgets.QMainWindow):
             "未绑定部位跟随父部位。每只设备首次收到数据时自动建立中立位。"
             "彩色箭头是模型各部位的局部轴，不是 WT901 外壳上的轴。"
             "轴映射描述设备在归零姿势下的方向；更换绑法后需重新设置。"
-            "空格：全部归零；R：重置视角。\n"
+            "空格：立即全部归零；定时归零可留出穿戴和摆姿势的时间；R：重置视角。\n"
             "本窗口占用 UDP 1399，运行时请关闭手腕控制台。")
         hint.setWordWrap(True)
         panel_layout.addWidget(hint)
@@ -281,6 +308,9 @@ class BodyWindow(QtWidgets.QMainWindow):
                 except OSError as exc:
                     self._stop_recording()
                     self.statusBar().showMessage(f"录制中断：{exc}")
+        if self.settings_dialog is not None:
+            self.settings_dialog.on_packets(packets)
+            self.settings_dialog.on_replies(self.source.take_replies())
         if packets:
             self._render_dirty = True
         now = time.monotonic()
@@ -349,9 +379,56 @@ class BodyWindow(QtWidgets.QMainWindow):
         self._render_dirty = True
 
     def _zero_all(self) -> None:
+        self._cancel_timed_zero(silent=True)
         self.engine.zero()
         self._render_dirty = True
-        self.statusBar().showMessage("已将在线设备当前姿态设为中立位", 3000)
+        self.statusBar().showMessage("已立即将当前设备姿态设为中立位", 3000)
+
+    def _start_timed_zero(self) -> None:
+        if not any(self.engine.assignments.values()):
+            self.zero_countdown.setText("尚未分配设备；请先绑定至少一个身体部位")
+            return
+        seconds = self.zero_delay.value()
+        self._timed_zero_deadline = time.monotonic() + seconds
+        self.zero_countdown_timer.start()
+        self.cancel_zero_button.setEnabled(True)
+        self._update_zero_countdown()
+
+    def _cancel_timed_zero(self, _checked: bool = False, *, silent: bool = False) -> None:
+        if self._timed_zero_deadline is None:
+            return
+        self._timed_zero_deadline = None
+        self.zero_countdown_timer.stop()
+        self.cancel_zero_button.setEnabled(False)
+        self.zero_countdown.setText("定时归零已取消" if not silent else "定时归零未启动")
+
+    def _update_zero_countdown(self) -> None:
+        if self._timed_zero_deadline is None:
+            return
+        remaining = math.ceil(self._timed_zero_deadline - time.monotonic())
+        if remaining > 0:
+            self.zero_countdown.setText(
+                f"还剩 {remaining} 秒：请穿戴好设备并保持中立姿势；到时自动归零")
+            return
+        self._timed_zero_deadline = None
+        self.zero_countdown_timer.stop()
+        self.cancel_zero_button.setEnabled(False)
+        online = self.source.seen_devices(max_age=2.0)
+        assigned = tuple((key, device_id) for key, device_id in
+                         self.engine.assignments.items() if device_id)
+        completed = 0
+        for key, device_id in assigned:
+            if device_id in online and device_id in self.engine.current:
+                self.engine.zero(key)
+                completed += 1
+        if completed:
+            self._render_dirty = True
+        message = (f"定时归零完成：{completed}/{len(assigned)} 台在线设备已设为中立位"
+                   if completed else "倒计时结束，但没有已绑定设备在接收新数据；未归零")
+        if 0 < completed < len(assigned):
+            message += "；离线设备已跳过"
+        self.zero_countdown.setText(message)
+        self.statusBar().showMessage(message, 5000)
 
     def _refresh_stats(self) -> None:
         now = time.monotonic()
@@ -401,6 +478,26 @@ class BodyWindow(QtWidgets.QMainWindow):
         dialog.destroyed.connect(lambda: self._dialogs.remove(dialog)
                                  if dialog in self._dialogs else None)
 
+    def _show_settings(self) -> None:
+        if self.replay_mode:
+            return
+        if self.settings_dialog is None:
+            dialog = DeviceSettingsDialog(self.source, self)
+            dialog.neutral_required.connect(self._zero_device_after_setting)
+            dialog.finished.connect(lambda: setattr(self, "settings_dialog", None))
+            self.settings_dialog = dialog
+        self.settings_dialog.refresh_devices()
+        self.settings_dialog.show()
+        self.settings_dialog.raise_()
+        self.settings_dialog.activateWindow()
+
+    def _zero_device_after_setting(self, device_id: str) -> None:
+        for key, assigned in self.engine.assignments.items():
+            if assigned == device_id:
+                self.engine.zero(key)
+                self._render_dirty = True
+                self.statusBar().showMessage(f"{device_id} 的模型中立位已更新", 4000)
+
     def _toggle_recording(self) -> None:
         if self.recorder is not None:
             self._stop_recording()
@@ -429,8 +526,22 @@ class BodyWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"已保存 {count} 包：{path}", 5000)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        if (self.settings_dialog is not None and
+                self.settings_dialog.calibration not in (None, "mag_precheck")):
+            self.settings_dialog.show()
+            self.settings_dialog.raise_()
+            self.settings_dialog.status.setText("请先结束设备校准并保存，再关闭主窗口")
+            event.ignore()
+            return
+        if self.settings_dialog is not None and self.settings_dialog.setting is not None:
+            self.settings_dialog.show()
+            self.settings_dialog.raise_()
+            self.settings_dialog.status.setText("设备设置正在保存或回读，请等待完成")
+            event.ignore()
+            return
         self.poll_timer.stop()
         self.stats_timer.stop()
+        self.zero_countdown_timer.stop()
         self._stop_recording()
         self.source.close()
         self.plotter.close()
