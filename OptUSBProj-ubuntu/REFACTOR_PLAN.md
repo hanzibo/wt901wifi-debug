@@ -1,6 +1,6 @@
 # OptUSBProj → Ubuntu 重构计划
 
-状态：第一阶段已实现 15 部件 GUI、共享 UDP 接收、动态设备绑定、逐部位轴映射、中立位及 CSV 录制/回放；真实佩戴轴向、FK/IK 和仿真仍待验证或实现。`OptUSBProj/` 为原始参考，保持不修改；本目录用于 Ubuntu 版实现。当前工作分支：`optusbproj-ubuntu`。
+状态：第一阶段已实现 15 部件 GUI、共享 UDP 接收、动态设备绑定、逐部位轴映射、中立位及 CSV 录制/回放；CoppeliaSim 4.10 的最小 ZeroMQ 连接与位置回读探针已加入，实机连接仍待验证。真实佩戴轴向、FK/IK 和仿真姿态映射仍待验证或实现。`OptUSBProj/` 为原始参考，保持不修改；本目录用于 Ubuntu 版实现。当前工作分支：`optusbproj-ubuntu`。
 
 ## 1. 已核实的旧项目行为
 

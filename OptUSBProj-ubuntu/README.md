@@ -28,6 +28,18 @@ conda run --no-capture-output -n OptUSBProj python -u OptUSBProj-ubuntu/run.py -
 
 首次回放前先在界面分配文件中的设备 ID。录制只保存 WT 原始数据和电脑接收时间，不包含机器人控制命令。
 
+## CoppeliaSim 最小连通测试
+
+此测试不依赖 WT901、机器人模型或旧版 Windows DLL。先在 `OptUSBProj` 环境安装 `pyzmq` 和 `cbor`；Python 客户端代码直接使用本机 CoppeliaSim 4.10 安装包自带的 2.0.4 版本，无需另装客户端包。打开 CoppeliaSim 并保持仿真**停止**，再从仓库根目录运行：
+
+```bash
+conda run --no-capture-output -n OptUSBProj python -m pip install pyzmq cbor
+conda run --no-capture-output -n OptUSBProj python -u OptUSBProj-ubuntu/sim_connectivity.py \
+  --coppelia-dir /home/hzb/Software/CoppeliaSim_Edu_V4_10_0_rev0_Ubuntu24_04
+```
+
+探针连接默认 ZeroMQ 端口 23000，创建一个临时 dummy，发送两次位置命令，读回移动后的坐标并删除 dummy。输出 `PASS` 才说明“客户端连接 → 发指令 → 仿真端执行 → 读回”已贯通。探针不会启动仿真、控制机器人或保存场景；仿真正在运行时会拒绝执行。只启动 CoppeliaSim 而没有收到 `PASS` 不算完成测试。
+
 ## 实现边界
 
 - 接收层直接使用仓库已有的 `wt901.gui_udp.GuiUdpSource` 和 `wt901.protocol.AttitudePacket`，不运行旧目录的 `UdpService` 或 Windows DLL。
@@ -40,4 +52,4 @@ conda run --no-capture-output -n OptUSBProj python -u OptUSBProj-ubuntu/run.py -
 conda run --no-capture-output -n OptUSBProj python -m unittest discover -s OptUSBProj-ubuntu/tests -v
 ```
 
-离线测试覆盖姿态链、设备绑定和 CSV 回放。GUI/OpenGL 已在虚拟显示器下通过启动与渲染测试；当前热点上的 `WT5500011381`、`WT5500011408`、`WT5500011624` 各接收约 50 包/秒。三台设备的实际佩戴轴向和人体动作映射仍需现场验证，不能仅凭数据到达认定动作方向正确。
+离线测试覆盖姿态链、设备绑定、CSV 回放和 CoppeliaSim 连通探针的清理逻辑。GUI/OpenGL 已在虚拟显示器下通过启动与渲染测试；当前热点上的 `WT5500011381`、`WT5500011408`、`WT5500011624` 各接收约 50 包/秒。三台设备的实际佩戴轴向和人体动作映射仍需现场验证，不能仅凭数据到达认定动作方向正确。
