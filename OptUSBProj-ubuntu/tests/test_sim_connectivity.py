@@ -33,7 +33,8 @@ class FakeSim:
     def getObjectPosition(self, handle):
         return self.position.copy()
 
-    def removeObject(self, handle):
+    def removeObjects(self, handles):
+        assert handles == [42]
         self.removed = True
 
 

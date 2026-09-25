@@ -40,6 +40,8 @@ conda run --no-capture-output -n OptUSBProj python -u OptUSBProj-ubuntu/sim_conn
 
 探针连接默认 ZeroMQ 端口 23000，创建一个临时 dummy，发送两次位置命令，读回移动后的坐标并删除 dummy。输出 `PASS` 才说明“客户端连接 → 发指令 → 仿真端执行 → 读回”已贯通。探针不会启动仿真、控制机器人或保存场景；仿真正在运行时会拒绝执行。只启动 CoppeliaSim 而没有收到 `PASS` 不算完成测试。
 
+2026-09-25 已在本机 CoppeliaSim 4.10 的独立空场景完成实测：连接 `127.0.0.1:23000`，dummy 位置读回 `[0.0, 0.0, 0.4] → [0.1, 0.0, 0.4]` 米，结果 `PASS`；测试后关闭了该仿真实例。测试使用 `-h` 无窗口模式和虚拟显示器，因此不会在当前桌面显示 CoppeliaSim 窗口；手动去掉 `-h` 并在桌面会话启动才会显示 GUI。此结果只验证远程 API 通信和普通对象位置命令，**尚未**验证机器人关节、FK/IK 或旧项目场景。
+
 ## 实现边界
 
 - 接收层直接使用仓库已有的 `wt901.gui_udp.GuiUdpSource` 和 `wt901.protocol.AttitudePacket`，不运行旧目录的 `UdpService` 或 Windows DLL。

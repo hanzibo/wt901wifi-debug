@@ -34,7 +34,7 @@ def probe(sim: object) -> tuple[list[float], list[float]]:
             raise RuntimeError("CoppeliaSim 返回的位置维度不正确")
         return list(before), list(after)
     finally:
-        sim.removeObject(handle)
+        sim.removeObjects([handle])
 
 
 def _load_client(coppelia_dir: Path | None):
