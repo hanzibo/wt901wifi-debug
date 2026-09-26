@@ -22,6 +22,7 @@ class PoseEngine:
                  axis_mappings: dict[str, tuple[str, str, str]] | None = None) -> None:
         self.assignments: dict[str, str] = {key: "" for key in SENSOR_KEYS}
         self.axis_mappings = {key: DEFAULT_AXIS_MAPPING for key in SENSOR_KEYS}
+        self.continuous_basis: dict[str, np.ndarray] = {}
         self.neutral: dict[str, np.ndarray] = {}
         self.current: dict[str, np.ndarray] = {}
         self.packets: dict[str, AttitudePacket] = {}
@@ -39,6 +40,34 @@ class PoseEngine:
         if key not in self.axis_mappings:
             raise KeyError(f"未知身体部位：{key}")
         self.axis_mappings[key] = normalized_mapping(mapping)
+        self.continuous_basis.pop(key, None)
+
+    def set_continuous_basis(self, key: str, matrix: np.ndarray) -> None:
+        """Temporarily override the signed-axis map with a calibrated SO(3) basis."""
+        if key not in self.axis_mappings:
+            raise KeyError(f"未知身体部位：{key}")
+        basis = np.asarray(matrix, dtype=float)
+        if (basis.shape != (3, 3) or not np.isfinite(basis).all() or
+                not np.allclose(basis.T @ basis, np.eye(3), atol=1e-3) or
+                not np.isclose(np.linalg.det(basis), 1.0, atol=1e-3)):
+            raise ValueError("连续轴映射必须是右手正交旋转矩阵")
+        self.continuous_basis[key] = basis.copy()
+
+    def apply_calibration(self, key: str, device_id: str, basis: np.ndarray,
+                          neutral: np.ndarray) -> None:
+        """Atomically activate a fit together with the neutral frame it used."""
+        if self.assignments.get(key) != device_id or not device_id:
+            raise ValueError("标定的设备 ID 与当前部位分配不一致")
+        reference = np.asarray(neutral, dtype=float)
+        if (reference.shape != (3, 3) or not np.isfinite(reference).all() or
+                not np.allclose(reference.T @ reference, np.eye(3), atol=1e-3) or
+                not np.isclose(np.linalg.det(reference), 1.0, atol=1e-3)):
+            raise ValueError("标定中立位不是有效旋转矩阵")
+        self.set_continuous_basis(key, basis)
+        self.neutral[device_id] = reference.copy()
+
+    def clear_calibration(self, key: str) -> None:
+        self.continuous_basis.pop(key, None)
 
     def assign(self, key: str, device_id: str) -> None:
         if key not in self.assignments:
@@ -48,6 +77,8 @@ class PoseEngine:
             raise ValueError(f"{device_id} 已分配到其他身体部位")
         old_id = self.assignments[key]
         self.assignments[key] = device_id
+        if old_id != device_id:
+            self.continuous_basis.pop(key, None)
         if old_id != device_id and device_id:
             # Reassignment starts from the next sensor pose, not its old slot's frame.
             self.neutral.pop(device_id, None)
@@ -63,6 +94,7 @@ class PoseEngine:
             self.neutral[device_id] = orientation.copy()
 
     def zero(self, key: str | None = None) -> None:
+        """Use the current pose as neutral without changing sensor-to-body axes."""
         keys = SENSOR_KEYS if key is None else (key,)
         for selected_key in keys:
             if selected_key not in self.assignments:
@@ -90,7 +122,9 @@ class PoseEngine:
                 # Express the change in the sensor's *neutral local* frame.
                 # A chosen column maps each neutral sensor axis to the model.
                 delta_local = self.neutral[device_id].T @ self.current[device_id]
-                basis = mapping_matrix(self.axis_mappings[part.key])
+                basis = self.continuous_basis.get(part.key)
+                if basis is None:
+                    basis = mapping_matrix(self.axis_mappings[part.key])
                 absolute_rotation = basis @ delta_local @ basis.T
             else:
                 # Missing/unassigned parts follow their parent, including the head.

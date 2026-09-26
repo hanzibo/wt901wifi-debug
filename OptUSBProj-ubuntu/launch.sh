@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch the upper-body GUI from its own Conda environment.
+# Launch the full-body GUI from its own Conda environment.
 set -u
 
 project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,7 +25,7 @@ fi
 
 if (( status != 0 )); then
     if command -v zenity >/dev/null 2>&1; then
-        zenity --error --title="WT901 上身姿态映射启动失败" \
+        zenity --error --title="WT901 全身姿态映射启动失败" \
             --text="程序启动失败。请确认 OptUSBProj 环境存在，并关闭可能占用 UDP 1399 的手腕控制台。
 详细日志：$log_file" \
             --width=540 || true

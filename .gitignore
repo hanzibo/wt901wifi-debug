@@ -15,3 +15,7 @@ __pycache__/
 OptUSBProj-ubuntu/local_config.json
 OptUSBProj-ubuntu/local_config.json.tmp
 OptUSBProj-ubuntu/recordings/
+OptUSBProj-ubuntu/calibrations/
+
+# Downloaded MediaPipe task model (not source code).
+OptUSBProj-ubuntu/assets/mediapipe/*.task

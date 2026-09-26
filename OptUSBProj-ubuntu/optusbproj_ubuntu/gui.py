@@ -1,4 +1,4 @@
-"""PySide6/PyVista upper-body viewer using the shared WT901 UDP source."""
+"""PySide6/PyVista full-body viewer using the shared WT901 UDP source."""
 
 from __future__ import annotations
 
@@ -120,10 +120,11 @@ class BodyWindow(QtWidgets.QMainWindow):
         self._choice_state: tuple[tuple[str, bool], ...] | None = None
         self._dialogs: list[QtWidgets.QDialog] = []
         self.settings_dialog: DeviceSettingsDialog | None = None
+        self.calibration_dialog = None
         self.recorder: PacketRecorder | None = None
-        self.replay_mode = isinstance(source, ReplaySource)
+        self.replay_mode = isinstance(source, ReplaySource) or getattr(source, "is_replay", False)
 
-        self.setWindowTitle("WT901 上身姿态映射 · Ubuntu")
+        self.setWindowTitle("WT901 全身姿态映射 · Ubuntu")
         self.resize(1500, 920)
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
@@ -140,7 +141,7 @@ class BodyWindow(QtWidgets.QMainWindow):
         panel_layout = QtWidgets.QVBoxLayout(panel)
         layout.addWidget(panel, 2)
 
-        title = QtWidgets.QLabel("上身设备分配与姿态")
+        title = QtWidgets.QLabel("全身设备分配与姿态")
         font = title.font()
         font.setPointSize(16)
         font.setBold(True)
@@ -180,6 +181,14 @@ class BodyWindow(QtWidgets.QMainWindow):
         self.zero_countdown = QtWidgets.QLabel("定时归零未启动")
         self.zero_countdown.setWordWrap(True)
         panel_layout.addWidget(self.zero_countdown)
+        self.calibration_button = QtWidgets.QPushButton("穿戴标定…（躯干 / 上臂 / 前臂）")
+        self.calibration_button.clicked.connect(self._show_calibration)
+        self.calibration_button.setEnabled(not self.replay_mode)
+        panel_layout.addWidget(self.calibration_button)
+        self.bilateral_calibration_button = QtWidgets.QPushButton("双臂联合标定…（左右上臂 / 前臂）")
+        self.bilateral_calibration_button.clicked.connect(self._show_bilateral_calibration)
+        self.bilateral_calibration_button.setEnabled(not self.replay_mode)
+        panel_layout.addWidget(self.bilateral_calibration_button)
         self._timed_zero_deadline: float | None = None
         self.zero_countdown_timer = QtCore.QTimer(self)
         self.zero_countdown_timer.setInterval(100)
@@ -193,14 +202,32 @@ class BodyWindow(QtWidgets.QMainWindow):
         self.record_button.setEnabled(not self.replay_mode)
         panel_layout.addWidget(self.record_button)
 
-        group = QtWidgets.QGroupBox("设备 ID → 身体部位（可先只连接 3 台）")
+        group = QtWidgets.QGroupBox("设备 ID → 身体部位（支持部分设备先行测试）")
         grid = QtWidgets.QGridLayout(group)
+        section_color = ("#76D7FF" if group.palette().color(
+            QtGui.QPalette.ColorRole.Window).lightness() < 128 else "#006D9B")
         grid.addWidget(QtWidgets.QLabel("部位"), 0, 0)
         grid.addWidget(QtWidgets.QLabel("轴映射"), 0, 1)
         grid.addWidget(QtWidgets.QLabel("设备 ID"), 0, 2)
         grid.addWidget(QtWidgets.QLabel("中立位"), 0, 3)
-        for index, part in enumerate((p for p in PARTS if p.sensor_slot)):
-            row = index * 2 + 1
+        row = 1
+        section = ""
+        for part in (p for p in PARTS if p.sensor_slot):
+            next_section = ("骨盆 / 躯干 / 头部" if part.key in ("pelvis", "torso", "head")
+                            else "左臂" if part.key.startswith("left_") and
+                            part.key in ("left_upper_arm", "left_forearm", "left_hand")
+                            else "右臂" if part.key.startswith("right_") and
+                            part.key in ("right_upper_arm", "right_forearm", "right_hand")
+                            else "左腿" if part.key.startswith("left_") else "右腿")
+            if next_section != section:
+                section = next_section
+                heading = QtWidgets.QLabel(section)
+                heading.setObjectName("bodySectionHeading")
+                heading.setStyleSheet(
+                    f"color: {section_color}; font-weight: bold; "
+                    "padding-top: 10px; padding-bottom: 2px;")
+                grid.addWidget(heading, row, 0, 1, 4)
+                row += 1
             grid.addWidget(QtWidgets.QLabel(part.label), row, 0)
             mapping_button = QtWidgets.QPushButton("轴映射")
             mapping_button.clicked.connect(
@@ -221,21 +248,27 @@ class BodyWindow(QtWidgets.QMainWindow):
             status.setWordWrap(True)
             grid.addWidget(status, row + 1, 0, 1, 4)
             self.status_labels[part.key] = status
-        panel_layout.addWidget(group)
+            row += 2
+        assignment_scroll = QtWidgets.QScrollArea()
+        assignment_scroll.setWidgetResizable(True)
+        assignment_scroll.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        assignment_scroll.setWidget(group)
+        assignment_scroll.setMinimumHeight(280)
+        panel_layout.addWidget(assignment_scroll, 1)
         refresh = QtWidgets.QPushButton("刷新在线设备列表")
         refresh.clicked.connect(self._refresh_choices)
         panel_layout.addWidget(refresh)
 
         hint = QtWidgets.QLabel(
-            "模型共有 15 个部件，目前仅躯干和双臂 7 处可绑定 IMU；"
+            "模型 15 个部件均可绑定 IMU；不必一次接满。"
             "未绑定部位跟随父部位。每只设备首次收到数据时自动建立中立位。"
             "彩色箭头是模型各部位的局部轴，不是 WT901 外壳上的轴。"
-            "轴映射描述设备在归零姿势下的方向；更换绑法后需重新设置。"
+            "归零只重设姿态基准，不改变设备轴映射；更换绑法后需重新设置或标定。"
             "空格：立即全部归零；定时归零可留出穿戴和摆姿势的时间；R：重置视角。\n"
             "本窗口占用 UDP 1399，运行时请关闭手腕控制台。")
         hint.setWordWrap(True)
         panel_layout.addWidget(hint)
-        panel_layout.addStretch(1)
         self.statusBar().showMessage("就绪；等待设备数据")
         self._refresh_choices()
 
@@ -301,21 +334,45 @@ class BodyWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"UDP 接收失败：{exc}")
             return
         for packet in packets:
+            self._check_calibration_reconnect(packet.device_id, time.monotonic())
             self.engine.feed(packet)
+            if self.calibration_dialog is not None:
+                self.calibration_dialog.on_packet(time.monotonic_ns(), packet)
             if self.recorder is not None:
                 try:
                     self.recorder.write(packet)
                 except OSError as exc:
                     self._stop_recording()
                     self.statusBar().showMessage(f"录制中断：{exc}")
+        if self.settings_dialog is not None or self.calibration_dialog is not None:
+            replies = self.source.take_replies()
+        else:
+            replies = []
         if self.settings_dialog is not None:
             self.settings_dialog.on_packets(packets)
-            self.settings_dialog.on_replies(self.source.take_replies())
+            self.settings_dialog.on_replies(replies)
+        if self.calibration_dialog is not None:
+            self.calibration_dialog.on_replies(replies)
         if packets:
             self._render_dirty = True
         now = time.monotonic()
         if self._render_dirty and now - self._last_render >= 1 / 30:
             self._render_pose()
+
+    def _check_calibration_reconnect(self, device_id: str, received_at: float) -> None:
+        if self.replay_mode:
+            return
+        previous = self.engine.received_at.get(device_id)
+        if previous is None or received_at - previous <= 5.0:
+            return
+        for key, assigned in self.engine.assignments.items():
+            if assigned == device_id and key in self.engine.continuous_basis:
+                self.engine.clear_calibration(key)
+                self.engine.neutral.pop(device_id, None)
+                if self.calibration_dialog is not None:
+                    self.calibration_dialog.invalidate_for(device_id)
+                self.statusBar().showMessage(
+                    f"{device_id} 断流超过 5 秒后恢复；穿戴标定已停用，请重新验证", 10000)
 
     def _refresh_choices(self, force: bool = False) -> None:
         seen = self.source.seen_devices(max_age=10.0)
@@ -341,12 +398,15 @@ class BodyWindow(QtWidgets.QMainWindow):
         device_id = combo.currentData() or ""
         previous = self.engine.assignments[key]
         try:
+            proposed = dict(self.engine.assignments)
+            proposed[key] = device_id
+            save_config(self.settings_path, proposed, self.engine.axis_mappings)
             self.engine.assign(key, device_id)
-            save_config(self.settings_path, self.engine.assignments,
-                        self.engine.axis_mappings)
         except (ValueError, OSError) as exc:
-            self.engine.assignments[key] = previous
             QtWidgets.QMessageBox.warning(self, "分配未保存", str(exc))
+        else:
+            if previous != device_id and self.calibration_dialog is not None:
+                self.calibration_dialog.invalidate_for(previous)
         self._refresh_choices(force=True)
         self._render_dirty = True
 
@@ -362,21 +422,53 @@ class BodyWindow(QtWidgets.QMainWindow):
         dialog = AxisMappingDialog(part.label, self.engine.axis_mappings[key], self)
         if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
-        previous = self.engine.axis_mappings[key]
         try:
-            self.engine.set_axis_mapping(key, dialog.mapping())
+            proposed = dict(self.engine.axis_mappings)
+            proposed[key] = dialog.mapping()
             save_config(self.settings_path, self.engine.assignments,
-                        self.engine.axis_mappings)
+                        proposed)
+            self.engine.set_axis_mapping(key, dialog.mapping())
         except (ValueError, OSError) as exc:
-            self.engine.set_axis_mapping(key, previous)
             QtWidgets.QMessageBox.warning(self, "轴映射未保存", str(exc))
             return
+        if self.calibration_dialog is not None:
+            self.calibration_dialog.invalidate_for(self.engine.assignments.get(key, ""))
         self._update_mapping_button(key)
         self._render_dirty = True
 
     def _zero(self, key: str) -> None:
         self.engine.zero(key)
         self._render_dirty = True
+
+    def _show_calibration(self) -> None:
+        self._open_calibration(bilateral=False)
+
+    def _show_bilateral_calibration(self) -> None:
+        self._open_calibration(bilateral=True)
+
+    def _open_calibration(self, *, bilateral: bool) -> None:
+        if self.replay_mode:
+            return
+        if self.settings_dialog is not None and self.settings_dialog.isVisible():
+            QtWidgets.QMessageBox.information(
+                self, "请先关闭设备参数", "设备参数窗口正在使用寄存器回读；请关闭后再进行穿戴标定。")
+            return
+        from .calibration_gui import BilateralCalibrationDialog, GuidedCalibrationDialog
+
+        dialog_type = BilateralCalibrationDialog if bilateral else GuidedCalibrationDialog
+        if self.calibration_dialog is not None and type(self.calibration_dialog) is not dialog_type:
+            self.calibration_dialog.close()
+            self.calibration_dialog.deleteLater()
+            self.calibration_dialog = None
+        if self.calibration_dialog is None:
+            self.calibration_dialog = dialog_type(self)
+        elif bilateral:
+            self.calibration_dialog.refresh_devices()
+        else:
+            self.calibration_dialog.refresh_parts()
+        self.calibration_dialog.show()
+        self.calibration_dialog.raise_()
+        self.calibration_dialog.activateWindow()
 
     def _zero_all(self) -> None:
         self._cancel_timed_zero(silent=True)
@@ -451,15 +543,17 @@ class BodyWindow(QtWidgets.QMainWindow):
             ip = endpoints.get(device_id, ("?", 0, 0))[0]
             battery = packet.battery_percent
             charge = f"约 {battery}%" if battery is not None else "未知"
+            calibrated = " · 本次穿戴标定生效" if key in self.engine.continuous_basis else ""
             label.setText(f"{device_id} · {state} · {rate:.0f} 包/s · {ip}\n"
                           f"角度 X {packet.roll:+.1f}° Y {packet.pitch:+.1f}° Z {packet.yaw:+.1f}°"
-                          f" · 电池 {packet.battery_v:.2f}V/{charge} · RSSI {packet.rssi}dBm")
+                          f" · 电池 {packet.battery_v:.2f}V/{charge} · RSSI {packet.rssi}dBm"
+                          f"{calibrated}")
         self._last_counts = self.engine.counts.copy()
         self._last_stats_at = now
         self.overview.setText(
             f"当前收到 {len(seen)} 台 WT 设备；已绑定 "
-            f"{sum(bool(value) for value in self.engine.assignments.values())}/7 个上身部位。"
-            "支持少于 7 台先行测试。")
+            f"{sum(bool(value) for value in self.engine.assignments.values())}/{len(SENSOR_KEYS)} 个身体部位。"
+            "未绑定部位跟随父部位；可按需逐步增加设备。")
         self._refresh_choices()
 
     def _show_devices(self) -> None:
@@ -494,9 +588,18 @@ class BodyWindow(QtWidgets.QMainWindow):
     def _zero_device_after_setting(self, device_id: str) -> None:
         for key, assigned in self.engine.assignments.items():
             if assigned == device_id:
-                self.engine.zero(key)
+                was_calibrated = key in self.engine.continuous_basis
+                self.engine.clear_calibration(key)
+                # The firmware may change its reported reference frame after
+                # a setting/zero command. Do not use the last *old-frame*
+                # packet as the new GUI neutral; wait for the next packet.
+                self.engine.neutral.pop(device_id, None)
                 self._render_dirty = True
-                self.statusBar().showMessage(f"{device_id} 的模型中立位已更新", 4000)
+                if self.calibration_dialog is not None:
+                    self.calibration_dialog.invalidate_for(device_id)
+                self.statusBar().showMessage(
+                    f"{device_id}：等待下一包数据建立新的模型中立位"
+                    + ("；设备配置改变，穿戴标定已失效" if was_calibrated else ""), 5000)
 
     def _toggle_recording(self) -> None:
         if self.recorder is not None:
@@ -526,6 +629,14 @@ class BodyWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"已保存 {count} 包：{path}", 5000)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        if (self.calibration_dialog is not None and
+                self.calibration_dialog.phase in ("prepare", "hold")):
+            self.calibration_dialog.show()
+            self.calibration_dialog.raise_()
+            self.calibration_dialog.progress.setText(
+                "请先取消或完成穿戴标定，再关闭主窗口")
+            event.ignore()
+            return
         if (self.settings_dialog is not None and
                 self.settings_dialog.calibration not in (None, "mag_precheck")):
             self.settings_dialog.show()

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import unittest
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT))
@@ -13,7 +14,7 @@ sys.path.insert(0, str(PROJECT.parent))
 
 from optusbproj_ubuntu.pose import PoseEngine
 from optusbproj_ubuntu.axis_mapping import mapping_matrix
-from optusbproj_ubuntu.skeleton import PARTS, PART_BY_KEY
+from optusbproj_ubuntu.skeleton import PARTS, PART_BY_KEY, SENSOR_KEYS
 
 
 def packet(device_id: str, roll: float = 0, pitch: float = 0, yaw: float = 0):
@@ -25,6 +26,8 @@ class PoseEngineTests(unittest.TestCase):
         engine = PoseEngine()
         transforms = engine.transforms()
         self.assertEqual(len(transforms), 15)
+        self.assertEqual(len(SENSOR_KEYS), 15)
+        self.assertEqual(set(SENSOR_KEYS), set(PART_BY_KEY))
         np.testing.assert_allclose(transforms[PART_BY_KEY["torso"]][:3, 3],
                                    [-0.00978, 0, 0.13049])
         self.assertEqual(PARTS[PART_BY_KEY["left_upper_arm"]].parent,
@@ -59,6 +62,27 @@ class PoseEngineTests(unittest.TestCase):
         engine = PoseEngine({"left_hand": "WT5500011381"})
         with self.assertRaises(ValueError):
             engine.assign("right_hand", "WT5500011381")
+
+    def test_new_slots_drive_head_pelvis_and_legs(self):
+        for key in ("head", "pelvis", "left_thigh", "left_calf", "left_foot",
+                    "right_thigh", "right_calf", "right_foot"):
+            with self.subTest(part=key):
+                engine = PoseEngine({key: "WT5500011381"})
+                engine.feed(packet("WT5500011381"))
+                engine.feed(packet("WT5500011381", yaw=45))
+                self.assertFalse(np.allclose(engine.rotation_for(key), np.eye(3)))
+                engine.zero(key)
+                np.testing.assert_allclose(engine.rotation_for(key), np.eye(3), atol=1e-12)
+
+    def test_unassigned_lower_leg_inherits_moving_thigh(self):
+        engine = PoseEngine({"left_thigh": "WT5500011381"})
+        engine.feed(packet("WT5500011381"))
+        engine.feed(packet("WT5500011381", roll=25))
+        transforms = engine.transforms()
+        np.testing.assert_allclose(transforms[PART_BY_KEY["left_calf"]][:3, :3],
+                                   transforms[PART_BY_KEY["left_thigh"]][:3, :3])
+        np.testing.assert_allclose(transforms[PART_BY_KEY["left_foot"]][:3, :3],
+                                   transforms[PART_BY_KEY["left_thigh"]][:3, :3])
 
     def test_reassignment_waits_for_new_neutral_packet(self):
         engine = PoseEngine({"left_hand": "WT5500011381"})
@@ -101,6 +125,63 @@ class PoseEngineTests(unittest.TestCase):
             mapping_matrix(("-X", "+Y", "+Z"))
         np.testing.assert_allclose(mapping_matrix(("-X", "-Y", "+Z")),
                                    np.diag([-1, -1, 1]))
+
+    def test_continuous_basis_is_temporary_and_validated(self):
+        engine = PoseEngine({"right_upper_arm": "WT5500011381"})
+        basis = Rotation.from_euler("z", 37, degrees=True).as_matrix()
+        engine.set_continuous_basis("right_upper_arm", basis)
+        np.testing.assert_allclose(engine.continuous_basis["right_upper_arm"], basis)
+        with self.assertRaisesRegex(ValueError, "正交"):
+            engine.set_continuous_basis("right_upper_arm", np.diag([-1., 1., 1.]))
+        engine.set_axis_mapping("right_upper_arm", ("+X", "+Y", "+Z"))
+        self.assertNotIn("right_upper_arm", engine.continuous_basis)
+        engine.set_continuous_basis("right_upper_arm", basis)
+        engine.assign("right_upper_arm", "WT5500011408")
+        self.assertNotIn("right_upper_arm", engine.continuous_basis)
+
+    def test_calibrated_basis_stays_fixed_when_rezeroing(self):
+        engine = PoseEngine({"right_upper_arm": "WT_TEST"})
+        engine.feed(packet("WT_TEST", roll=20, pitch=10, yaw=15))
+        original = engine.current["WT_TEST"].copy()
+        engine.apply_calibration("right_upper_arm", "WT_TEST", original, original)
+        engine.feed(packet("WT_TEST", roll=-5, pitch=30, yaw=42))
+        next_neutral = engine.current["WT_TEST"].copy()
+        engine.zero("right_upper_arm")
+        np.testing.assert_allclose(engine.continuous_basis["right_upper_arm"],
+                                   original, atol=1e-12)
+        np.testing.assert_allclose(engine.neutral["WT_TEST"], next_neutral, atol=1e-12)
+        np.testing.assert_allclose(engine.rotation_for("right_upper_arm"),
+                                   np.eye(3), atol=1e-12)
+
+    def test_axial_twist_rezero_keeps_calibrated_forward_raise_direction(self):
+        key = "right_upper_arm"
+        device_id = "WT_TEST"
+        neutral = Rotation.from_euler("xyz", [10, -8, 20], degrees=True)
+        twist = Rotation.from_euler("z", 60, degrees=True)
+        forward_raise = Rotation.from_euler("y", 45, degrees=True)
+        basis = Rotation.from_euler("xyz", [8, -12, 25], degrees=True).as_matrix()
+
+        def feed_rotation(engine: PoseEngine, orientation: Rotation) -> None:
+            roll, pitch, yaw = orientation.as_euler("xyz", degrees=True)
+            engine.feed(packet(device_id, roll, pitch, yaw))
+
+        for all_parts in (False, True):
+            with self.subTest(all_parts=all_parts):
+                engine = PoseEngine({key: device_id})
+                feed_rotation(engine, neutral)
+                engine.apply_calibration(key, device_id, basis,
+                                         engine.current[device_id])
+                feed_rotation(engine, neutral * twist)
+                engine.zero(None if all_parts else key)
+                np.testing.assert_allclose(engine.rotation_for(key),
+                                           np.eye(3), atol=1e-12)
+                np.testing.assert_allclose(engine.continuous_basis[key],
+                                           basis, atol=1e-12)
+                feed_rotation(engine, neutral * twist * forward_raise)
+                np.testing.assert_allclose(
+                    engine.rotation_for(key),
+                    basis @ forward_raise.as_matrix() @ basis.T,
+                    atol=1e-12)
 
 
 if __name__ == "__main__":

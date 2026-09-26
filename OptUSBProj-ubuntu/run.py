@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the Ubuntu WT901 upper-body demonstrator from any working directory."""
+"""Run the Ubuntu WT901 full-body demonstrator from any working directory."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ sys.path.insert(0, str(REPO_DIR))
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="WT901 上身姿态映射（Ubuntu 版）")
+    parser = argparse.ArgumentParser(description="WT901 全身姿态映射（Ubuntu 版）")
     parser.add_argument("--listen-ip", default="0.0.0.0")
     parser.add_argument("--listen-port", type=int, default=1399)
     parser.add_argument("--settings", type=Path,

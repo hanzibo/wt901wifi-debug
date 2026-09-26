@@ -1,8 +1,14 @@
 # OptUSBProj Ubuntu 版（进行中）
 
-当前里程碑：可用 1～3 台（后续扩至 7 台）WT901WIFI，通过电脑 `WT901-LAN` 热点向本机 UDP 1399 发数据，在 15 部件人体模型中驱动已绑定的上身部位。此版本**尚未包含**旧项目的机器人 FK/IK、碰撞检测和 CoppeliaSim 映射；进度和后续验收见 [重构计划](REFACTOR_PLAN.md)。
+当前里程碑：人体模型的 15 个部件（骨盆、躯干、头部、双臂和双腿）都可分配 WT901WIFI；允许仅连接少数设备逐步测试。设备通过电脑 `WT901-LAN` 热点向本机 UDP 1399 发数据。此版本**尚未包含**旧项目的机器人 FK/IK、碰撞检测和 CoppeliaSim 映射；进度和后续验收见 [重构计划](REFACTOR_PLAN.md)。
 
 ## 运行
+
+纯相机上身 7 部位原型（不需要 WT901，也不占用 UDP 1399）的环境准备和运行命令见 [CAMERA_SETUP.md](CAMERA_SETUP.md)。它与下面的 WT901 程序是独立入口。
+
+单目相机＋WT901 的第一阶段联合采集入口见 [FUSION_SETUP.md](FUSION_SETUP.md)：可在同一窗口录制及回放两路数据，目前模型仍由 IMU 驱动，尚未进行视觉姿态校正。
+
+躯干、左右上臂和前臂现在可通过 GUI 中的“穿戴标定…”执行倒计时引导的 IMU 动作标定：录制规定动作、检查质量、双模型回放比较，并在确认后临时应用到实时模型。详见 [WEARING_CALIBRATION.md](WEARING_CALIBRATION.md)。
 
 从仓库根目录：
 
@@ -12,7 +18,7 @@ conda run --no-capture-output -n OptUSBProj python -u OptUSBProj-ubuntu/run.py
 
 也可双击桌面上的“WT901 上身姿态映射”启动器。仓库内的 [`WT901-上身姿态映射.desktop`](WT901-上身姿态映射.desktop) 调用 [`launch.sh`](launch.sh)，使用同一个 `OptUSBProj` 环境。若启动失败，会弹出提示，并将详细错误写到 `~/.local/state/wt901/optusbproj-ubuntu.log`。桌面文件含本机绝对路径，项目迁移到其他电脑时需同步修改 `Exec`、`Path`、`Icon` 及脚本中的 Conda 路径。
 
-电脑需先启动 `WT901-LAN` 2.4 GHz 热点；设备应设置为 STA/UDP，并向电脑热点 IP 的 1399 端口发送数据。与手腕程序共用一个接收端口，**请先关闭 `wrist_demo.py`**。程序启动时没有设备也能显示静态模型；上线设备会出现在“设备 ID”列表，按实际佩戴位置绑定即可。只连接 3 台时，其他部位跟随父部位或保持静态。首次数据包自动建立该设备的界面中立位，可用“归零”调整；分配保存到本地 `local_config.json`，不会提交到 Git。
+电脑需先启动 `WT901-LAN` 2.4 GHz 热点；设备应设置为 STA/UDP，并向电脑热点 IP 的 1399 端口发送数据。与手腕程序共用一个接收端口，**请先关闭 `wrist_demo.py`**。程序启动时没有设备也能显示静态模型；上线设备会出现在“设备 ID”列表，按实际佩戴位置绑定即可。右侧绑定区按骨盆/躯干/头部、双臂、双腿分区并可滚动。只连接 3 台时，其他部位跟随父部位或保持静态。首次数据包自动建立该设备的界面中立位，可用“归零”调整；分配保存到本地 `local_config.json`，不会提交到 Git。旧版仅有 7 个上身绑定的配置可直接读取，其余 8 个槽位默认未分配。
 
 界面中的“热点设备”和“接入新设备”沿用现有手腕项目的电脑热点工具。按空格可将已绑定设备全部归零，按 `R` 重置视角。设备断流时保留最后姿态并显示数据龄。
 
@@ -33,6 +39,20 @@ conda run --no-capture-output -n OptUSBProj python -u OptUSBProj-ubuntu/run.py -
 ```
 
 首次回放前先在界面分配文件中的设备 ID。录制只保存 WT 原始数据和电脑接收时间，不包含机器人控制命令。
+
+## 一台 IMU 控制一个 CoppeliaSim 关节
+
+这是独立的最小联调程序，不和人体 GUI 同时运行（两者都会监听 UDP 1399）。先在电脑桌面打开 CoppeliaSim，保持仿真**停止**，确保目标 WT901 已加入电脑热点并向本机 UDP 1399 发送数据，再从仓库根目录运行：
+
+```bash
+conda run --no-capture-output -n OptUSBProj python -u OptUSBProj-ubuntu/single_joint_demo.py \
+  --device-id WT5500011361 --axis +Y \
+  --coppelia-dir /home/hzb/Software/CoppeliaSim_Edu_V4_10_0_rev0_Ubuntu24_04
+```
+
+程序在当前场景临时创建一个**绕自身 Z 轴旋转的单自由度关节和可见连杆**，首个目标设备数据包作为 0° 中立位。示例的 `--axis +Y` 表示提取 IMU 相对中立位绕**模型 +Y** 的旋转分量，并把这个标量作为关节角；关节在 CoppeliaSim 中仍绕自己的 Z 轴转。若要提取 Z 轴转动可改用 `--axis +Z`，`--axis=-Z` 则反向。不是直接取 WT 的 Roll/Pitch/Yaw 某一列，而是先计算完整相对旋转矩阵，再做绕指定轴的扭转分解。若设备佩戴轴与模型轴不同，可传 `--mapping=+Y,+Z,+X`（设备 X/Y/Z 正轴依次映射到模型 Y/Z/X）。这些轴方向需要通过实际动作核对。
+
+默认关节角限制为 ±90°、运行 60 秒；`--limit-deg` 和 `--seconds` 可调整，`--seconds 0` 则运行到 Ctrl+C。终端每秒打印目标/回读角度。断流超过 0.5 秒即停止发新指令，保持关节末次位置；演示退出时删除临时关节和连杆，不保存场景，也不启动仿真。这里只验证**运动学位置命令**，没有动力学、碰撞、实体机器人输出或多关节 FK/IK。2026-09-25 已用热点上的 WT5500011361 与当前 CoppeliaSim GUI 完成 15 秒实测：收到约 50 包/秒，关节目标与回读一致，输出覆盖 +28.6° 到 -90.0°（限位）；临时对象已自动删除。实际佩戴方向是否符合人体关节仍待验证。
 
 ## CoppeliaSim 最小连通测试
 
@@ -61,7 +81,7 @@ conda run --no-capture-output -n OptUSBProj python -u OptUSBProj-ubuntu/sim_conn
 ## 实现边界
 
 - 接收层直接使用仓库已有的 `wt901.gui_udp.GuiUdpSource` 和 `wt901.protocol.AttitudePacket`，不运行旧目录的 `UdpService` 或 Windows DLL。
-- 人体位置来自旧模型的固定肢段长度/偏移；当前不估计 IMU 在空间中的绝对位移。当前支持逐部位设备轴映射和中立位，但安装偏置的实际方向、各设备航向一致性仍待实机验收。
+- 人体位置来自旧模型的固定肢段长度/偏移；当前不估计 IMU 在空间中的绝对位移。15 个部位均可逐部位设置设备轴映射和中立位，但新增骨盆、头部和双腿的安装方向、各设备航向一致性仍待实机验收；不能仅因设备数据到达就认定动作映射正确。
 - 原项目里 15 个 STL 中当前选用的模型已复制到本目录 `assets/models/`；原始 `OptUSBProj/` 不参与运行。
 
 ## 测试

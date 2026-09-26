@@ -67,14 +67,14 @@ class ConnectedDevicesDialog(QtWidgets.QDialog):
         self._last_ap_command: tuple[str, float] | None = None
 
         self.setWindowTitle("电脑热点中的 WT 设备")
-        self.resize(790, 400)
+        self.resize(920, 400)
         layout = QtWidgets.QVBoxLayout(self)
         self.status = QtWidgets.QLabel("正在检查电脑热点…")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
-        self.table = QtWidgets.QTableWidget(0, 5)
+        self.table = QtWidgets.QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(
-            ["设备唯一 ID", "设备端点（IP:源端口）", "电脑接收端点", "Wi-Fi MAC", "状态"])
+            ["设备唯一 ID", "设备端点（IP:源端口）", "电脑接收端点", "Wi-Fi MAC", "电量", "状态"])
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
@@ -87,6 +87,7 @@ class ConnectedDevicesDialog(QtWidgets.QDialog):
         self.note = QtWidgets.QLabel(
             "唯一 ID 来自实时 WT 数据；仅连接热点但尚未发送数据的终端无法确认是否为 WT。"
             "设备端点的源端口可能变化；电脑接收端点是设备应发送到的地址。"
+            "电量由最新数据包的电池电压按手册档位估算，并非精确电量计读数。"
             "切回 AP/UDP 后，设备会离开电脑热点并创建以其 ID 命名的 Wi-Fi。")
         self.note.setWordWrap(True)
         layout.addWidget(self.note)
@@ -282,11 +283,16 @@ class ConnectedDevicesDialog(QtWidgets.QDialog):
                         in endpoints.items() if sender_ip == ip] if ip else []
             if matching:
                 for device_id, source_port in matching:
+                    packet = self.source.latest_packet(device_id)
+                    if packet is None or packet.battery_percent is None:
+                        charge = "未知"
+                    else:
+                        charge = f"{packet.battery_v:.2f} V（约 {packet.battery_percent}%）"
                     rows.append((device_id, f"{ip}:{source_port}",
-                                 f"{listen_ip}:{listen_port}", mac, "WT 数据在线"))
+                                 f"{listen_ip}:{listen_port}", mac, charge, "WT 数据在线"))
             else:
                 rows.append(("未识别", f"{ip}:—" if ip else "IP 未知",
-                             f"{listen_ip}:{listen_port}", mac, "已关联，未收到 WT 数据"))
+                             f"{listen_ip}:{listen_port}", mac, "未知", "已关联，未收到 WT 数据"))
         self.table.clearSelection()
         self.table.setRowCount(len(rows))
         for row_index, row in enumerate(rows):
