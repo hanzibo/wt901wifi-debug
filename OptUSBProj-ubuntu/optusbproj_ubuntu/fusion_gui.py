@@ -25,6 +25,7 @@ class FusionWindow(BodyWindow):
                  *, camera_index: int = 0, backend: str = "rtmw3d",
                  model_path: Path | None = None,
                  calibration_candidates: list[dict] | None = None,
+                 comparison_shared_calibrations: list[dict] | None = None,
                  manual_mapping_source: str = "当前配置") -> None:
         super().__init__(source, settings_path, assignments, axis_mappings)
         self.setWindowTitle("WT901 + 单目相机 · 同步采集基线")
@@ -35,6 +36,14 @@ class FusionWindow(BodyWindow):
             if not self.replay_mode:
                 raise ValueError("候选标定只能用于回放预览")
             self.candidate_engine = PoseEngine(assignments, axis_mappings)
+            for shared in comparison_shared_calibrations or []:
+                key = shared["part"]
+                if self.engine.assignments.get(key) != shared["device_id"]:
+                    raise ValueError(f"{key} 的共同标定设备与回放分配不一致")
+                for engine in (self.engine, self.candidate_engine):
+                    engine.apply_calibration(
+                        key, shared["device_id"], shared["basis_matrix"],
+                        shared["neutral_matrix"])
             for candidate in calibration_candidates:
                 key = candidate["part"]
                 if self.candidate_engine.assignments.get(key) != candidate["device_id"]:

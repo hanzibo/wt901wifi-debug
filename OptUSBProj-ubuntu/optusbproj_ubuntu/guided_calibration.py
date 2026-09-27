@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from scipy.optimize import least_squares
 from scipy.spatial.transform import Rotation
 
 from wt901_viz.orientation import rotation_matrix
@@ -17,8 +18,9 @@ from .axis_mapping import mapping_matrix
 
 
 STEPS = ("neutral", "forward", "lateral", "check_forward", "check_neutral")
+WRIST_STEPS = STEPS + ("check_long_axis",)
 ARM_PARTS = ("left_upper_arm", "left_forearm", "right_upper_arm", "right_forearm")
-CALIBRATABLE_PARTS = ("torso",) + ARM_PARTS
+CALIBRATABLE_PARTS = ("torso",) + ARM_PARTS + ("left_hand",)
 
 
 @dataclass(frozen=True)
@@ -201,6 +203,156 @@ def fit_guided_torso(device_id: str, samples: dict[str, list[dict]],
         status="通过" if not warnings else "需重录", warnings=warnings)
 
 
+def fit_guided_left_wrist(device_id: str, samples: dict[str, list[dict]],
+                          manual_mapping: tuple[str, str, str],
+                          forearm_samples: dict[str, list[dict]],
+                          forearm_basis: np.ndarray) -> GuidedResult:
+    """Fit a left-hand mounting from wrist flexion and thumb-side deviation.
+
+    In the neutral model the dorsum points +X, thumb points -Y, and fingers
+    point -Z. Palm flexion rotates around +Y; thumb-side deviation around -X.
+    Both sensors use their first static hold as neutral. Forearm movement
+    between holds is removed in the calibrated model frame; each hold itself
+    must still be sufficiently stationary.
+    """
+    missing = set(WRIST_STEPS) - set(samples)
+    if missing:
+        raise ValueError(f"缺少手腕动作窗口：{', '.join(sorted(missing))}；请按新增的长轴验证流程重录")
+    missing_forearm = set(WRIST_STEPS) - set(forearm_samples)
+    if missing_forearm:
+        raise ValueError(f"缺少前臂动作窗口：{', '.join(sorted(missing_forearm))}")
+    prior = mapping_matrix(manual_mapping)
+    holds = {step: _hold(samples[step]) for step in WRIST_STEPS}
+    forearm_holds = {step: _hold(forearm_samples[step]) for step in WRIST_STEPS}
+    forearm_basis = np.asarray(forearm_basis, dtype=float)
+    if (forearm_basis.shape != (3, 3) or not np.isfinite(forearm_basis).all() or
+            not np.allclose(forearm_basis.T @ forearm_basis, np.eye(3), atol=1e-3) or
+            not np.isclose(np.linalg.det(forearm_basis), 1.0, atol=1e-3)):
+        raise ValueError("左前臂轴映射矩阵无效")
+    r0 = holds["neutral"][0]
+    forearm_neutral = forearm_holds["neutral"][0]
+    forearm_motion = {
+        step: forearm_basis @ (forearm_neutral.T @ hold[0]) @ forearm_basis.T
+        for step, hold in forearm_holds.items()}
+    hand_motion = {step: r0.T @ hold[0] for step, hold in holds.items()}
+    delta_f = Rotation.from_matrix(hand_motion["forward"]).as_rotvec()
+    delta_s = Rotation.from_matrix(hand_motion["lateral"]).as_rotvec()
+    if min(np.linalg.norm(delta_f), np.linalg.norm(delta_s)) < np.deg2rad(5):
+        raise ValueError("手背设备在至少一个动作中转动不足 5°，无法辨识安装轴；请减少前臂运动")
+    target = np.column_stack(((0.0, 1.0, 0.0), (-1.0, 0.0, 0.0)))
+    source = np.column_stack((delta_f / np.linalg.norm(delta_f),
+                              delta_s / np.linalg.norm(delta_s)))
+    u, _, vt = np.linalg.svd(target @ source.T + 0.15 * prior)
+    correction = np.diag([1.0, 1.0, float(np.linalg.det(u @ vt))])
+    initial_basis = u @ correction @ vt
+
+    def relative_wrist(step: str, basis: np.ndarray) -> np.ndarray:
+        hand_model = basis @ hand_motion[step] @ basis.T
+        return forearm_motion[step].T @ hand_model
+
+    def residual(parameters: np.ndarray) -> np.ndarray:
+        basis = Rotation.from_rotvec(parameters[:3]).as_matrix() @ initial_basis
+        flex = Rotation.from_matrix(relative_wrist("forward", basis)).as_rotvec()
+        radial = Rotation.from_matrix(relative_wrist("lateral", basis)).as_rotvec()
+        return np.concatenate((flex - target[:, 0] * parameters[3],
+                               radial - target[:, 1] * parameters[4],
+                               0.06 * parameters[:3]))
+
+    initial_angles = [float(np.linalg.norm(Rotation.from_matrix(
+        relative_wrist(step, initial_basis)).as_rotvec()))
+        for step in ("forward", "lateral")]
+    lower = np.deg2rad([18.0, 8.0])
+    upper = np.deg2rad([85.0, 45.0])
+    start = np.r_[np.zeros(3), np.clip(initial_angles, lower + 1e-5, upper - 1e-5)]
+    fit = least_squares(residual, start, bounds=(
+        np.r_[[-np.pi] * 3, lower], np.r_[[np.pi] * 3, upper]))
+    if not fit.success:
+        raise ValueError("手腕双设备映射拟合未收敛，请重新采样")
+    basis = Rotation.from_rotvec(fit.x[:3]).as_matrix() @ initial_basis
+    vectors = {step: Rotation.from_matrix(relative_wrist(step, basis)).as_rotvec()
+               for step in ("forward", "lateral", "check_forward", "check_neutral")}
+    angles = {step: float(np.rad2deg(np.linalg.norm(vector)))
+              for step, vector in vectors.items()}
+    if not 18.0 <= angles["forward"] <= 85.0:
+        raise ValueError(f"扣除前臂动作后掌屈幅度 {angles['forward']:.1f}°；建议约 25–55°")
+    if not 8.0 <= angles["lateral"] <= 45.0:
+        raise ValueError(f"扣除前臂动作后拇指侧偏转幅度 {angles['lateral']:.1f}°；建议约 12–25°")
+    separation = _angle(vectors["forward"] / np.linalg.norm(vectors["forward"]),
+                        vectors["lateral"] / np.linalg.norm(vectors["lateral"]))
+    if not 50.0 <= separation <= 130.0:
+        raise ValueError("掌屈和拇指侧偏转的相对运动轴太接近；请重做")
+    fit_errors = {name: _angle(vectors[step] / np.linalg.norm(vectors[step]),
+                               target[:, index])
+                  for index, (step, name) in enumerate((("forward", "forward"),
+                                                        ("lateral", "lateral")))}
+    repeated = vectors["check_forward"]
+    check_forward = (180.0 if angles["check_forward"] < 18.0 else
+                     _angle(repeated / np.linalg.norm(repeated), target[:, 0]))
+    check_neutral = angles["check_neutral"]
+    checks = {"check_forward": check_forward, "check_neutral": check_neutral}
+    # This is an independent *forearm pronation/supination* check, not a
+    # request to twist the wrist joint. With the wrist straight, both devices
+    # should turn together about the model forearm's long (+Z/-Z) axis.
+    forearm_axial = Rotation.from_matrix(forearm_motion["check_long_axis"]).as_rotvec()
+    hand_axial = Rotation.from_matrix(
+        basis @ hand_motion["check_long_axis"] @ basis.T).as_rotvec()
+    axial_angle = float(np.rad2deg(np.linalg.norm(forearm_axial)))
+    hand_axial_angle = float(np.rad2deg(np.linalg.norm(hand_axial)))
+    axial_axis_error = (_angle(forearm_axial / np.linalg.norm(forearm_axial),
+                               hand_axial / np.linalg.norm(hand_axial))
+                        if min(axial_angle, hand_axial_angle) >= 1.0 else 180.0)
+    axial_relative = float(np.rad2deg(Rotation.from_matrix(
+        relative_wrist("check_long_axis", basis)).magnitude()))
+    axial_forearm_z = (_angle(np.abs(forearm_axial / np.linalg.norm(forearm_axial)),
+                               np.array([0.0, 0.0, 1.0]))
+                        if axial_angle >= 1.0 else 180.0)
+    checks.update({"check_long_axis_angle": axial_angle,
+                   "check_long_axis_hand_angle": hand_axial_angle,
+                   "check_long_axis_axis": axial_axis_error,
+                   "check_long_axis_relative": axial_relative,
+                   "check_long_axis_forearm_z": axial_forearm_z})
+    spreads = {step: holds[step][1] for step in WRIST_STEPS}
+    gyros = {step: holds[step][2] for step in WRIST_STEPS}
+    warnings = []
+    for step in WRIST_STEPS:
+        if spreads[step] > 5.0 or gyros[step] > 15.0:
+            warnings.append(f"{step} 未充分静止：姿态波动 {spreads[step]:.1f}°，"
+                            f"角速度 P90 {gyros[step]:.1f}°/s")
+        if _unreliable_arrivals(samples[step]):
+            warnings.append(f"{step} 回传中断（>500 ms 或多次 >150 ms）")
+    if max(fit_errors.values()) > 18.0:
+        warnings.append("掌屈/拇指侧偏转方向与模型轴偏差超过 18°")
+    if check_forward > 18.0 or check_neutral > 12.0:
+        warnings.append("相对前臂的独立复测未通过：请检查手背绑带或回中立姿势")
+    prior_error = float(np.rad2deg(Rotation.from_matrix(basis @ prior.T).magnitude()))
+    checks["manual_mapping_offset"] = prior_error
+    if prior_error > 25.0:
+        warnings.append(
+            f"候选轴映射偏离手动初始映射 {prior_error:.1f}°（上限 25°）；"
+            "可能含前臂旋转、6 轴航向漂移或绑带滑动，请检查佩戴并重录，勿应用本结果")
+    axial_range_ok = (30.0 <= axial_angle <= 85.0 and
+                      30.0 <= hand_axial_angle <= 85.0)
+    if not axial_range_ok:
+        warnings.append(
+            f"长轴验证转动不足或过大：前臂 {axial_angle:.1f}°、手背 "
+            f"{hand_axial_angle:.1f}°；请伸直手腕，随前臂共同旋转约 40–60° 后重录")
+    if axial_range_ok and axial_forearm_z > 25.0:
+        warnings.append(
+            f"长轴验证时前臂转轴偏离模型长轴 {axial_forearm_z:.1f}°；"
+            "请避免抬臂、屈肘或摆动上臂，重录")
+    if axial_range_ok and (axial_axis_error > 20.0 or axial_relative > 12.0):
+        warnings.append(
+            f"长轴验证未通过：手与前臂转轴相差 {axial_axis_error:.1f}°、"
+            f"相对转动 {axial_relative:.1f}°；请保持手腕伸直，检查绑带和航向后重录")
+    return GuidedResult(
+        part="left_hand", device_id=device_id, basis_matrix=basis.tolist(),
+        neutral_matrix=r0.tolist(), fit_error_deg=fit_errors,
+        check_error_deg=checks, hold_spread_deg=spreads,
+        gyro_p90_deg_s=gyros,
+        sample_counts={step: len(samples[step]) for step in STEPS},
+        status="通过" if not warnings else "需重录", warnings=warnings)
+
+
 def reference_motion_deg(samples: dict[str, list[dict]]) -> dict[str, float]:
     """How much a supposedly fixed parent segment moved from its neutral hold."""
     matrices = {step: _hold(samples[step])[0] for step in STEPS}
@@ -208,3 +360,13 @@ def reference_motion_deg(samples: dict[str, list[dict]]) -> dict[str, float]:
     return {step: float(np.rad2deg(Rotation.from_matrix(
         neutral.T @ matrices[step]).magnitude()))
             for step in STEPS if step != "neutral"}
+
+
+def reference_hold_quality(samples: dict[str, list[dict]]) -> dict[str, tuple[float, float]]:
+    """Return parent orientation spread and gyro P90 for every static hold."""
+    return {step: _hold(samples[step])[1:] for step in STEPS}
+
+
+def reference_neutral_matrix(rows: list[dict]) -> np.ndarray:
+    """Return the first stationary parent frame, shared with wrist neutral."""
+    return _hold(rows)[0]

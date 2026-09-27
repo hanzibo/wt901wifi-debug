@@ -77,6 +77,99 @@ class GuidedGuiTests(TestCase):
             finally:
                 window.close()
 
+    def test_left_wrist_requires_forearm_and_previews_shared_baseline(self):
+        with TemporaryDirectory() as directory:
+            source = FakeSource()
+            window = BodyWindow(source, Path(directory) / "settings.json",
+                                {"left_forearm": "WT_ARM", "left_hand": "WT_HAND"}, {})
+            try:
+                for device_id in ("WT_ARM", "WT_HAND"):
+                    window.engine.feed(SimpleNamespace(
+                        device_id=device_id, roll=0, pitch=0, yaw=0))
+                window._show_calibration()
+                dialog = window.calibration_dialog
+                dialog.part_combo.setCurrentIndex(dialog.part_combo.findData("left_hand"))
+                dialog.on_replies([("WT_HAND", (1, 1, 0, 0))])
+                dialog.start()
+                self.assertIn("先完成并应用左前臂", dialog.progress.text())
+                old_forearm_neutral = Rotation.from_euler(
+                    "z", -25, degrees=True).as_matrix()
+                window.engine.apply_calibration(
+                    "left_forearm", "WT_ARM", np.eye(3), old_forearm_neutral)
+
+                def packet(device_id, rotation):
+                    roll, pitch, yaw = Rotation.from_matrix(rotation).as_euler(
+                        "xyz", degrees=True)
+                    return SimpleNamespace(
+                        device_id=device_id, year=2026, month=9, day=27,
+                        hour=12, minute=0, second=0, millisecond=0,
+                        acc_x=0.0, acc_y=0.0, acc_z=1.0,
+                        gyro_x=0.0, gyro_y=0.0, gyro_z=0.0,
+                        mag_x=0.0, mag_y=0.0, mag_z=0.0,
+                        roll=roll, pitch=pitch, yaw=yaw,
+                        temperature=25.0, battery_v=3.9, rssi=-45, version=1)
+
+                poses = (np.eye(3),
+                         Rotation.from_euler("y", 38, degrees=True).as_matrix(),
+                         Rotation.from_euler("x", -19, degrees=True).as_matrix(),
+                         Rotation.from_euler("y", 34, degrees=True).as_matrix(),
+                         np.eye(3), np.eye(3))
+                parent_poses = (
+                    np.eye(3),
+                    Rotation.from_euler("y", 12, degrees=True).as_matrix(),
+                    Rotation.from_euler("x", -16, degrees=True).as_matrix(),
+                    Rotation.from_euler("y", 14, degrees=True).as_matrix(),
+                    Rotation.from_euler("z", 7, degrees=True).as_matrix(),
+                    Rotation.from_euler("z", 48, degrees=True).as_matrix())
+
+                def factory(_parent, **kwargs):
+                    return FusionSessionRecorder(Path(directory), **kwargs)
+
+                with patch("optusbproj_ubuntu.calibration_gui.FusionSessionRecorder",
+                           side_effect=factory):
+                    dialog.prepare_seconds.setValue(3)
+                    dialog.start()
+                    self.assertEqual(dialog.phase, "prepare")
+                    self.assertGreater(dialog.deadline - time.monotonic(), 10)
+                    self.assertEqual(dialog.prepare_seconds.value(), 3)
+                    np.testing.assert_allclose(dialog.reference_original_neutral,
+                                               old_forearm_neutral)
+                    for hand_pose, parent_pose in zip(poses, parent_poses):
+                        dialog.deadline = time.monotonic() - 0.01
+                        dialog._tick()
+                        for _ in range(35):
+                            dialog.on_packet(time.monotonic_ns(),
+                                             packet("WT_ARM", parent_pose))
+                            dialog.on_packet(time.monotonic_ns(),
+                                             packet("WT_HAND", parent_pose @ hand_pose))
+                        dialog.deadline = time.monotonic() - 0.01
+                        dialog._tick()
+                self.assertEqual(dialog.result.status, "通过")
+                np.testing.assert_allclose(
+                    dialog.shared_calibrations[0]["neutral_matrix"], np.eye(3), atol=1e-8)
+                dialog.preview()
+                self.assertIsNotNone(dialog.preview_window)
+                np.testing.assert_allclose(
+                    dialog.preview_window.engine.neutral["WT_ARM"], np.eye(3), atol=1e-8)
+                np.testing.assert_allclose(
+                    dialog.preview_window.candidate_engine.neutral["WT_ARM"],
+                    np.eye(3), atol=1e-8)
+                dialog.preview_window.close()
+                window.engine.neutral["WT_ARM"] = np.eye(3)
+                with patch.object(QtWidgets.QMessageBox, "warning") as warning:
+                    dialog.apply()
+                warning.assert_called_once()
+                self.assertNotIn("left_hand", window.engine.continuous_basis)
+                window.engine.neutral["WT_ARM"] = old_forearm_neutral.copy()
+                dialog.apply()
+                self.assertIn("left_hand", window.engine.continuous_basis)
+                np.testing.assert_allclose(window.engine.neutral["WT_ARM"],
+                                           np.eye(3), atol=1e-8)
+                dialog.restore()
+                self.assertNotIn("left_hand", window.engine.continuous_basis)
+            finally:
+                window.close()
+
     def test_bilateral_capture_keeps_each_part_result_independent(self):
         with TemporaryDirectory() as directory:
             ids = {"left_upper_arm": "WT_LU", "left_forearm": "WT_LF",

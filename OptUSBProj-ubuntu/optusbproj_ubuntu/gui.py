@@ -181,7 +181,7 @@ class BodyWindow(QtWidgets.QMainWindow):
         self.zero_countdown = QtWidgets.QLabel("定时归零未启动")
         self.zero_countdown.setWordWrap(True)
         panel_layout.addWidget(self.zero_countdown)
-        self.calibration_button = QtWidgets.QPushButton("穿戴标定…（躯干 / 上臂 / 前臂）")
+        self.calibration_button = QtWidgets.QPushButton("穿戴标定…（躯干 / 双臂 / 左手腕）")
         self.calibration_button.clicked.connect(self._show_calibration)
         self.calibration_button.setEnabled(not self.replay_mode)
         panel_layout.addWidget(self.calibration_button)

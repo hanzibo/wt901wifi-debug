@@ -13,8 +13,10 @@ from PySide6 import QtCore, QtWidgets
 from wt901.registers import REG_ORIENT
 
 from .fusion_recording import FusionSessionRecorder
-from .guided_calibration import (ARM_PARTS, CALIBRATABLE_PARTS, STEPS, fit_guided_arm,
-                                 fit_guided_torso, reference_motion_deg)
+from .guided_calibration import (ARM_PARTS, CALIBRATABLE_PARTS, STEPS, WRIST_STEPS, fit_guided_arm,
+                                 fit_guided_left_wrist, fit_guided_torso,
+                                 reference_hold_quality, reference_motion_deg,
+                                 reference_neutral_matrix)
 from .pose import PoseEngine
 from .skeleton import PART_BY_KEY, PARTS
 
@@ -32,6 +34,14 @@ TORSO_STEP_LABELS = {
     "lateral": "保持骨盆不动，躯干向身体右侧侧屈约 30–45°",
     "check_forward": "再次向前屈约 30–45°（独立验证）",
     "check_neutral": "站直并回到最初的朝向",
+}
+LEFT_WRIST_STEP_LABELS = {
+    "neutral": "站到测试位置，左臂自然下垂，手与前臂伸直；此步建立共同中立位",
+    "forward": "只弯左手腕：掌屈约 25–55°，前臂尽量稳定",
+    "lateral": "回到伸直后，只将左手向拇指侧偏转约 12–25°",
+    "check_forward": "再次只做左手腕掌屈约 25–55°（独立验证）",
+    "check_neutral": "左手回到与前臂伸直的中立位",
+    "check_long_axis": "手腕保持伸直，左前臂带着左手共同绕手臂长轴旋转约 40–60°；不要单独拧手腕",
 }
 BILATERAL_STEP_LABELS = {
     "neutral": "双臂自然下垂，躯干保持直立",
@@ -64,7 +74,7 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
     def __init__(self, host: QtWidgets.QMainWindow) -> None:
         super().__init__(host)
         self.host = host
-        self.setWindowTitle("穿戴标定 · 躯干 / 上臂 / 前臂")
+        self.setWindowTitle("穿戴标定 · 躯干 / 上臂 / 前臂 / 左手腕")
         self.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
         self.resize(630, 490)
         self.phase = "idle"
@@ -83,6 +93,9 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
         self.result_path: Path | None = None
         self.preview_window = None
         self._applied = False
+        self.reference_device_id = ""
+        self.reference_original_neutral: np.ndarray | None = None
+        self.shared_calibrations: list[dict] = []
 
         layout = QtWidgets.QVBoxLayout(self)
         intro = QtWidgets.QLabel(
@@ -107,6 +120,12 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
         self.prepare_seconds.setValue(7)
         self.prepare_seconds.setSuffix(" 秒")
         form.addRow("每步准备时间", self.prepare_seconds)
+        self.first_prepare_label = QtWidgets.QLabel("首步准备时间")
+        self.first_prepare_seconds = QtWidgets.QSpinBox()
+        self.first_prepare_seconds.setRange(3, 60)
+        self.first_prepare_seconds.setValue(12)
+        self.first_prepare_seconds.setSuffix(" 秒")
+        form.addRow(self.first_prepare_label, self.first_prepare_seconds)
         self.hold_seconds = QtWidgets.QDoubleSpinBox()
         self.hold_seconds.setRange(1.0, 5.0)
         self.hold_seconds.setSingleStep(0.5)
@@ -177,6 +196,8 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
 
     def _part_changed(self) -> None:
         selected = self.part_combo.currentData() or ""
+        self.first_prepare_label.setVisible(selected == "left_hand")
+        self.first_prepare_seconds.setVisible(selected == "left_hand")
         device_id = self.host.engine.assignments.get(selected, "")
         if selected != self.part or device_id != self.device_id:
             self.result = None
@@ -186,6 +207,7 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
             self.apply_button.setEnabled(False)
         self.part = selected
         self.device_id = device_id
+        self.steps = WRIST_STEPS if selected == "left_hand" else STEPS
         self.orientation = self.algorithm = None
         self._read_waiting = False
         self.device_status.setText("正在只读查询安装方向与算法…" if self.device_id else "无已分配设备")
@@ -196,6 +218,15 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
                 "动作：直立 → 前屈 → 向右侧屈 → 再次前屈验证 → 回到直立验证。"
                 "各步保持骨盆不动；每一步自动倒计时并采样。")
             self.details.setText("躯干标定使用运动转轴；请不要连同骨盆一起转动。")
+        elif self.part == "left_hand":
+            self.steps_label.setText(
+                "动作：手与前臂伸直 → 掌屈 → 向拇指侧偏转 → 再次掌屈验证 → 回到伸直"
+                " → 前臂与手一起绕长轴转动验证。"
+                "开始后可走到空旷处；首步静止采样才建立共同中立位。"
+                "后续各步尽量保持前臂稳定，只弯手腕。")
+            self.details.setText(
+                "左前臂必须已绑定在线设备并完成穿戴标定；手背设备要绑牢。"
+                "最后一步是独立验证前臂与手一起旋前/旋后，不是单独扭转腕关节。")
         else:
             self.steps_label.setText(
                 "动作：中立 → 前举 → 侧举 → 再次前举验证 → 回到中立验证。"
@@ -237,18 +268,36 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
         if self.orientation not in (0, 1) or self.algorithm not in (0, 1):
             self.progress.setText("未读到安装方向与算法；请点击‘重新读取’")
             return
-        if self.orientation != 1:
+        if self.part != "left_hand" and self.orientation != 1:
             self.progress.setText("当前不是垂直安装；本轮穿戴协议要求外壳 Y 轴向上")
             return
+        if self.part == "left_hand":
+            parent_id = self.host.engine.assignments.get("left_forearm", "")
+            if not parent_id or not self.host.engine.is_live(parent_id):
+                self.progress.setText("左前臂设备未绑定或离线；手腕标定需要前臂参考")
+                return
+            if "left_forearm" not in self.host.engine.continuous_basis:
+                self.progress.setText("请先完成并应用左前臂穿戴标定，再标定左手腕")
+                return
         if getattr(self.host, "session", None) is not None or self.host.recorder is not None:
             self.progress.setText("请先结束现有录制，再开始穿戴标定")
             return
-        self.samples = {step: [] for step in STEPS}
-        self.context_samples = {step: {} for step in STEPS}
+        self.samples = {step: [] for step in self.steps}
+        self.context_samples = {step: {} for step in self.steps}
         self.events = []
         self.result = None
         self.result_path = None
         self._applied = False
+        self.reference_device_id = (self.host.engine.assignments["left_forearm"]
+                                    if self.part == "left_hand" else "")
+        self.reference_original_neutral = (
+            self.host.engine.neutral[self.reference_device_id].copy()
+            if self.part == "left_hand" else None)
+        self.shared_calibrations = ([{
+            "part": "left_forearm", "device_id": self.reference_device_id,
+            "basis_matrix": self.host.engine.continuous_basis["left_forearm"].tolist(),
+            "neutral_matrix": self.reference_original_neutral.tolist(),
+        }] if self.part == "left_hand" else [])
         self.preview_button.setEnabled(False)
         self.apply_button.setEnabled(False)
         self.restore_button.setEnabled(self.part in self.host.engine.continuous_basis)
@@ -263,7 +312,9 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
             return
         self.index = 0
         self.phase = "prepare"
-        self.deadline = time.monotonic() + self.prepare_seconds.value()
+        self.deadline = time.monotonic() + (
+            self.first_prepare_seconds.value() if self.part == "left_hand"
+            else self.prepare_seconds.value())
         self.part_combo.setEnabled(False)
         self.read_button.setEnabled(False)
         self.start_button.setEnabled(False)
@@ -287,7 +338,7 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
                 "gyro_z": packet.gyro_z,
                 "acc_x": packet.acc_x, "acc_y": packet.acc_y,
                 "acc_z": packet.acc_z}
-            step = STEPS[self.index]
+            step = self.steps[self.index]
             self.context_samples[step].setdefault(packet.device_id, []).append(row)
             if packet.device_id == self.device_id:
                 self.samples[step].append(row)
@@ -298,14 +349,22 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
         if not self.host.engine.is_live(self.device_id):
             self.abort("设备断流；本轮标定已取消，请检查热点后重做")
             return
-        step = STEPS[self.index]
-        step_label = (TORSO_STEP_LABELS if self.part == "torso" else STEP_LABELS)[step]
+        if self.part == "left_hand":
+            parent_id = self.host.engine.assignments.get("left_forearm", "")
+            if (parent_id != self.reference_device_id or
+                    not self.host.engine.is_live(parent_id)):
+                self.abort("左前臂设备断流或分配改变；本轮手腕标定已取消")
+                return
+        step = self.steps[self.index]
+        labels = (TORSO_STEP_LABELS if self.part == "torso" else
+                  LEFT_WRIST_STEP_LABELS if self.part == "left_hand" else STEP_LABELS)
+        step_label = labels[step]
         remaining = self.deadline - time.monotonic()
         if remaining > 0:
             verb = "摆好姿势" if self.phase == "prepare" else "保持静止"
             count = len(self.samples[step])
             self.progress.setText(
-                f"第 {self.index + 1}/{len(STEPS)} 步：{step_label}\n"
+                f"第 {self.index + 1}/{len(self.steps)} 步：{step_label}\n"
                 f"{verb} · {remaining:.1f} 秒" +
                 (f" · 已收 {count} 包" if self.phase == "hold" else ""))
             return
@@ -320,9 +379,15 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
         if len(self.samples[step]) < 30:
             self.abort(f"{step_label} 仅收到 {len(self.samples[step])} 包；请重做")
             return
+        if self.part == "left_hand":
+            parent_id = self.host.engine.assignments["left_forearm"]
+            parent_count = len(self.context_samples[step].get(parent_id, []))
+            if parent_count < 30:
+                self.abort(f"{step_label} 左前臂仅收到 {parent_count} 包；请重做")
+                return
         self.index += 1
         QtWidgets.QApplication.beep()
-        if self.index == len(STEPS):
+        if self.index == len(self.steps):
             self._finish()
             return
         self.phase = "prepare"
@@ -343,32 +408,68 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
             recorder.close()
             self._save_events(recorder.path, "recorded")
             mapping = self.host.engine.axis_mappings[self.part]
+            wrist_context = None
+            if self.part == "left_hand":
+                wrist_context = {
+                    step: self.context_samples[step].get(self.reference_device_id, [])
+                    for step in self.steps}
             result = (fit_guided_torso(self.device_id, self.samples, mapping)
                       if self.part == "torso" else
+                      fit_guided_left_wrist(
+                          self.device_id, self.samples, mapping, wrist_context,
+                          np.asarray(self.shared_calibrations[0]["basis_matrix"]))
+                      if self.part == "left_hand" else
                       fit_guided_arm(self.part, self.device_id, self.samples, mapping))
-            reference_key = "pelvis" if self.part == "torso" else "torso"
+            if wrist_context is not None:
+                self.shared_calibrations[0]["neutral_matrix"] = (
+                    reference_neutral_matrix(wrist_context["neutral"]).tolist())
+            reference_key = ("pelvis" if self.part == "torso" else
+                             "left_forearm" if self.part == "left_hand" else "torso")
             reference_id = self.host.engine.assignments.get(reference_key, "")
             if reference_id and reference_id != self.device_id:
                 context = {step: self.context_samples[step].get(reference_id, [])
-                           for step in STEPS}
+                           for step in self.steps}
                 try:
                     motions = reference_motion_deg(context)
                 except ValueError:
+                    if self.part == "left_hand":
+                        raise
                     motions = {}
-                if motions and max(motions.values()) > 12.0:
+                limit = 40.0 if self.part == "left_hand" else 12.0
+                monitored_motions = (motions if self.part != "left_hand" else
+                                     {step: angle for step, angle in motions.items()
+                                      if step != "check_long_axis"})
+                if monitored_motions and max(monitored_motions.values()) > limit:
                     result = replace(
                         result, status="需重录",
                         warnings=result.warnings + [
                             f"{reference_key} 在规定动作中转动了"
-                            f" {max(motions.values()):.1f}°；请固定身体基准后重录"])
+                            f" {max(monitored_motions.values()):.1f}°；"
+                            + ("手腕标定姿势变化过大，请重录" if self.part == "left_hand"
+                               else "请固定身体基准后重录")])
+                if self.part == "left_hand":
+                    quality = reference_hold_quality(context)
+                    unstable = [step for step, (spread, gyro) in quality.items()
+                                if spread > 4.0 or gyro > 10.0]
+                    if unstable:
+                        result = replace(
+                            result, status="需重录",
+                            warnings=result.warnings + [
+                                "左前臂在静止采样期间移动：" + ", ".join(unstable)])
             self.result = result
             payload = asdict(result)
             payload.update({"format": "wt901-guided-calibration-v1",
-                            "method": "torso_axis" if self.part == "torso" else "bone",
+                            "method": ("torso_axis" if self.part == "torso" else
+                                       "wrist_relative_axis_v2" if self.part == "left_hand"
+                                       else "bone"),
+                            "neutral_policy": ("first_static_hold_shared"
+                                               if self.part == "left_hand" else "part_hold"),
                             "session": str(recorder.path.resolve()),
                             "installation_direction": self.orientation,
                             "fusion_algorithm": self.algorithm,
                             "manual_mapping": list(self.host.engine.axis_mappings[self.part]),
+                            "reference_device_id": self.reference_device_id,
+                            "shared_calibrations": self.shared_calibrations,
                             "events": self.events})
             self.result_path = recorder.path / "guided_result.json"
             self.result_path.write_text(
@@ -380,20 +481,29 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
         fit = result.fit_error_deg
         check = result.check_error_deg
         forward_name, lateral_name = (("前屈", "侧屈") if self.part == "torso"
+                                      else ("掌屈", "拇指侧偏") if self.part == "left_hand"
                                       else ("前举", "侧举"))
         self.progress.setText(
             f"结果：{result.status} · {forward_name} {fit['forward']:.1f}° · "
             f"{lateral_name} {fit['lateral']:.1f}°\n"
             f"独立复测：{forward_name} {check['check_forward']:.1f}° · "
-            f"回到中立 {check['check_neutral']:.1f}°")
+            f"回到中立 {check['check_neutral']:.1f}°" +
+            (f" · 长轴相对误差 {check['check_long_axis_relative']:.1f}° · "
+             f"偏离手动映射 {check['manual_mapping_offset']:.1f}°"
+             if self.part == "left_hand" else ""))
         self.details.setText(
             ("；".join(result.warnings) if result.warnings else
              ("质量检查通过；腰椎真实运动轴仍需人体实验复核。" if self.part == "torso"
-              else "质量检查通过。前臂长轴扭转尚未经此协议验证。"))
+              else "质量检查通过；请在回放中确认掌屈、侧偏和前臂长轴转动方向。"
+              if self.part == "left_hand" else
+              "质量检查通过。前臂长轴扭转尚未经此协议验证。"))
             + ("\n骨盆未绑定设备：无法独立确认侧屈时骨盆保持固定。"
                if self.part == "torso" and not self.host.engine.assignments.get("pelvis")
                else "")
             + f"\n原始记录与结果：{recorder.path}")
+        if self.part == "left_hand":
+            self.details.setText(self.details.text() +
+                                 "\n应用时会将左前臂与左手一起归零到首个静止姿势。")
         self.preview_button.setEnabled(True)
         self.apply_button.setEnabled(result.status == "通过")
 
@@ -403,6 +513,7 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
                    "installation_direction": self.orientation,
                    "fusion_algorithm": self.algorithm,
                    "manual_mapping": list(self.host.engine.axis_mappings[self.part]),
+                   "reference_device_id": self.reference_device_id,
                    "events": self.events}
         (session_path / "steps.json").write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
@@ -426,7 +537,9 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
                     dict(self.host.engine.axis_mappings),
                     calibration_candidates=[json.loads(path.read_text(encoding="utf-8"))
                                             for path in result_paths],
-                    manual_mapping_source="标定时快照")
+                    comparison_shared_calibrations=self.shared_calibrations,
+                    manual_mapping_source=("手部手动映射（前臂保持已标定）"
+                                           if self.part == "left_hand" else "标定时快照"))
             except Exception:
                 source.close()
                 raise
@@ -447,10 +560,28 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
         if self.host.engine.assignments.get(result.part) != result.device_id:
             QtWidgets.QMessageBox.warning(self, "无法应用", "设备分配已改变，请重新标定")
             return
+        if result.part == "left_hand" and (
+                self.host.engine.assignments.get("left_forearm") != self.reference_device_id or
+                "left_forearm" not in self.host.engine.continuous_basis):
+            QtWidgets.QMessageBox.warning(self, "无法应用", "左前臂标定已失效，请重新标定")
+            return
+        if result.part == "left_hand":
+            shared = self.shared_calibrations[0]
+            if (not np.allclose(self.host.engine.continuous_basis["left_forearm"],
+                                shared["basis_matrix"], atol=1e-5) or
+                    self.reference_device_id not in self.host.engine.neutral or
+                    not np.allclose(self.host.engine.neutral[self.reference_device_id],
+                                    self.reference_original_neutral, atol=1e-5)):
+                QtWidgets.QMessageBox.warning(
+                    self, "无法应用", "左前臂标定或归零基准已改变，请重新录制左手腕标定")
+                return
         try:
             self.host.engine.apply_calibration(
                 result.part, result.device_id, np.asarray(result.basis_matrix),
                 np.asarray(result.neutral_matrix))
+            if result.part == "left_hand":
+                self.host.engine.neutral[self.reference_device_id] = np.asarray(
+                    shared["neutral_matrix"], dtype=float).copy()
         except ValueError as exc:
             QtWidgets.QMessageBox.warning(self, "无法应用", str(exc))
             return
