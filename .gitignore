@@ -10,6 +10,8 @@ __pycache__/
 .firecrawl/
 .agents/
 .codex/
+# CoppeliaSim 临时会话状态（不是真实场景文件）。
+/:memory:.ses
 
 # Per-machine body sensor assignments (never commit local device mapping).
 OptUSBProj-ubuntu/local_config.json

@@ -1,4 +1,15 @@
-# WT901WIFI 双手手腕姿态控制台
+# WT901WIFI 项目
+
+本仓库有两条当前可运行的路线：根目录的 [双手手腕控制台](wrist_demo.py)，以及 [OptUSBProj Ubuntu 版](OptUSBProj-ubuntu/README.md)的 15 部件人体模型、相机/IMU 采集与穿戴标定。两者共用 [`wt901/`](wt901/) 通信协议模块；实时模式均使用 UDP 1399，**不要同时启动**。旧版 Windows 项目 `OptUSBProj/` 是本机未跟踪的参考资料，不参与 Ubuntu 程序运行。
+
+| 想做什么 | 入口 | 环境 |
+| --- | --- | --- |
+| 双手手腕演示、设备联网和参数设置 | `wrist_demo.py` | `wt901` |
+| 全身 IMU 人体模型 | `OptUSBProj-ubuntu/run.py` | `OptUSBProj` |
+| 单目相机姿态原型 | `OptUSBProj-ubuntu/camera_run.py` | 见 [相机环境说明](OptUSBProj-ubuntu/docs/CAMERA_SETUP.md) |
+| 相机＋IMU 录制、回放与标定 | `OptUSBProj-ubuntu/fusion_run.py` | 见 [融合环境说明](OptUSBProj-ubuntu/docs/FUSION_SETUP.md) |
+
+## 双手手腕姿态控制台
 
 基于 WT901WIFI 惯性测量单元（IMU）的双手手腕转角演示程序。电脑通过 Wi-Fi 接收设备数据，以各只手的当前姿态建立中立位，在 3D 界面中显示相对转角和随动手掌。项目还提供设备接入、分配、参数设置与校准入口，适合验证手腕动作映射到人形模型的可行性。
 

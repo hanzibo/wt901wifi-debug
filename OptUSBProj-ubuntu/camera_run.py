@@ -25,21 +25,21 @@ def main() -> int:
     args = parser.parse_args()
     if args.backend == "mediapipe" and (
             not args.model.is_file() or args.model.stat().st_size == 0):
-        parser.error(f"模型文件不存在或为空：{args.model}\n请先按 CAMERA_SETUP.md 下载")
+        parser.error(f"模型文件不存在或为空：{args.model}\n请先按 docs/CAMERA_SETUP.md 下载")
     if importlib.util.find_spec("cv2") is None:
-        parser.error("缺少 OpenCV (cv2)；请按 CAMERA_SETUP.md 准备组合环境")
+        parser.error("缺少 OpenCV (cv2)；请按 docs/CAMERA_SETUP.md 准备组合环境")
     try:
         import PySide6  # noqa: F401
         import pyvista  # noqa: F401
         import pyvistaqt  # noqa: F401
         import scipy  # noqa: F401
     except ImportError as exc:
-        parser.error(f"缺少相机依赖：{exc}\n请按 CAMERA_SETUP.md 准备组合环境")
+        parser.error(f"缺少相机依赖：{exc}\n请按 docs/CAMERA_SETUP.md 准备组合环境")
     required = (("mediapipe",) if args.backend == "mediapipe"
                 else ("rtmlib", "onnxruntime"))
     missing = [name for name in required if importlib.util.find_spec(name) is None]
     if missing:
-        parser.error(f"缺少 {', '.join(missing)}；请按 CAMERA_SETUP.md 准备组合环境")
+        parser.error(f"缺少 {', '.join(missing)}；请按 docs/CAMERA_SETUP.md 准备组合环境")
 
     from PySide6 import QtWidgets
     from optusbproj_ubuntu.camera_gui import CameraWindow

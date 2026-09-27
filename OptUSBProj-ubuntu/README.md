@@ -1,14 +1,16 @@
 # OptUSBProj Ubuntu 版（进行中）
 
-当前里程碑：人体模型的 15 个部件（骨盆、躯干、头部、双臂和双腿）都可分配 WT901WIFI；允许仅连接少数设备逐步测试。设备通过电脑 `WT901-LAN` 热点向本机 UDP 1399 发数据。此版本**尚未包含**旧项目的机器人 FK/IK、碰撞检测和 CoppeliaSim 映射；进度和后续验收见 [重构计划](REFACTOR_PLAN.md)。
+当前里程碑：人体模型的 15 个部件（骨盆、躯干、头部、双臂和双腿）都可分配 WT901WIFI；允许仅连接少数设备逐步测试。设备通过电脑 `WT901-LAN` 热点向本机 UDP 1399 发数据。此版本**尚未包含**旧项目的机器人 FK/IK、碰撞检测和 CoppeliaSim 映射；进度和后续验收见 [重构计划](docs/REFACTOR_PLAN.md)。
+
+目录分工：本层的 `run.py`、`camera_run.py`、`fusion_run.py` 等是兼容现有命令与桌面启动器的程序入口；`optusbproj_ubuntu/` 存放实际业务代码；`tests/` 是离线测试；`assets/` 放模型资源；`docs/` 放专题说明。`recordings/`、`calibrations/` 和 `local_config.json` 是本机生成的数据，已被 Git 忽略。根目录的 `wt901/` 和 `wt901_viz/` 是两条 GUI 路线共用的设备协议与工具；旧版 `OptUSBProj/` 仅供参考，不在运行路径中。
 
 ## 运行
 
-纯相机上身 7 部位原型（不需要 WT901，也不占用 UDP 1399）的环境准备和运行命令见 [CAMERA_SETUP.md](CAMERA_SETUP.md)。它与下面的 WT901 程序是独立入口。
+纯相机上身 7 部位原型（不需要 WT901，也不占用 UDP 1399）的环境准备和运行命令见 [相机环境说明](docs/CAMERA_SETUP.md)。它与下面的 WT901 程序是独立入口。
 
-单目相机＋WT901 的第一阶段联合采集入口见 [FUSION_SETUP.md](FUSION_SETUP.md)：可在同一窗口录制及回放两路数据，目前模型仍由 IMU 驱动，尚未进行视觉姿态校正。
+单目相机＋WT901 的第一阶段联合采集入口见 [融合环境说明](docs/FUSION_SETUP.md)：可在同一窗口录制及回放两路数据，目前模型仍由 IMU 驱动，尚未进行视觉姿态校正。
 
-躯干、左右上臂和前臂现在可通过 GUI 中的“穿戴标定…”执行倒计时引导的 IMU 动作标定：录制规定动作、检查质量、双模型回放比较，并在确认后临时应用到实时模型。详见 [WEARING_CALIBRATION.md](WEARING_CALIBRATION.md)。
+躯干、左右上臂、左右前臂及左手腕现在可通过 GUI 中的“穿戴标定…”执行倒计时引导的 IMU 动作标定：录制规定动作、检查质量、双模型回放比较，并在确认后临时应用到实时模型。详见 [穿戴标定说明](docs/WEARING_CALIBRATION.md)。
 
 从仓库根目录：
 
