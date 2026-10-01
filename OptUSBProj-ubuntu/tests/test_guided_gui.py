@@ -77,25 +77,31 @@ class GuidedGuiTests(TestCase):
             finally:
                 window.close()
 
-    def test_left_wrist_requires_forearm_and_previews_shared_baseline(self):
+    def test_left_hand_raises_preview_and_apply_do_not_change_forearm(self):
+        self._hand_raises_preview_and_apply("left")
+
+    def test_right_hand_raises_preview_and_apply_do_not_change_forearm(self):
+        self._hand_raises_preview_and_apply("right")
+
+    def _hand_raises_preview_and_apply(self, side):
+        hand, forearm = f"{side}_hand", f"{side}_forearm"
         with TemporaryDirectory() as directory:
             source = FakeSource()
             window = BodyWindow(source, Path(directory) / "settings.json",
-                                {"left_forearm": "WT_ARM", "left_hand": "WT_HAND"}, {})
+                                {forearm: "WT_ARM", hand: "WT_HAND"}, {})
             try:
                 for device_id in ("WT_ARM", "WT_HAND"):
                     window.engine.feed(SimpleNamespace(
                         device_id=device_id, roll=0, pitch=0, yaw=0))
                 window._show_calibration()
                 dialog = window.calibration_dialog
-                dialog.part_combo.setCurrentIndex(dialog.part_combo.findData("left_hand"))
+                dialog.part_combo.setCurrentIndex(dialog.part_combo.findData(hand))
                 dialog.on_replies([("WT_HAND", (1, 1, 0, 0))])
-                dialog.start()
-                self.assertIn("先完成并应用左前臂", dialog.progress.text())
                 old_forearm_neutral = Rotation.from_euler(
                     "z", -25, degrees=True).as_matrix()
                 window.engine.apply_calibration(
-                    "left_forearm", "WT_ARM", np.eye(3), old_forearm_neutral)
+                    forearm, "WT_ARM", np.eye(3), old_forearm_neutral)
+                window.engine.received_at["WT_ARM"] -= 100  # Not a required participant.
 
                 def packet(device_id, rotation):
                     roll, pitch, yaw = Rotation.from_matrix(rotation).as_euler(
@@ -110,17 +116,11 @@ class GuidedGuiTests(TestCase):
                         temperature=25.0, battery_v=3.9, rssi=-45, version=1)
 
                 poses = (np.eye(3),
-                         Rotation.from_euler("y", 38, degrees=True).as_matrix(),
-                         Rotation.from_euler("x", -19, degrees=True).as_matrix(),
-                         Rotation.from_euler("y", 34, degrees=True).as_matrix(),
-                         np.eye(3), np.eye(3))
-                parent_poses = (
-                    np.eye(3),
-                    Rotation.from_euler("y", 12, degrees=True).as_matrix(),
-                    Rotation.from_euler("x", -16, degrees=True).as_matrix(),
-                    Rotation.from_euler("y", 14, degrees=True).as_matrix(),
-                    Rotation.from_euler("z", 7, degrees=True).as_matrix(),
-                    Rotation.from_euler("z", 48, degrees=True).as_matrix())
+                         Rotation.from_euler("y", -90, degrees=True).as_matrix(),
+                         Rotation.from_euler("x", 90 if side == "left" else -90,
+                                             degrees=True).as_matrix(),
+                         Rotation.from_euler("y", -90, degrees=True).as_matrix(),
+                         np.eye(3))
 
                 def factory(_parent, **kwargs):
                     return FusionSessionRecorder(Path(directory), **kwargs)
@@ -132,41 +132,29 @@ class GuidedGuiTests(TestCase):
                     self.assertEqual(dialog.phase, "prepare")
                     self.assertGreater(dialog.deadline - time.monotonic(), 10)
                     self.assertEqual(dialog.prepare_seconds.value(), 3)
-                    np.testing.assert_allclose(dialog.reference_original_neutral,
-                                               old_forearm_neutral)
-                    for hand_pose, parent_pose in zip(poses, parent_poses):
+                    self.assertEqual(len(dialog.steps), 5)
+                    for hand_pose in poses:
                         dialog.deadline = time.monotonic() - 0.01
                         dialog._tick()
                         for _ in range(35):
                             dialog.on_packet(time.monotonic_ns(),
-                                             packet("WT_ARM", parent_pose))
-                            dialog.on_packet(time.monotonic_ns(),
-                                             packet("WT_HAND", parent_pose @ hand_pose))
+                                             packet("WT_HAND", hand_pose))
                         dialog.deadline = time.monotonic() - 0.01
                         dialog._tick()
                 self.assertEqual(dialog.result.status, "通过")
-                np.testing.assert_allclose(
-                    dialog.shared_calibrations[0]["neutral_matrix"], np.eye(3), atol=1e-8)
+                self.assertEqual(dialog.shared_calibrations, [])
                 dialog.preview()
                 self.assertIsNotNone(dialog.preview_window)
                 np.testing.assert_allclose(
-                    dialog.preview_window.engine.neutral["WT_ARM"], np.eye(3), atol=1e-8)
-                np.testing.assert_allclose(
-                    dialog.preview_window.candidate_engine.neutral["WT_ARM"],
-                    np.eye(3), atol=1e-8)
+                    dialog.preview_window.engine.neutral["WT_HAND"],
+                    dialog.preview_window.candidate_engine.neutral["WT_HAND"])
                 dialog.preview_window.close()
-                window.engine.neutral["WT_ARM"] = np.eye(3)
-                with patch.object(QtWidgets.QMessageBox, "warning") as warning:
-                    dialog.apply()
-                warning.assert_called_once()
-                self.assertNotIn("left_hand", window.engine.continuous_basis)
-                window.engine.neutral["WT_ARM"] = old_forearm_neutral.copy()
                 dialog.apply()
-                self.assertIn("left_hand", window.engine.continuous_basis)
+                self.assertIn(hand, window.engine.continuous_basis)
                 np.testing.assert_allclose(window.engine.neutral["WT_ARM"],
-                                           np.eye(3), atol=1e-8)
+                                           old_forearm_neutral, atol=1e-8)
                 dialog.restore()
-                self.assertNotIn("left_hand", window.engine.continuous_basis)
+                self.assertNotIn(hand, window.engine.continuous_basis)
             finally:
                 window.close()
 

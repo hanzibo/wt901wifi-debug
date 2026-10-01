@@ -20,7 +20,8 @@ from .axis_mapping import mapping_matrix
 STEPS = ("neutral", "forward", "lateral", "check_forward", "check_neutral")
 WRIST_STEPS = STEPS + ("check_long_axis",)
 ARM_PARTS = ("left_upper_arm", "left_forearm", "right_upper_arm", "right_forearm")
-CALIBRATABLE_PARTS = ("torso",) + ARM_PARTS + ("left_hand",)
+HAND_PARTS = ("left_hand", "right_hand")
+CALIBRATABLE_PARTS = ("torso",) + ARM_PARTS + HAND_PARTS
 
 
 @dataclass(frozen=True)
@@ -45,7 +46,11 @@ def _angle(a: np.ndarray, b: np.ndarray) -> float:
 def _hold(rows: list[dict]) -> tuple[np.ndarray, float, float]:
     if len(rows) < 30:
         raise ValueError(f"静止窗口只有 {len(rows)} 包，至少需要 30 包")
+    if any(row.get("orientation_mode") == "gyro_tilt" and
+           "orientation_matrix" not in row for row in rows):
+        raise ValueError("陀螺＋加计尚未建立重力竖直参考；请先静止约 1 秒再重录")
     rotations = Rotation.from_matrix(np.asarray([
+        row["orientation_matrix"] if "orientation_matrix" in row else
         rotation_matrix(row["roll"], row["pitch"], row["yaw"])
         for row in rows], dtype=float))
     mean = rotations.mean()
@@ -55,6 +60,16 @@ def _hold(rows: list[dict]) -> tuple[np.ndarray, float, float]:
                        for row in rows], dtype=float)
     gyro_p90 = float(np.percentile(np.linalg.norm(gyro, axis=1), 90))
     return mean.as_matrix(), spread, gyro_p90
+
+
+def neutral_matrices_by_mode(rows: list[dict]) -> dict[str, np.ndarray]:
+    """Same physical hold, independently averaged in both attitude streams."""
+    if len(rows) < 30:
+        raise ValueError("同步中立位采样不足")
+    modes = set.intersection(*(set(row.get("orientation_by_mode", {})) for row in rows))
+    return {mode: Rotation.from_matrix(np.asarray([
+        row["orientation_by_mode"][mode] for row in rows], dtype=float
+    )).mean().as_matrix() for mode in modes}
 
 
 def _unreliable_arrivals(rows: list[dict]) -> bool:
@@ -75,9 +90,11 @@ def fit_guided_arm(part: str, device_id: str, samples: dict[str, list[dict]],
     the manual map weakly regularizes that heading, rather than forcing an
     exact signed permutation. Independent repeat/return holds test the fit.
     This does *not* claim to identify anatomical twist about the bone axis.
+    For either hand, the straight palm/finger long axis follows the extended
+    arm during the same raises; no forearm-reference subtraction is used.
     """
-    if part not in ARM_PARTS:
-        raise ValueError("引导式骨段标定目前仅支持左右上臂、前臂")
+    if part not in ARM_PARTS + HAND_PARTS:
+        raise ValueError("引导式骨段标定目前仅支持左右上臂、前臂及双手")
     missing = set(STEPS) - set(samples)
     if missing:
         raise ValueError(f"缺少动作窗口：{', '.join(sorted(missing))}")
@@ -235,40 +252,58 @@ def fit_guided_left_wrist(device_id: str, samples: dict[str, list[dict]],
         step: forearm_basis @ (forearm_neutral.T @ hold[0]) @ forearm_basis.T
         for step, hold in forearm_holds.items()}
     hand_motion = {step: r0.T @ hold[0] for step, hold in holds.items()}
-    delta_f = Rotation.from_matrix(hand_motion["forward"]).as_rotvec()
-    delta_s = Rotation.from_matrix(hand_motion["lateral"]).as_rotvec()
-    if min(np.linalg.norm(delta_f), np.linalg.norm(delta_s)) < np.deg2rad(5):
-        raise ValueError("手背设备在至少一个动作中转动不足 5°，无法辨识安装轴；请减少前臂运动")
-    target = np.column_stack(((0.0, 1.0, 0.0), (-1.0, 0.0, 0.0)))
-    source = np.column_stack((delta_f / np.linalg.norm(delta_f),
-                              delta_s / np.linalg.norm(delta_s)))
-    u, _, vt = np.linalg.svd(target @ source.T + 0.15 * prior)
-    correction = np.diag([1.0, 1.0, float(np.linalg.det(u @ vt))])
-    initial_basis = u @ correction @ vt
-
     def relative_wrist(step: str, basis: np.ndarray) -> np.ndarray:
         hand_model = basis @ hand_motion[step] @ basis.T
         return forearm_motion[step].T @ hand_model
 
+    # Build the seed from wrist motion, not hand motion. During a worn trial
+    # the forearm can move appreciably even when the requested wrist action is
+    # correct; including that motion in the seed can flip the fitted axes.
+    delta_f = Rotation.from_matrix(relative_wrist("forward", prior)).as_rotvec()
+    delta_s = Rotation.from_matrix(relative_wrist("lateral", prior)).as_rotvec()
+    if min(np.linalg.norm(delta_f), np.linalg.norm(delta_s)) < np.deg2rad(5):
+        raise ValueError("扣除前臂运动后至少一个手腕动作不足 5°，无法辨识安装轴")
+    target = np.column_stack(((0.0, 1.0, 0.0), (-1.0, 0.0, 0.0)))
+    # The observed axes above are in model coordinates under the prior map.
+    # Find a small correction to that map, rather than fitting an unrelated
+    # mounting from the two training gestures alone.
+    observed = np.column_stack((delta_f / np.linalg.norm(delta_f),
+                                delta_s / np.linalg.norm(delta_s)))
+    u, _, vt = np.linalg.svd(target @ observed.T + 0.15 * np.eye(3))
+    correction = np.diag([1.0, 1.0, float(np.linalg.det(u @ vt))])
+    seed_rotation = Rotation.from_matrix(u @ correction @ vt).as_rotvec()
+    seed_angle = float(np.linalg.norm(seed_rotation))
+    if seed_angle > np.deg2rad(20.0):
+        seed_rotation *= np.deg2rad(20.0) / seed_angle
+
+    def constrained_basis(vector: np.ndarray) -> np.ndarray:
+        angle = float(np.linalg.norm(vector))
+        if angle > np.deg2rad(25.0):
+            vector = vector * (np.deg2rad(25.0) / angle)
+        return Rotation.from_rotvec(vector).as_matrix() @ prior
+
     def residual(parameters: np.ndarray) -> np.ndarray:
-        basis = Rotation.from_rotvec(parameters[:3]).as_matrix() @ initial_basis
+        basis = constrained_basis(parameters[:3])
         flex = Rotation.from_matrix(relative_wrist("forward", basis)).as_rotvec()
         radial = Rotation.from_matrix(relative_wrist("lateral", basis)).as_rotvec()
+        offset = float(np.linalg.norm(parameters[:3]))
         return np.concatenate((flex - target[:, 0] * parameters[3],
                                radial - target[:, 1] * parameters[4],
-                               0.06 * parameters[:3]))
+                               0.20 * parameters[:3],
+                               [5.0 * max(0.0, offset - np.deg2rad(25.0))]))
 
     initial_angles = [float(np.linalg.norm(Rotation.from_matrix(
-        relative_wrist(step, initial_basis)).as_rotvec()))
+        relative_wrist(step, prior)).as_rotvec()))
         for step in ("forward", "lateral")]
     lower = np.deg2rad([18.0, 8.0])
     upper = np.deg2rad([85.0, 45.0])
-    start = np.r_[np.zeros(3), np.clip(initial_angles, lower + 1e-5, upper - 1e-5)]
+    start = np.r_[seed_rotation, np.clip(initial_angles, lower + 1e-5, upper - 1e-5)]
     fit = least_squares(residual, start, bounds=(
-        np.r_[[-np.pi] * 3, lower], np.r_[[np.pi] * 3, upper]))
+        np.r_[[-np.deg2rad(25.0)] * 3, lower],
+        np.r_[[np.deg2rad(25.0)] * 3, upper]))
     if not fit.success:
         raise ValueError("手腕双设备映射拟合未收敛，请重新采样")
-    basis = Rotation.from_rotvec(fit.x[:3]).as_matrix() @ initial_basis
+    basis = constrained_basis(fit.x[:3])
     vectors = {step: Rotation.from_matrix(relative_wrist(step, basis)).as_rotvec()
                for step in ("forward", "lateral", "check_forward", "check_neutral")}
     angles = {step: float(np.rad2deg(np.linalg.norm(vector)))
@@ -289,7 +324,10 @@ def fit_guided_left_wrist(device_id: str, samples: dict[str, list[dict]],
     check_forward = (180.0 if angles["check_forward"] < 18.0 else
                      _angle(repeated / np.linalg.norm(repeated), target[:, 0]))
     check_neutral = angles["check_neutral"]
-    checks = {"check_forward": check_forward, "check_neutral": check_neutral}
+    manual_check_neutral = float(np.rad2deg(Rotation.from_matrix(
+        relative_wrist("check_neutral", prior)).magnitude()))
+    checks = {"check_forward": check_forward, "check_neutral": check_neutral,
+              "check_neutral_manual_mapping": manual_check_neutral}
     # This is an independent *forearm pronation/supination* check, not a
     # request to twist the wrist joint. With the wrist straight, both devices
     # should turn together about the model forearm's long (+Z/-Z) axis.
@@ -322,14 +360,18 @@ def fit_guided_left_wrist(device_id: str, samples: dict[str, list[dict]],
             warnings.append(f"{step} 回传中断（>500 ms 或多次 >150 ms）")
     if max(fit_errors.values()) > 18.0:
         warnings.append("掌屈/拇指侧偏转方向与模型轴偏差超过 18°")
-    if check_forward > 18.0 or check_neutral > 12.0:
-        warnings.append("相对前臂的独立复测未通过：请检查手背绑带或回中立姿势")
     prior_error = float(np.rad2deg(Rotation.from_matrix(basis @ prior.T).magnitude()))
     checks["manual_mapping_offset"] = prior_error
-    if prior_error > 25.0:
+    if prior_error >= 24.5:
         warnings.append(
-            f"候选轴映射偏离手动初始映射 {prior_error:.1f}°（上限 25°）；"
-            "可能含前臂旋转、6 轴航向漂移或绑带滑动，请检查佩戴并重录，勿应用本结果")
+            f"候选轴映射达到手动初始映射约束边界 {prior_error:.1f}°（上限 25°），"
+            "拟合不可信；回中立不能仅按候选映射判定动作是否规范，勿应用本结果")
+    if check_forward > 18.0 or check_neutral > 12.0:
+        warnings.append(
+            f"相对前臂复测未通过：候选映射下回中立 {check_neutral:.1f}°，"
+            f"手动映射下 {manual_check_neutral:.1f}°（上限 12°）；"
+            + ("请先检查拟合质量，再判断回中立动作"
+               if prior_error >= 24.5 else "请检查手背绑带及回中立姿势"))
     axial_range_ok = (30.0 <= axial_angle <= 85.0 and
                       30.0 <= hand_axial_angle <= 85.0)
     if not axial_range_ok:
@@ -349,7 +391,7 @@ def fit_guided_left_wrist(device_id: str, samples: dict[str, list[dict]],
         neutral_matrix=r0.tolist(), fit_error_deg=fit_errors,
         check_error_deg=checks, hold_spread_deg=spreads,
         gyro_p90_deg_s=gyros,
-        sample_counts={step: len(samples[step]) for step in STEPS},
+        sample_counts={step: len(samples[step]) for step in WRIST_STEPS},
         status="通过" if not warnings else "需重录", warnings=warnings)
 
 

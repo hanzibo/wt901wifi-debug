@@ -45,7 +45,8 @@ class FusionSessionRecorder:
                  max_pending_frames: int = 64,
                  tail_trim_seconds: float = 3.0,
                  assignments: dict[str, str] | None = None,
-                 axis_mappings: dict[str, tuple[str, str, str]] | None = None) -> None:
+                 axis_mappings: dict[str, tuple[str, str, str]] | None = None,
+                 algorithm_modes: dict[str, str] | None = None) -> None:
         if (not 1 <= jpeg_quality <= 100 or max_pending_frames < 1
                 or tail_trim_seconds < 0):
             raise ValueError("录制参数无效")
@@ -60,6 +61,7 @@ class FusionSessionRecorder:
         self.assignments = dict(assignments or {})
         self.axis_mappings = {key: list(value) for key, value in
                               (axis_mappings or {}).items()}
+        self.algorithm_modes = dict(algorithm_modes or {})
         self.tail_trim_ns = round(tail_trim_seconds * 1e9)
         self.imu_file = (self.path / "imu.csv").open("w", newline="", encoding="utf-8")
         self.imu_writer = csv.DictWriter(self.imu_file, fieldnames=IMU_FIELDS)
@@ -184,6 +186,7 @@ class FusionSessionRecorder:
             "note": "host_recv_mono_ns is UDP arrival, not device sample time",
             "assignments_at_start": self.assignments,
             "axis_mappings_at_start": self.axis_mappings,
+            "algorithm_modes_at_start": self.algorithm_modes,
         }
         (self.path / "manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",

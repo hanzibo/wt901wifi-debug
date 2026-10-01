@@ -13,7 +13,8 @@ sys.path.insert(0, str(PROJECT.parent))
 
 from optusbproj_ubuntu.guided_calibration import (fit_guided_arm, fit_guided_left_wrist,
                                                   fit_guided_torso, reference_motion_deg,
-                                                  reference_neutral_matrix)
+                                                  reference_neutral_matrix,
+                                                  neutral_matrices_by_mode, _hold)
 from optusbproj_ubuntu.axis_mapping import mapping_matrix
 
 
@@ -68,11 +69,13 @@ def _torso_samples() -> tuple[dict[str, list[dict]], np.ndarray]:
     return samples, expected
 
 
-def _left_wrist_samples(*, moving_forearm: bool = False
+def _left_wrist_samples(*, moving_forearm: bool = False,
+                        parent_angles_override: tuple[int, ...] | None = None
                         ) -> tuple[dict[str, list[dict]], dict[str, list[dict]], np.ndarray]:
     expected = Rotation.from_rotvec([0.08, -0.10, 0.12]).as_matrix() @ mapping_matrix(MANUAL)
     neutral = Rotation.from_euler("z", 14, degrees=True).as_matrix() @ expected
-    parent_angles = (0, 11, -16, 13, 7) if moving_forearm else (0, 0, 0, 0, 0)
+    parent_angles = (parent_angles_override if parent_angles_override is not None else
+                     (0, 11, -16, 13, 7) if moving_forearm else (0, 0, 0, 0, 0))
     parent_axes = ("x", "y", "x", "y", "z")
     parents = {step: Rotation.from_euler(axis, angle, degrees=True).as_matrix()
                for step, axis, angle in zip(("neutral", "forward", "lateral",
@@ -95,6 +98,38 @@ def _left_wrist_samples(*, moving_forearm: bool = False
 
 
 class GuidedCalibrationTests(TestCase):
+    def test_right_hand_forward_and_right_lateral_raise_recover_mounting(self):
+        samples, expected = _samples()
+        result = fit_guided_arm("right_hand", "WT_HAND", samples, MANUAL)
+        self.assertEqual(result.status, "通过")
+        self.assertEqual(result.part, "right_hand")
+        self.assertLess(np.rad2deg(Rotation.from_matrix(
+            np.asarray(result.basis_matrix) @ expected.T).magnitude()), 5.0)
+
+    def test_left_hand_forward_and_left_lateral_raise_recover_mounting(self):
+        samples, expected = _samples()
+        neutral = _hold(samples["neutral"])[0]
+        left_raise = Rotation.from_rotvec([np.pi / 2, 0, 0]).as_matrix()
+        samples["lateral"] = _rows(neutral @ expected.T @ left_raise @ expected)
+        result = fit_guided_arm("left_hand", "WT_HAND", samples, MANUAL)
+        self.assertEqual(result.status, "通过")
+        self.assertEqual(result.part, "left_hand")
+        self.assertLess(np.rad2deg(Rotation.from_matrix(
+            np.asarray(result.basis_matrix) @ expected.T).magnitude()), 5.0)
+
+    def test_hold_uses_selected_estimator_and_keeps_paired_neutral(self):
+        rows = _rows(np.eye(3), count=40)
+        rotated = Rotation.from_euler("z", 25, degrees=True).as_matrix()
+        for row in rows:
+            row["orientation_matrix"] = rotated.tolist()
+            row["orientation_by_mode"] = {
+                "vendor_rpy": np.eye(3).tolist(),
+                "gyro_tilt": rotated.tolist()}
+        np.testing.assert_allclose(_hold(rows)[0], rotated, atol=1e-10)
+        paired = neutral_matrices_by_mode(rows)
+        np.testing.assert_allclose(paired["vendor_rpy"], np.eye(3), atol=1e-10)
+        np.testing.assert_allclose(paired["gyro_tilt"], rotated, atol=1e-10)
+
     def test_left_wrist_two_axes_recover_mounting(self):
         samples, forearm, expected = _left_wrist_samples()
         result = fit_guided_left_wrist("WT_HAND", samples, MANUAL,
@@ -119,7 +154,9 @@ class GuidedCalibrationTests(TestCase):
         samples["lateral"] = _rows(neutral @ true_basis.T @ mixed @ true_basis)
         result = fit_guided_left_wrist("WT_HAND", samples, MANUAL, forearm, np.eye(3))
         self.assertEqual(result.status, "需重录")
-        self.assertTrue(any("偏离手动初始映射" in warning for warning in result.warnings))
+        self.assertTrue(any("拟合不可信" in warning or "方向与模型轴偏差" in warning
+                            for warning in result.warnings))
+        self.assertLessEqual(result.check_error_deg["manual_mapping_offset"], 25.01)
 
     def test_left_wrist_long_axis_is_independent_and_required(self):
         samples, forearm, _ = _left_wrist_samples()
@@ -156,6 +193,17 @@ class GuidedCalibrationTests(TestCase):
         self.assertLess(result.check_error_deg["check_neutral"], 3.0)
         self.assertLess(np.rad2deg(Rotation.from_matrix(
             np.asarray(result.basis_matrix) @ expected.T).magnitude()), 6.0)
+
+    def test_left_wrist_fits_wrist_not_large_worn_forearm_motion(self):
+        samples, forearm, expected = _left_wrist_samples(
+            parent_angles_override=(0, 24, -22, 20, 9))
+        result = fit_guided_left_wrist("WT_HAND", samples, MANUAL,
+                                       forearm, np.eye(3))
+        self.assertEqual(result.status, "通过")
+        self.assertLess(np.rad2deg(Rotation.from_matrix(
+            np.asarray(result.basis_matrix) @ expected.T).magnitude()), 6.0)
+        self.assertLess(result.check_error_deg["check_neutral"], 3.0)
+        self.assertLess(result.check_error_deg["check_neutral_manual_mapping"], 3.0)
 
     def test_torso_uses_bending_axes_not_arm_bone_direction(self):
         samples, expected = _torso_samples()

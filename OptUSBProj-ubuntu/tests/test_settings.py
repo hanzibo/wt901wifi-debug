@@ -9,7 +9,7 @@ import unittest
 PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT))
 
-from optusbproj_ubuntu.settings import load_config, save_config
+from optusbproj_ubuntu.settings import load_config, load_algorithm_modes, save_config
 from optusbproj_ubuntu.skeleton import SENSOR_KEYS
 
 
@@ -35,6 +35,14 @@ class SettingsTests(unittest.TestCase):
             self.assertEqual(restored_mappings, mappings)
             self.assertEqual(set(json.loads(path.read_text(encoding="utf-8"))
                                  ["assignments"]), set(SENSOR_KEYS))
+
+    def test_orientation_modes_survive_assignment_and_mapping_save(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            save_config(path, {"left_hand": "A"}, {}, {"left_hand": "gyro_tilt"})
+            self.assertEqual(load_algorithm_modes(path)["left_hand"], "gyro_tilt")
+            save_config(path, {"left_hand": "B"}, {})
+            self.assertEqual(load_algorithm_modes(path)["left_hand"], "gyro_tilt")
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT.parent))
 
-from optusbproj_ubuntu.pose import PoseEngine
+from optusbproj_ubuntu.pose import GYRO_TILT, VENDOR_RPY, PoseEngine
 from optusbproj_ubuntu.axis_mapping import mapping_matrix
 from optusbproj_ubuntu.skeleton import PARTS, PART_BY_KEY, SENSOR_KEYS
 
@@ -21,7 +21,66 @@ def packet(device_id: str, roll: float = 0, pitch: float = 0, yaw: float = 0):
     return SimpleNamespace(device_id=device_id, roll=roll, pitch=pitch, yaw=yaw)
 
 
+def imu_packet(device_id: str, tick_ms: int, gyro_z: float = 0,
+               yaw: float = 0):
+    return SimpleNamespace(
+        device_id=device_id, roll=0.0, pitch=0.0, yaw=yaw,
+        hour=0, minute=0, second=tick_ms // 1000,
+        millisecond=tick_ms % 1000,
+        gyro_x=0.0, gyro_y=0.0, gyro_z=gyro_z,
+        acc_x=0.0, acc_y=0.0, acc_z=1.0)
+
+
 class PoseEngineTests(unittest.TestCase):
+    def test_vendor_and_gyro_tilt_run_in_parallel_and_switch_without_rezero(self):
+        engine = PoseEngine({"left_hand": "A", "right_hand": "B"})
+        for tick in range(50):
+            engine.feed(imu_packet("A", tick * 20))
+            engine.feed(imu_packet("B", tick * 20))
+        self.assertTrue(engine._tilt_filters["A"].bias_ready)
+        engine.zero()
+        for tick in range(50, 100):
+            engine.feed(imu_packet("A", tick * 20, gyro_z=90, yaw=0))
+            engine.feed(imu_packet("B", tick * 20, gyro_z=0, yaw=30))
+        np.testing.assert_allclose(engine.rotation_for("left_hand"), np.eye(3), atol=1e-6)
+        engine.set_algorithm_mode("left_hand", GYRO_TILT)
+        self.assertAlmostEqual(Rotation.from_matrix(
+            engine.rotation_for("left_hand")).magnitude(), np.pi / 2, delta=0.08)
+        self.assertEqual(engine.algorithm_modes["right_hand"], VENDOR_RPY)
+        self.assertAlmostEqual(Rotation.from_matrix(
+            engine.rotation_for("right_hand")).magnitude(), np.pi / 6, delta=0.01)
+        engine.zero("left_hand")
+        np.testing.assert_allclose(engine.rotation_for("left_hand"), np.eye(3), atol=1e-6)
+        engine.set_algorithm_mode("left_hand", VENDOR_RPY)
+        np.testing.assert_allclose(engine.rotation_for("left_hand"), np.eye(3), atol=1e-6)
+
+    def test_calibrated_switch_requires_paired_neutral(self):
+        engine = PoseEngine({"left_hand": "A"})
+        engine.feed(imu_packet("A", 0))
+        engine.apply_calibration("left_hand", "A", np.eye(3), np.eye(3))
+        with self.assertRaisesRegex(ValueError, "同步中立位"):
+            engine.set_algorithm_mode("left_hand", GYRO_TILT)
+        engine.apply_calibration("left_hand", "A", np.eye(3), np.eye(3),
+                                 paired_neutrals={GYRO_TILT: np.eye(3)})
+        engine.set_algorithm_mode("left_hand", GYRO_TILT)
+        np.testing.assert_allclose(engine.rotation_for("left_hand"), np.eye(3))
+
+    def test_vertical_mount_calibration_uses_gravity_aligned_gauge(self):
+        engine = PoseEngine({"left_hand": "A"},
+                            algorithm_modes={"left_hand": GYRO_TILT})
+        for tick in range(60):
+            packet_sample = imu_packet("A", tick * 20)
+            packet_sample.acc_y = 1.0
+            packet_sample.acc_z = 0.0
+            engine.feed(packet_sample)
+        aligned = engine.calibration_orientation_for("A", GYRO_TILT)
+        self.assertIsNotNone(aligned)
+        np.testing.assert_allclose(aligned @ [0, 1, 0], [0, 0, 1], atol=1e-8)
+        raw_neutral = engine.current_for("A", GYRO_TILT).copy()
+        engine.apply_calibration("left_hand", "A", np.eye(3), aligned,
+                                 paired_neutrals={GYRO_TILT: raw_neutral})
+        np.testing.assert_allclose(engine.neutral["A"], raw_neutral)
+
     def test_rest_pose_has_all_fifteen_parts_and_legacy_offsets(self):
         engine = PoseEngine()
         transforms = engine.transforms()

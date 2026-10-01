@@ -23,11 +23,13 @@ class FusionWindow(BodyWindow):
     def __init__(self, source: object, settings_path: Path,
                  assignments: dict[str, str], axis_mappings: dict,
                  *, camera_index: int = 0, backend: str = "rtmw3d",
+                 algorithm_modes: dict[str, str] | None = None,
                  model_path: Path | None = None,
                  calibration_candidates: list[dict] | None = None,
                  comparison_shared_calibrations: list[dict] | None = None,
                  manual_mapping_source: str = "当前配置") -> None:
-        super().__init__(source, settings_path, assignments, axis_mappings)
+        super().__init__(source, settings_path, assignments, axis_mappings,
+                         algorithm_modes)
         self.setWindowTitle("WT901 + 单目相机 · 同步采集基线")
         self.candidate_engine: PoseEngine | None = None
         self.candidate_actors = []
@@ -35,7 +37,8 @@ class FusionWindow(BodyWindow):
         if calibration_candidates:
             if not self.replay_mode:
                 raise ValueError("候选标定只能用于回放预览")
-            self.candidate_engine = PoseEngine(assignments, axis_mappings)
+            self.candidate_engine = PoseEngine(assignments, axis_mappings,
+                                               algorithm_modes)
             for shared in comparison_shared_calibrations or []:
                 key = shared["part"]
                 if self.engine.assignments.get(key) != shared["device_id"]:
@@ -43,7 +46,8 @@ class FusionWindow(BodyWindow):
                 for engine in (self.engine, self.candidate_engine):
                     engine.apply_calibration(
                         key, shared["device_id"], shared["basis_matrix"],
-                        shared["neutral_matrix"])
+                        shared["neutral_matrix"],
+                        paired_neutrals=shared.get("neutral_matrices_by_mode"))
             for candidate in calibration_candidates:
                 key = candidate["part"]
                 if self.candidate_engine.assignments.get(key) != candidate["device_id"]:
@@ -51,11 +55,21 @@ class FusionWindow(BodyWindow):
                 if "neutral_matrix" in candidate:
                     neutral = np.asarray(candidate["neutral_matrix"], dtype=float)
                     self.candidate_engine.apply_calibration(
-                        key, candidate["device_id"], candidate["basis_matrix"], neutral)
+                        key, candidate["device_id"], candidate["basis_matrix"], neutral,
+                        paired_neutrals=candidate.get("neutral_matrices_by_mode"))
                     # Both avatars must use the same neutral hold; otherwise
                     # differences in the first (possibly moving) packet bias
                     # the visual A/B comparison.
-                    self.engine.neutral[candidate["device_id"]] = neutral.copy()
+                    for mode, matrix in candidate.get(
+                            "neutral_matrices_by_mode", {}).items():
+                        self.engine.set_neutral_for_mode(
+                            candidate["device_id"], mode, matrix)
+                    active_mode = self.engine.algorithm_modes[key]
+                    self.engine.set_neutral_for_mode(
+                        candidate["device_id"],
+                        active_mode,
+                        candidate.get("neutral_matrices_by_mode", {}).get(
+                            active_mode, neutral))
                 else:
                     self.candidate_engine.set_continuous_basis(key, candidate["basis_matrix"])
             self._install_comparison_view(manual_mapping_source)
@@ -64,6 +78,8 @@ class FusionWindow(BodyWindow):
                 combo.setEnabled(False)
             for button in self.mapping_buttons.values():
                 button.setEnabled(False)
+            for combo in self.algorithm_combos.values():
+                combo.setEnabled(False)
         self.record_button.hide()  # The legacy CSV cannot contain camera frames.
         self.camera_index = camera_index
         self.backend = backend
@@ -342,7 +358,8 @@ class FusionWindow(BodyWindow):
         try:
             self.session = FusionSessionRecorder(
                 default_parent, assignments=self.engine.assignments,
-                axis_mappings=self.engine.axis_mappings)
+                axis_mappings=self.engine.axis_mappings,
+                algorithm_modes=self.engine.algorithm_modes)
         except OSError as exc:
             QtWidgets.QMessageBox.warning(self, "无法开始录制", str(exc))
             return False
