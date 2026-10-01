@@ -1,6 +1,15 @@
 # Local reference archive (vendor PDFs and example SDK are kept on this machine).
 no-improtent/
 
+# Original Windows reference project stays local.
+/OptUSBProj/
+
+# ROS/colcon generated outputs stay local; retain sources and mesh assets.
+/urdf-model/build/
+/urdf-model/install/
+/urdf-model/log/
+/urdf-model/pkg_robot_model/export.log
+
 # Python-generated files.
 __pycache__/
 *.py[cod]
