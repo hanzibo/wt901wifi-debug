@@ -1,0 +1,9 @@
+<library path="xiaobei_hardware">
+  <class name="xiaobei_hardware/XiaobeiHardwareInterface"
+         type="xiaobei_hardware::XiaobeiHardwareInterface"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      Generic hardware interface for Xiaobei X1 robot using Serial Bus Servos.
+    </description>
+  </class>
+</library>

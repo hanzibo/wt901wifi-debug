@@ -49,14 +49,24 @@ def main() -> int:
     from wt901.gui_udp import GuiUdpSource
     from optusbproj_ubuntu.fusion_gui import FusionWindow
     from optusbproj_ubuntu.fusion_replay import FusionSessionReplay
-    from optusbproj_ubuntu.settings import load_config
+    from optusbproj_ubuntu.settings import load_config, load_algorithm_modes
 
     try:
         assignments, axis_mappings = load_config(args.settings)
+        algorithm_modes = load_algorithm_modes(args.settings)
     except (OSError, ValueError) as exc:
         parser.exit(1, f"无法读取设备分配配置：{exc}\n")
     candidates = []
     manual_mapping_source = "当前配置"
+    if args.replay:
+        try:
+            replay_manifest = json.loads(
+                (args.replay / "manifest.json").read_text(encoding="utf-8"))
+            algorithm_modes = replay_manifest.get("algorithm_modes_at_start", {})
+            if not isinstance(algorithm_modes, dict):
+                raise ValueError("姿态算法快照格式错误")
+        except (OSError, ValueError) as exc:
+            parser.exit(1, f"无法读取回放配置：{exc}\n")
     if args.calibration:
         try:
             manifest = json.loads((args.replay / "manifest.json").read_text(encoding="utf-8"))
@@ -78,6 +88,8 @@ def main() -> int:
                 if ((candidate.get("method") == "bone" and
                      candidate.get("part") in ("left_upper_arm", "left_forearm",
                                                "right_upper_arm", "right_forearm")) or
+                    (candidate.get("method") == "hand_bone_v1" and
+                     candidate.get("part") in ("left_hand", "right_hand")) or
                     (candidate.get("method") == "torso_axis" and
                      candidate.get("part") == "torso")):
                     pass
@@ -100,6 +112,7 @@ def main() -> int:
                       "实时模式请关闭其他占用 UDP 1399 的程序。\n")
     try:
         window = FusionWindow(source, args.settings, assignments, axis_mappings,
+                              algorithm_modes=algorithm_modes,
                               camera_index=args.camera_index, backend=args.backend,
                               model_path=args.model,
                               calibration_candidates=candidates,

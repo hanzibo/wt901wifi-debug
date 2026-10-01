@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import sys
@@ -31,11 +32,20 @@ def main() -> int:
     from wt901.gui_udp import GuiUdpSource
     from optusbproj_ubuntu.gui import BodyWindow
     from optusbproj_ubuntu.recording import ReplaySource
-    from optusbproj_ubuntu.settings import load_config
+    from optusbproj_ubuntu.settings import load_config, load_algorithm_modes
 
     try:
         assignments, axis_mappings = load_config(args.settings)
-    except (OSError, ValueError) as exc:
+        algorithm_modes = load_algorithm_modes(args.settings)
+        if args.replay:
+            snapshot = Path(str(args.replay) + ".config.json")
+            if snapshot.exists():
+                saved = json.loads(snapshot.read_text(encoding="utf-8"))
+                assignments = saved["assignments"]
+                axis_mappings = {key: tuple(value) for key, value in
+                                 saved["axis_mappings"].items()}
+                algorithm_modes = saved.get("algorithm_modes", {})
+    except (OSError, ValueError, KeyError, TypeError) as exc:
         parser.exit(1, f"无法读取设备分配配置：{exc}\n")
     app = QtWidgets.QApplication(sys.argv[:1])
     try:
@@ -45,7 +55,8 @@ def main() -> int:
         parser.exit(1, f"无法打开数据源：{exc}\n"
                       "实时模式请先关闭手腕控制台或其他占用 UDP 端口的程序。\n")
     try:
-        window = BodyWindow(source, args.settings, assignments, axis_mappings)
+        window = BodyWindow(source, args.settings, assignments, axis_mappings,
+                            algorithm_modes)
     except Exception:
         source.close()
         raise

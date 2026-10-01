@@ -1,0 +1,75 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 100  # Hz
+
+    # 1. 关节状态广播器 (必须有，负责告诉大家机器人现在的姿势)
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    # 2. 右臂轨迹控制器 (MoveIt 专用)
+    right_arm_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+    # 3. 右手夹爪控制器
+    right_gripper_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+    # 4. 左臂轨迹控制器
+    left_arm_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+    # 5. 左手夹爪控制器
+    left_gripper_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+# === 下面是具体的关节绑定，必须和 URDF 里的名字一模一样 ===
+
+right_arm_controller:
+  ros__parameters:
+    joints:
+      - "51"
+      - "52"
+      - "53"
+      - "54"
+      - "55"
+      - "56"
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+
+right_gripper_controller:
+  ros__parameters:
+    joints:
+      - "57"
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+
+left_arm_controller:
+  ros__parameters:
+    joints:
+      - "1"
+      - "2"
+      - "3"
+      - "4"
+      - "5"
+      - "6"
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+
+left_gripper_controller:
+  ros__parameters:
+    joints:
+      - "7"
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity

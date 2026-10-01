@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 import math
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from wt901_viz.onboarding import DeviceSetupDialog
 
 from .axis_mapping import DEFAULT_AXIS_MAPPING, mapping_matrix
 from .device_settings import DeviceSettingsDialog
-from .pose import PoseEngine
+from .pose import GYRO_TILT, VENDOR_RPY, PoseEngine
 from .recording import PacketRecorder, ReplaySource
 from .settings import save_config
 from .skeleton import PARTS, SENSOR_KEYS
@@ -103,14 +104,16 @@ class AxisMappingDialog(QtWidgets.QDialog):
 class BodyWindow(QtWidgets.QMainWindow):
     def __init__(self, source: GuiUdpSource | ReplaySource, settings_path: Path,
                  assignments: dict[str, str] | None = None,
-                 axis_mappings: dict[str, tuple[str, str, str]] | None = None) -> None:
+                 axis_mappings: dict[str, tuple[str, str, str]] | None = None,
+                 algorithm_modes: dict[str, str] | None = None) -> None:
         super().__init__()
         self.source = source
         self.settings_path = settings_path
-        self.engine = PoseEngine(assignments, axis_mappings)
+        self.engine = PoseEngine(assignments, axis_mappings, algorithm_modes)
         self.actors = []
         self.axis_actors = []
         self.combos: dict[str, QtWidgets.QComboBox] = {}
+        self.algorithm_combos: dict[str, QtWidgets.QComboBox] = {}
         self.mapping_buttons: dict[str, QtWidgets.QPushButton] = {}
         self.status_labels: dict[str, QtWidgets.QLabel] = {}
         self._render_dirty = True
@@ -121,6 +124,7 @@ class BodyWindow(QtWidgets.QMainWindow):
         self._dialogs: list[QtWidgets.QDialog] = []
         self.settings_dialog: DeviceSettingsDialog | None = None
         self.calibration_dialog = None
+        self.x1_preview_dialog = None
         self.recorder: PacketRecorder | None = None
         self.replay_mode = isinstance(source, ReplaySource) or getattr(source, "is_replay", False)
 
@@ -181,7 +185,7 @@ class BodyWindow(QtWidgets.QMainWindow):
         self.zero_countdown = QtWidgets.QLabel("定时归零未启动")
         self.zero_countdown.setWordWrap(True)
         panel_layout.addWidget(self.zero_countdown)
-        self.calibration_button = QtWidgets.QPushButton("穿戴标定…（躯干 / 双臂 / 左手腕）")
+        self.calibration_button = QtWidgets.QPushButton("穿戴标定…（躯干 / 双臂 / 双手）")
         self.calibration_button.clicked.connect(self._show_calibration)
         self.calibration_button.setEnabled(not self.replay_mode)
         panel_layout.addWidget(self.calibration_button)
@@ -189,6 +193,10 @@ class BodyWindow(QtWidgets.QMainWindow):
         self.bilateral_calibration_button.clicked.connect(self._show_bilateral_calibration)
         self.bilateral_calibration_button.setEnabled(not self.replay_mode)
         panel_layout.addWidget(self.bilateral_calibration_button)
+        self.x1_preview_button = QtWidgets.QPushButton("X1 双臂实时预览…（RViz）")
+        self.x1_preview_button.clicked.connect(self._show_x1_preview)
+        self.x1_preview_button.setEnabled(not self.replay_mode)
+        panel_layout.addWidget(self.x1_preview_button)
         self._timed_zero_deadline: float | None = None
         self.zero_countdown_timer = QtCore.QTimer(self)
         self.zero_countdown_timer.setInterval(100)
@@ -246,7 +254,16 @@ class BodyWindow(QtWidgets.QMainWindow):
             grid.addWidget(zero, row, 3)
             status = QtWidgets.QLabel("未分配")
             status.setWordWrap(True)
-            grid.addWidget(status, row + 1, 0, 1, 4)
+            algorithm = QtWidgets.QComboBox()
+            algorithm.addItem("厂商 R/P/Y", VENDOR_RPY)
+            algorithm.addItem("陀螺＋加计", GYRO_TILT)
+            algorithm.setCurrentIndex(algorithm.findData(self.engine.algorithm_modes[part.key]))
+            algorithm.setToolTip("仅切换本部位软件姿态估计；不改变设备的 6/9 轴寄存器设置")
+            algorithm.currentIndexChanged.connect(
+                lambda _index, key=part.key: self._algorithm_changed(key))
+            grid.addWidget(algorithm, row + 1, 0, 1, 2)
+            self.algorithm_combos[part.key] = algorithm
+            grid.addWidget(status, row + 1, 2, 1, 2)
             self.status_labels[part.key] = status
             row += 2
         assignment_scroll = QtWidgets.QScrollArea()
@@ -365,10 +382,10 @@ class BodyWindow(QtWidgets.QMainWindow):
         previous = self.engine.received_at.get(device_id)
         if previous is None or received_at - previous <= 5.0:
             return
+        self.engine.invalidate_neutral(device_id)
         for key, assigned in self.engine.assignments.items():
             if assigned == device_id and key in self.engine.continuous_basis:
                 self.engine.clear_calibration(key)
-                self.engine.neutral.pop(device_id, None)
                 if self.calibration_dialog is not None:
                     self.calibration_dialog.invalidate_for(device_id)
                 self.statusBar().showMessage(
@@ -400,7 +417,8 @@ class BodyWindow(QtWidgets.QMainWindow):
         try:
             proposed = dict(self.engine.assignments)
             proposed[key] = device_id
-            save_config(self.settings_path, proposed, self.engine.axis_mappings)
+            save_config(self.settings_path, proposed, self.engine.axis_mappings,
+                        self.engine.algorithm_modes)
             self.engine.assign(key, device_id)
         except (ValueError, OSError) as exc:
             QtWidgets.QMessageBox.warning(self, "分配未保存", str(exc))
@@ -426,7 +444,7 @@ class BodyWindow(QtWidgets.QMainWindow):
             proposed = dict(self.engine.axis_mappings)
             proposed[key] = dialog.mapping()
             save_config(self.settings_path, self.engine.assignments,
-                        proposed)
+                        proposed, self.engine.algorithm_modes)
             self.engine.set_axis_mapping(key, dialog.mapping())
         except (ValueError, OSError) as exc:
             QtWidgets.QMessageBox.warning(self, "轴映射未保存", str(exc))
@@ -436,12 +454,53 @@ class BodyWindow(QtWidgets.QMainWindow):
         self._update_mapping_button(key)
         self._render_dirty = True
 
+    def _algorithm_changed(self, key: str) -> None:
+        combo = self.algorithm_combos[key]
+        mode = combo.currentData()
+        previous = self.engine.algorithm_modes[key]
+        if mode == previous:
+            return
+        if (self.recorder is not None or
+                getattr(self, "session", None) is not None):
+            error = "录制期间不可切换姿态算法；请先结束录制"
+        elif self.calibration_dialog is not None and self.calibration_dialog.isVisible():
+            error = "穿戴标定窗口打开时不可切换姿态算法；请先关闭标定窗口"
+        else:
+            error = ""
+        try:
+            if error:
+                raise ValueError(error)
+            self.engine.set_algorithm_mode(key, mode)
+            save_config(self.settings_path, self.engine.assignments,
+                        self.engine.axis_mappings, self.engine.algorithm_modes)
+        except (ValueError, OSError) as exc:
+            self.engine.set_algorithm_mode(key, previous)
+            combo.blockSignals(True)
+            combo.setCurrentIndex(combo.findData(previous))
+            combo.blockSignals(False)
+            QtWidgets.QMessageBox.warning(self, "姿态算法未切换", str(exc))
+            return
+        self._render_dirty = True
+        self.statusBar().showMessage(
+            f"{key} 已切换为 {'陀螺＋加计' if mode == GYRO_TILT else '厂商 R/P/Y'}；"
+            "设备融合寄存器未改变", 5000)
+
     def _zero(self, key: str) -> None:
         self.engine.zero(key)
         self._render_dirty = True
 
     def _show_calibration(self) -> None:
         self._open_calibration(bilateral=False)
+
+    def _show_x1_preview(self) -> None:
+        if self.replay_mode:
+            return
+        from .x1_live_gui import X1PreviewDialog
+        if self.x1_preview_dialog is None:
+            self.x1_preview_dialog = X1PreviewDialog(self)
+        self.x1_preview_dialog.show()
+        self.x1_preview_dialog.raise_()
+        self.x1_preview_dialog.activateWindow()
 
     def _show_bilateral_calibration(self) -> None:
         self._open_calibration(bilateral=True)
@@ -544,10 +603,16 @@ class BodyWindow(QtWidgets.QMainWindow):
             battery = packet.battery_percent
             charge = f"约 {battery}%" if battery is not None else "未知"
             calibrated = " · 本次穿戴标定生效" if key in self.engine.continuous_basis else ""
+            estimator = self.engine._tilt_filters.get(device_id)
+            mode_label = ("陀螺＋加计" +
+                          ("（静止学习偏置中）" if estimator is not None
+                           and not estimator.bias_ready else "")
+                          if self.engine.algorithm_modes[key] == GYRO_TILT
+                          else "厂商 R/P/Y")
             label.setText(f"{device_id} · {state} · {rate:.0f} 包/s · {ip}\n"
-                          f"角度 X {packet.roll:+.1f}° Y {packet.pitch:+.1f}° Z {packet.yaw:+.1f}°"
+                          f"设备原始 R/P/Y {packet.roll:+.1f}° / {packet.pitch:+.1f}° / {packet.yaw:+.1f}°"
                           f" · 电池 {packet.battery_v:.2f}V/{charge} · RSSI {packet.rssi}dBm"
-                          f"{calibrated}")
+                          f" · 模型算法 {mode_label}{calibrated}")
         self._last_counts = self.engine.counts.copy()
         self._last_stats_at = now
         self.overview.setText(
@@ -593,7 +658,7 @@ class BodyWindow(QtWidgets.QMainWindow):
                 # The firmware may change its reported reference frame after
                 # a setting/zero command. Do not use the last *old-frame*
                 # packet as the new GUI neutral; wait for the next packet.
-                self.engine.neutral.pop(device_id, None)
+                self.engine.invalidate_neutral(device_id)
                 self._render_dirty = True
                 if self.calibration_dialog is not None:
                     self.calibration_dialog.invalidate_for(device_id)
@@ -613,7 +678,20 @@ class BodyWindow(QtWidgets.QMainWindow):
             return
         try:
             self.recorder = PacketRecorder(Path(filename))
+            metadata = {
+                "format": "wt901-body-csv-settings-v1",
+                "assignments": dict(self.engine.assignments),
+                "axis_mappings": {key: list(value) for key, value in
+                                  self.engine.axis_mappings.items()},
+                "algorithm_modes": dict(self.engine.algorithm_modes),
+            }
+            Path(filename + ".config.json").write_text(
+                json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8")
         except OSError as exc:
+            if self.recorder is not None:
+                self.recorder.close()
+                self.recorder = None
             QtWidgets.QMessageBox.warning(self, "录制失败", str(exc))
             return
         self.record_button.setText("停止录制 CSV")
@@ -653,6 +731,8 @@ class BodyWindow(QtWidgets.QMainWindow):
         self.poll_timer.stop()
         self.stats_timer.stop()
         self.zero_countdown_timer.stop()
+        if self.x1_preview_dialog is not None:
+            self.x1_preview_dialog.close()
         self._stop_recording()
         self.source.close()
         self.plotter.close()
