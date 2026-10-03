@@ -46,7 +46,7 @@ def _angle(a: np.ndarray, b: np.ndarray) -> float:
 def _hold(rows: list[dict]) -> tuple[np.ndarray, float, float]:
     if len(rows) < 30:
         raise ValueError(f"静止窗口只有 {len(rows)} 包，至少需要 30 包")
-    if any(row.get("orientation_mode") == "gyro_tilt" and
+    if any(row.get("orientation_mode") in ("gyro_tilt","gyro_rgbd") and
            "orientation_matrix" not in row for row in rows):
         raise ValueError("陀螺＋加计尚未建立重力竖直参考；请先静止约 1 秒再重录")
     rotations = Rotation.from_matrix(np.asarray([

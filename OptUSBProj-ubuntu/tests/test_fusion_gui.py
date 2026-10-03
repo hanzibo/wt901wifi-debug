@@ -17,7 +17,7 @@ PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT.parent))
 
-from PySide6 import QtWidgets
+from PySide6 import QtWidgets, QtGui
 
 from optusbproj_ubuntu.fusion_capture import CameraObservation
 from optusbproj_ubuntu.fusion_gui import FusionWindow
@@ -29,6 +29,81 @@ class FusionGuiTests(TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def test_detached_camera_preview_returns_without_stopping_capture(self):
+        class FakeSource:
+            def seen_devices(self, max_age=3):
+                return {}
+            def close(self):
+                pass
+        with TemporaryDirectory() as directory, patch.object(FusionWindow, "start_camera"):
+            window = FusionWindow(FakeSource(), Path(directory)/"settings.json", {}, {}, camera_source="orbbec")
+            window.poll_timer.stop()
+            try:
+                with patch.object(window, "stop_camera") as stop, patch.object(window, "_stop_session") as stop_record:
+                    image = QtGui.QImage(640, 480, QtGui.QImage.Format.Format_RGB888)
+                    image.fill(QtGui.QColor("red"))
+                    preview = window.camera_preview
+                    window._display_image(image)
+                    for _ in range(2):
+                        window._toggle_camera_preview_window()
+                        self.app.processEvents()
+                        dialog = window.camera_preview_window
+                        self.assertTrue(dialog.isVisible())
+                        self.assertIs(preview.parentWidget(), dialog)
+                        dialog.resize(800, 700)
+                        self.app.processEvents()
+                        window._display_image(image)
+                        self.assertEqual(preview._original.size(), image.size())
+                        self.assertAlmostEqual(preview.pixmap().width()/preview.pixmap().height(), 4/3, places=2)
+                        dialog.close()
+                        self.app.processEvents()
+                        self.assertFalse(dialog.isVisible())
+                        self.assertIsNot(preview.parentWidget(), dialog)
+                        self.assertEqual(preview.height(), 120)
+                        self.assertFalse(window.camera_preview_placeholder.isVisible())
+                    stop.assert_not_called()
+                    stop_record.assert_not_called()
+            finally:
+                window.close()
+
+    def test_rgbd_ready_gate_preview_and_session_snapshot(self):
+        from optusbproj_ubuntu.orbbec_worker import OrbbecWorker
+        from test_rgbd_capture import observation
+        class FakeSource:
+            def seen_devices(self, max_age=3):
+                return {}
+            def close(self):
+                pass
+        with TemporaryDirectory() as directory, patch.object(FusionWindow, "start_camera"):
+            window = FusionWindow(FakeSource(), Path(directory)/"settings.json", {}, {},
+                                  camera_source="orbbec")
+            worker = OrbbecWorker()
+            recorder = Mock()
+            recorder.path = Path(directory)
+            recorder.imu_count = recorder.frame_count = recorder.dropped_frames = 0
+            recorder.trimmed_imu_packets = recorder.trimmed_camera_frames = 0
+            try:
+                self.assertFalse(window._start_session())
+                o = observation(time.monotonic_ns())
+                # Preview metadata absent from the tiny generic recorder fixture.
+                o.rgbd.timing["valid_depth_fraction"] = .9
+                worker.calibration = o.rgbd.calibration
+                worker._latest = o
+                window.camera_worker = worker
+                window.depth_preview.setChecked(True)
+                window._poll_rgbd()
+                self.assertIs(window.last_rgbd_observation, o)
+                self.assertIn("只采集", window.camera_status.text())
+                with patch("optusbproj_ubuntu.fusion_gui.FusionSessionRecorder", return_value=recorder):
+                    self.assertTrue(window._start_session())
+                self.assertEqual(recorder.camera_calibration, worker.calibration)
+                self.assertFalse(window.camera_source_combo.isEnabled())
+                window._stop_session()
+                recorder.close.assert_called_once()
+            finally:
+                window.camera_worker = None
+                window.close()
 
     def test_replay_opens_without_live_camera_or_udp(self):
         with TemporaryDirectory() as directory:
@@ -52,6 +127,36 @@ class FusionGuiTests(TestCase):
                 window._poll()
                 self.assertEqual(window.camera_count, 1)
             finally:
+                window.close()
+
+    def test_rgbd_vision_diagnostics_do_not_change_imu_engine(self):
+        from test_rgbd_pose import fixture
+        from optusbproj_ubuntu.rgbd_pose import DepthPoseEstimator
+        class FakeSource:
+            def seen_devices(self, max_age=3):
+                return {}
+            def close(self):
+                pass
+        with TemporaryDirectory() as directory, patch.object(FusionWindow, "start_camera"):
+            window = FusionWindow(FakeSource(), Path(directory)/"settings.json", {}, {}, camera_source="orbbec")
+            try:
+                assignments = dict(window.engine.assignments)
+                window._render_dirty = False
+                obs, xy, scores = fixture()
+                result = DepthPoseEstimator().estimate(obs, xy, scores)
+                window._on_pose_estimate(result)
+                window._show_pose_details()
+                self.assertEqual(window.engine.assignments, assignments)
+                self.assertFalse(window._render_dirty)
+                self.assertIs(window.pose_dialog.canvas.estimate, result)
+                self.assertIn("8/8", window.pose_status.text())
+                result.captured_mono_ns -= 2_000_000_000
+                window.pose_worker = SimpleNamespace(take_latest=lambda: None)
+                window._poll_pose()
+                self.assertIsNone(window.last_pose_estimate)
+                self.assertIsNone(window.pose_dialog.canvas.estimate)
+            finally:
+                window.pose_worker = None
                 window.close()
 
     def test_candidate_preview_is_replay_only_and_does_not_save_mapping(self):
@@ -103,6 +208,7 @@ class FusionGuiTests(TestCase):
         recorder.trimmed_imu_packets = 5
         recorder.trimmed_camera_frames = 3
         with TemporaryDirectory() as directory:
+            recorder.path=Path(directory)
             with patch.object(FusionWindow, "start_camera"), patch(
                     "optusbproj_ubuntu.fusion_gui.FusionSessionRecorder",
                     return_value=recorder) as factory:

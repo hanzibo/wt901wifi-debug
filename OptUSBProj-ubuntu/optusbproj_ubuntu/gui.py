@@ -19,7 +19,7 @@ from wt901_viz.onboarding import DeviceSetupDialog
 
 from .axis_mapping import DEFAULT_AXIS_MAPPING, mapping_matrix
 from .device_settings import DeviceSettingsDialog
-from .pose import GYRO_TILT, VENDOR_RPY, PoseEngine
+from .pose import GYRO_TILT, VENDOR_RPY, GYRO_RGBD, MODE_LABELS, PoseEngine
 from .recording import PacketRecorder, ReplaySource
 from .settings import save_config
 from .skeleton import PARTS, SENSOR_KEYS
@@ -257,6 +257,8 @@ class BodyWindow(QtWidgets.QMainWindow):
             algorithm = QtWidgets.QComboBox()
             algorithm.addItem("厂商 R/P/Y", VENDOR_RPY)
             algorithm.addItem("陀螺＋加计", GYRO_TILT)
+            if part.key in ('right_upper_arm','right_forearm'):
+                algorithm.addItem("陀螺＋加计＋RGB-D（需相机标定）",GYRO_RGBD)
             algorithm.setCurrentIndex(algorithm.findData(self.engine.algorithm_modes[part.key]))
             algorithm.setToolTip("仅切换本部位软件姿态估计；不改变设备的 6/9 轴寄存器设置")
             algorithm.currentIndexChanged.connect(
@@ -482,7 +484,7 @@ class BodyWindow(QtWidgets.QMainWindow):
             return
         self._render_dirty = True
         self.statusBar().showMessage(
-            f"{key} 已切换为 {'陀螺＋加计' if mode == GYRO_TILT else '厂商 R/P/Y'}；"
+            f"{key} 已切换为 {MODE_LABELS[mode]}；"
             "设备融合寄存器未改变", 5000)
 
     def _zero(self, key: str) -> None:
@@ -608,7 +610,7 @@ class BodyWindow(QtWidgets.QMainWindow):
                           ("（静止学习偏置中）" if estimator is not None
                            and not estimator.bias_ready else "")
                           if self.engine.algorithm_modes[key] == GYRO_TILT
-                          else "厂商 R/P/Y")
+                          else MODE_LABELS[self.engine.algorithm_modes[key]])
             label.setText(f"{device_id} · {state} · {rate:.0f} 包/s · {ip}\n"
                           f"设备原始 R/P/Y {packet.roll:+.1f}° / {packet.pitch:+.1f}° / {packet.yaw:+.1f}°"
                           f" · 电池 {packet.battery_v:.2f}V/{charge} · RSSI {packet.rssi}dBm"

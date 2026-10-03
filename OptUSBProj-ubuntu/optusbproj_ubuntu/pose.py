@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import time
 import math
+import uuid
 
 import numpy as np
 
@@ -22,7 +23,9 @@ from .skeleton import PARTS, PART_BY_KEY, SENSOR_KEYS, transform
 
 VENDOR_RPY = "vendor_rpy"
 GYRO_TILT = "gyro_tilt"
-ORIENTATION_MODES = (VENDOR_RPY, GYRO_TILT)
+GYRO_RGBD = "gyro_rgbd"
+ORIENTATION_MODES = (VENDOR_RPY, GYRO_TILT, GYRO_RGBD)
+MODE_LABELS = {VENDOR_RPY:"厂商 R/P/Y", GYRO_TILT:"陀螺＋加计", GYRO_RGBD:"陀螺＋加计＋RGB-D"}
 
 
 class PoseEngine:
@@ -39,6 +42,9 @@ class PoseEngine:
         self.mode_neutral: dict[str, dict[str, np.ndarray]] = {}
         self._tilt_filters: dict[str, AdaptiveTiltFilter] = {}
         self._device_clocks: dict[str, PacketClock] = {}
+        self.epochs = {}
+        self.fusion_ready = set()
+        self.fusion_corrections = {}
         self.packets: dict[str, AttitudePacket] = {}
         self.received_at: dict[str, float] = {}
         self.counts: dict[str, int] = {}
@@ -76,6 +82,8 @@ class PoseEngine:
         if key not in self.algorithm_modes or mode not in ORIENTATION_MODES:
             raise ValueError(f"无效姿态算法：{key} / {mode}")
         device_id = self.assignments[key]
+        if mode == GYRO_RGBD and (key not in ("right_upper_arm","right_forearm") or device_id not in self.fusion_ready):
+            raise ValueError("需先应用本次实时参考系的相机标定；首版仅支持右上臂/前臂")
         if (device_id and device_id in self.packets and
                 mode not in self.mode_current.get(device_id, {})):
             raise ValueError("该设备尚无陀螺＋加计数据；请等待完整数据包")
@@ -102,7 +110,7 @@ class PoseEngine:
         the neutral matrix used for live playback remains unaligned.
         """
         current = self.current_for(device_id, mode)
-        if current is None or mode != GYRO_TILT:
+        if current is None or mode not in (GYRO_TILT,GYRO_RGBD):
             return current
         estimator = self._tilt_filters.get(device_id)
         if estimator is None or estimator.neutral_up is None:
@@ -121,6 +129,9 @@ class PoseEngine:
         return alignment @ current
 
     def invalidate_neutral(self, device_id: str) -> None:
+        self.epochs[device_id] = uuid.uuid4().hex
+        self.fusion_ready.discard(device_id)
+        self.fusion_corrections.pop(device_id,None)
         self.mode_neutral.pop(device_id, None)
         self.neutral.pop(device_id, None)
         self.mode_current.pop(device_id, None)
@@ -181,6 +192,8 @@ class PoseEngine:
             # stream neutral is in the raw estimator gauge used by playback.
             validated[paired_mode] = candidate.copy()
         self.set_continuous_basis(key, basis)
+        if GYRO_TILT in validated and GYRO_RGBD not in validated:
+            validated[GYRO_RGBD] = self.fusion_corrections.get(device_id,np.eye(3)) @ validated[GYRO_TILT]
         self.mode_neutral[device_id] = validated
         self._sync_active(device_id)
 
@@ -204,6 +217,7 @@ class PoseEngine:
 
     def feed(self, packet: AttitudePacket, received_at: float | None = None) -> None:
         device_id = packet.device_id
+        self.epochs.setdefault(device_id,uuid.uuid4().hex)
         orientation = rotation_matrix(packet.roll, packet.pitch, packet.yaw)
         currents = self.mode_current.setdefault(device_id, {})
         currents[VENDOR_RPY] = orientation
@@ -216,6 +230,7 @@ class PoseEngine:
                                         (packet.gyro_x, packet.gyro_y, packet.gyro_z),
                                         (packet.acc_x, packet.acc_y, packet.acc_z))
             currents[GYRO_TILT] = estimate.rotation.copy()
+            currents[GYRO_RGBD] = self.fusion_corrections.get(device_id,np.eye(3)) @ estimate.rotation
         self.packets[device_id] = packet
         self.received_at[device_id] = time.monotonic() if received_at is None else received_at
         self.counts[device_id] = self.counts.get(device_id, 0) + 1
@@ -224,6 +239,34 @@ class PoseEngine:
                 self.mode_neutral[device_id] = {mode: value.copy()
                                                 for mode, value in currents.items()}
             self._sync_active(device_id)
+
+    def set_fusion_correction(self, device_id, matrix):
+        value=np.asarray(matrix,float)
+        if value.shape!=(3,3) or not np.allclose(value.T@value,np.eye(3),atol=1e-7) or not np.isclose(np.linalg.det(value),1):
+            raise ValueError("纠偏矩阵必须属于SO(3)")
+        self.fusion_corrections[device_id]=value.copy()
+        base=self.current_for(device_id,GYRO_TILT)
+        if base is not None:
+            self.mode_current[device_id][GYRO_RGBD]=value@base
+            self._sync_active(device_id)
+
+    def runtime_snapshot(self, device_id, received_ns):
+        estimator=self._tilt_filters.get(device_id)
+        return {"host_recv_mono_ns":int(received_ns),"device_id":device_id,"epoch":self.epochs.get(device_id),
+                "fusion_ready":device_id in self.fusion_ready,
+                "orientation_by_mode":{k:v.tolist() for k,v in self.mode_current.get(device_id,{}).items()},
+                "neutral_by_mode":{k:v.tolist() for k,v in self.mode_neutral.get(device_id,{}).items()},
+                "up_world":None if estimator is None or estimator.neutral_up is None else estimator.neutral_up.tolist(),
+                "fusion_correction":self.fusion_corrections.get(device_id,np.eye(3)).tolist()}
+
+    def restore_runtime(self,row):
+        device=row['device_id']
+        self.mode_current[device]={k:np.asarray(v,float) for k,v in row['orientation_by_mode'].items()}
+        self.mode_neutral[device]={k:np.asarray(v,float) for k,v in row['neutral_by_mode'].items()}
+        self.epochs[device]=row['epoch']
+        if row.get('fusion_ready'):self.fusion_ready.add(device)
+        self.fusion_corrections[device]=np.asarray(row['fusion_correction'],float)
+        self._sync_active(device)
 
     def zero(self, key: str | None = None) -> None:
         """Use the current pose as neutral without changing sensor-to-body axes."""

@@ -11,11 +11,17 @@ from PySide6 import QtCore, QtGui, QtWidgets
 import pyvista as pv
 
 from .camera_gui import CameraWorker
+from .camera_preview import CameraPreview, CameraPreviewWindow
+from .camera_calibration_gui import CameraCalibrationDialog
+from .orbbec_worker import OrbbecWorker, DEFAULT_PYTHON
+from .rgbd_pose_worker import RGBDPoseWorker
+from .rgbd_pose_gui import RGBDPoseDialog, draw_pose_rgb
 from .fusion_capture import CameraObservation
 from .fusion_recording import FusionSessionRecorder
 from .fusion_replay import FusionSessionReplay
 from .gui import BodyWindow, MODEL_DIR, _axis_triad
-from .pose import PoseEngine
+from .pose import PoseEngine,GYRO_RGBD,GYRO_TILT
+from .live_rgbd_fusion import LiveRGBDFusion
 from .skeleton import PARTS
 
 
@@ -23,6 +29,9 @@ class FusionWindow(BodyWindow):
     def __init__(self, source: object, settings_path: Path,
                  assignments: dict[str, str], axis_mappings: dict,
                  *, camera_index: int = 0, backend: str = "rtmw3d",
+                 camera_source: str = "webcam", orbbec_python: Path = DEFAULT_PYTHON,
+                 rgbd_fps: float = 10., rgbd_warmup: float = 2.,
+                 rgbd_pose: bool = False,
                  algorithm_modes: dict[str, str] | None = None,
                  model_path: Path | None = None,
                  calibration_candidates: list[dict] | None = None,
@@ -30,7 +39,26 @@ class FusionWindow(BodyWindow):
                  manual_mapping_source: str = "当前配置") -> None:
         super().__init__(source, settings_path, assignments, axis_mappings,
                          algorithm_modes)
+        if isinstance(source, FusionSessionReplay) and source.camera_calibration is not None:
+            camera_source = "orbbec"
         self.setWindowTitle("WT901 + 单目相机 · 同步采集基线")
+        self.camera_source = camera_source
+        if camera_source == "orbbec":
+            self.setWindowTitle("WT901 + Gemini 336L RGB-D · 同步采集（未融合）")
+        self.orbbec_python = Path(orbbec_python)
+        self.rgbd_fps, self.rgbd_warmup = rgbd_fps, rgbd_warmup
+        self.last_rgbd_observation = None
+        self.pose_worker = None
+        self.pose_dialog = None
+        self.camera_calibration_dialog = None
+        self.live_fusion = LiveRGBDFusion(self.engine)
+        self._fusion_events_file = None
+        self._live_camera_epoch = None
+        self.last_pose_estimate = None
+        self._bridge_skipped_start = 0
+        self.rgbd_timer = QtCore.QTimer(self)
+        self.rgbd_timer.setInterval(20)
+        self.rgbd_timer.timeout.connect(self._poll_rgbd)
         self.candidate_engine: PoseEngine | None = None
         self.candidate_actors = []
         self.candidate_axis_actors = []
@@ -95,14 +123,65 @@ class FusionWindow(BodyWindow):
         self.record_schedule_timer.setInterval(100)
         self.record_schedule_timer.timeout.connect(self._update_record_schedule)
 
-        group = QtWidgets.QGroupBox("相机 + IMU 采集（当前模型仅由 IMU 驱动）")
+        group = QtWidgets.QGroupBox("相机 + IMU（RGB-D可选低频航向纠偏）")
         group_layout = QtWidgets.QVBoxLayout(group)
-        self.camera_preview = QtWidgets.QLabel("等待相机画面")
-        self.camera_preview.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.camera_preview.setMinimumSize(240, 120)
-        self.camera_preview.setMaximumHeight(160)
+        group_layout.setSizeConstraint(QtWidgets.QLayout.SizeConstraint.SetMinimumSize)
+        camera_row = QtWidgets.QHBoxLayout()
+        self.camera_source_combo = QtWidgets.QComboBox()
+        self.camera_source_combo.addItem("普通摄像头 + 姿态检测", "webcam")
+        self.camera_source_combo.addItem("Gemini 336L RGB-D", "orbbec")
+        self.camera_source_combo.setCurrentIndex(1 if camera_source == "orbbec" else 0)
+        self.camera_source_combo.currentIndexChanged.connect(self._change_camera_source)
+        camera_row.addWidget(self.camera_source_combo)
+        self.rgbd_rate = QtWidgets.QSpinBox()
+        self.rgbd_rate.setRange(1, 30)
+        self.rgbd_rate.setValue(round(rgbd_fps))
+        self.rgbd_rate.setSuffix(" 帧/秒")
+        self.rgbd_rate.setToolTip("RGB-D 输出/录制帧率上限；源采流使用默认 profile，实际输出可能略低。停止相机后更改。")
+        camera_row.addWidget(self.rgbd_rate)
+        group_layout.addLayout(camera_row)
+        self.depth_preview = QtWidgets.QCheckBox("预览配准深度（伪彩色仅用于显示）")
+        group_layout.addWidget(self.depth_preview)
+        pose_row = QtWidgets.QHBoxLayout()
+        self.rgbd_pose_enabled = QtWidgets.QCheckBox("三维观测：RTMW二维＋真实深度（不纠偏）")
+        self.rgbd_pose_enabled.setEnabled(camera_source == "orbbec" and not self.replay_mode)
+        self.rgbd_pose_enabled.toggled.connect(self._set_rgbd_pose)
+        pose_row.addWidget(self.rgbd_pose_enabled)
+        self.pose_details = QtWidgets.QPushButton("三维 / 可靠性详情")
+        self.pose_details.clicked.connect(self._show_pose_details)
+        pose_row.addWidget(self.pose_details)
+        group_layout.addLayout(pose_row)
+        self.pose_status = QtWidgets.QLabel("视觉观测关闭；原人体模型仍由 IMU 驱动")
+        self.pose_status.setWordWrap(True)
+        group_layout.addWidget(self.pose_status)
+        self.camera_preview = CameraPreview()
+        self.camera_preview.setMinimumWidth(240)
+        self.camera_preview.setFixedHeight(120)
+        self.camera_preview.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
+                                         QtWidgets.QSizePolicy.Policy.Fixed)
         self.camera_preview.setStyleSheet("background: #191b20; color: white")
         group_layout.addWidget(self.camera_preview)
+        self._camera_preview_layout = group_layout
+        self.camera_preview_window = None
+        self.camera_preview_placeholder = QtWidgets.QLabel("相机画面正在独立窗口显示，可拖到另一台显示器。")
+        self.camera_preview_placeholder.setWordWrap(True)
+        self.camera_preview_placeholder.hide()
+        group_layout.addWidget(self.camera_preview_placeholder)
+        self.detach_camera_button = QtWidgets.QPushButton("相机画面独立窗口 ↗")
+        self.detach_camera_button.setToolTip("仅移动显示画面，不重新打开相机；支持彩色、深度和回放画面。")
+        self.detach_camera_button.clicked.connect(self._toggle_camera_preview_window)
+        group_layout.addWidget(self.detach_camera_button)
+        self.camera_calibration_button = QtWidgets.QPushButton("相机标定 · 引导录制")
+        self.camera_calibration_button.setEnabled(not self.replay_mode)
+        self.camera_calibration_button.clicked.connect(self._show_camera_calibration)
+        group_layout.addWidget(self.camera_calibration_button)
+        self.freeze_fusion=QtWidgets.QCheckBox('冻结视觉纠偏（保留修正，继续IMU传播）')
+        group_layout.addWidget(self.freeze_fusion)
+        self.live_fusion_status=QtWidgets.QLabel('实时纠偏未标定；不影响当前算法')
+        self.live_fusion_status.setWordWrap(True);group_layout.addWidget(self.live_fusion_status)
+        invalidate=QtWidgets.QPushButton('相机/穿戴变化：停用本次相机标定')
+        invalidate.clicked.connect(lambda:self.live_fusion.invalidate('相机/穿戴改变，需重标定'))
+        group_layout.addWidget(invalidate)
         self.camera_status = QtWidgets.QLabel(f"识别后端：{backend}；等待启动")
         self.camera_status.setWordWrap(True)
         group_layout.addWidget(self.camera_status)
@@ -158,7 +237,30 @@ class FusionWindow(BodyWindow):
         main_layout.setStretch(0, 3)
         main_layout.setStretch(1, 2)
         panel.layout().insertWidget(2, group)
+        # The whole control panel must scroll on shorter screens: forcing the
+        # camera's minimum height alone would overlap downstream controls.
+        panel.layout().setSizeConstraint(QtWidgets.QLayout.SizeConstraint.SetMinimumSize)
+        main_layout.removeWidget(panel)
+        panel.setMinimumWidth(0)
+        panel.setMaximumWidth(16777215)
+        control_scroll = QtWidgets.QScrollArea()
+        control_scroll.setWidgetResizable(True)
+        control_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        control_scroll.setMinimumWidth(520)
+        control_scroll.setMaximumWidth(740)
+        control_scroll.setWidget(panel)
+        main_layout.addWidget(control_scroll, 2)
+        self.control_scroll = control_scroll
         if isinstance(source, FusionSessionReplay):
+            import json
+            manifest=json.loads((source.path/'manifest.json').read_text())
+            for key,value in manifest.get('continuous_basis_at_start',{}).items():self.engine.set_continuous_basis(key,value)
+            self.rgbd_pose_enabled.setEnabled(source.has_vision)
+            self.rgbd_pose_enabled.setChecked(source.has_vision)
+            if not source.has_vision:
+                self.pose_status.setText("此录制没有三维视觉结果；可离线分析原始 RGB-D")
+            self.camera_source_combo.setEnabled(False)
+            self.rgbd_rate.setEnabled(False)
             self.start_camera_button.setEnabled(False)
             self.camera_status.setText(
                 (f"左：你的手动轴映射（{manual_mapping_source}）；右：我的候选标定。"
@@ -167,6 +269,7 @@ class FusionWindow(BodyWindow):
                 + f"正在回放：{source.path}")
         else:
             self.start_camera()
+            self.rgbd_pose_enabled.setChecked(rgbd_pose and camera_source == "orbbec")
 
     def _install_comparison_view(self, manual_mapping_source: str) -> None:
         """Keep one VTK viewport/camera and place both avatars side by side."""
@@ -240,22 +343,208 @@ class FusionWindow(BodyWindow):
     def start_camera(self) -> None:
         if self.camera_worker is not None or self.replay_mode:
             return
-        worker = CameraWorker(self.camera_index, self.model_path,
-                              backend=self.backend, parent=self,
-                              capture_observations=True)
-        worker.frame_ready.connect(self._on_preview)
-        worker.observation_ready.connect(self._on_observation)
+        if self.camera_source == "orbbec":
+            worker = OrbbecWorker(self.orbbec_python, fps=self.rgbd_rate.value(),
+                                  warmup=self.rgbd_warmup, parent=self)
+            self.last_rgbd_observation = None
+            self.rgbd_timer.start()
+        else:
+            worker = CameraWorker(self.camera_index, self.model_path,
+                                  backend=self.backend, parent=self,
+                                  capture_observations=True)
+            worker.frame_ready.connect(self._on_preview)
+            worker.observation_ready.connect(self._on_observation)
         worker.error.connect(self._on_camera_error)
         worker.finished.connect(self._on_camera_finished)
         self.camera_worker = worker
+        self.camera_source_combo.setEnabled(False)
+        self.rgbd_rate.setEnabled(False)
         self._camera_failed = False
         self.start_camera_button.setEnabled(False)
         self.stop_camera_button.setEnabled(True)
-        self.camera_status.setText(f"正在打开摄像头 {self.camera_index} / {self.backend}…")
+        self.camera_status.setText(
+            f"正在打开 Gemini / 预热 {self.rgbd_warmup:g} 秒…" if self.camera_source == "orbbec"
+            else f"正在打开摄像头 {self.camera_index} / {self.backend}…")
         worker.start()
+
+    def _change_camera_source(self):
+        self.camera_source = self.camera_source_combo.currentData()
+        self.rgbd_pose_enabled.setChecked(False)
+        self.rgbd_pose_enabled.setEnabled(self.camera_source == "orbbec")
+
+    def _set_rgbd_pose(self, enabled):
+        if self.replay_mode:
+            return
+        if not enabled:
+            if self.pose_worker is not None:
+                self.pose_worker.stop()
+            self.pose_status.setText("视觉观测已关闭；原始 RGB-D 继续采集")
+            self.last_pose_estimate = None
+            if self.pose_dialog is not None:
+                self.pose_dialog.canvas.estimate = None
+                self.pose_dialog.canvas.update()
+                self.pose_dialog.status.setText("观测已关闭，表格是最后一次历史结果")
+            return
+        if self.camera_source != "orbbec":
+            self.pose_status.setText("三维观测需要 Gemini RGB-D 数据")
+            return
+        if self.pose_worker is None:
+            worker = RGBDPoseWorker(self)
+            worker.error.connect(self._on_pose_error)
+            worker.status.connect(self.pose_status.setText)
+            worker.finished.connect(self._on_pose_finished)
+            self.pose_worker = worker
+            worker.start()
+
+    def _on_pose_error(self, message):
+        self.rgbd_pose_enabled.blockSignals(True)
+        self.rgbd_pose_enabled.setChecked(False)
+        self.rgbd_pose_enabled.blockSignals(False)
+        self.pose_status.setText(message+"；原始采集不受影响")
+        self.last_pose_estimate = None
+
+    def _on_pose_finished(self):
+        worker, self.pose_worker = self.pose_worker, None
+        if worker is not None:
+            worker.deleteLater()
+        # A quick off/on waits for the old thread to release its GPU sessions.
+        if self.rgbd_pose_enabled.isChecked() and self.camera_worker is not None:
+            self._set_rgbd_pose(True)
+
+    def _show_pose_details(self):
+        if self.pose_dialog is None:
+            self.pose_dialog = RGBDPoseDialog(self)
+        if self.last_pose_estimate is not None:
+            self.pose_dialog.update_estimate(self.last_pose_estimate)
+        self.pose_dialog.show()
+        self.pose_dialog.raise_()
+
+    def _poll_pose(self):
+        if self.pose_worker is None:
+            return
+        estimate = self.pose_worker.take_latest()
+        if estimate is not None and self.rgbd_pose_enabled.isChecked():
+            self._on_pose_estimate(estimate)
+        elif self.last_pose_estimate is not None and time.monotonic_ns()-self.last_pose_estimate.captured_mono_ns > 1_000_000_000:
+            self.last_pose_estimate = None
+            self.pose_status.setText("视觉观测已过期，不作当前有效数据；原始采集继续")
+            if self.pose_dialog is not None:
+                self.pose_dialog.canvas.estimate = None
+                self.pose_dialog.canvas.update()
+                self.pose_dialog.status.setText("观测过期；表格是最后一次历史结果")
+
+    def _on_pose_estimate(self, estimate):
+        self.last_pose_estimate = estimate
+        if not self.replay_mode:
+            guide=self.camera_calibration_dialog
+            allow=(self.rgbd_pose_enabled.isChecked() and not self.freeze_fusion.isChecked()
+                   and self.camera_worker is not None and getattr(self.camera_worker,'capture_epoch',None)==self._live_camera_epoch
+                   and not (guide is not None and guide.active)
+                   and not (self.calibration_dialog is not None and self.calibration_dialog.isVisible()))
+            self.live_fusion.observe(estimate,allow=allow)
+            if any(s.get('applied') for s in self.live_fusion.states.values()):self._render_dirty=True
+            self._update_live_fusion_status()
+        age_ms = (time.monotonic_ns()-estimate.captured_mono_ns)/1e6
+        fresh = self.replay_mode or age_ms < 1000
+        skipped = self.pose_worker.input_skipped if self.pose_worker is not None else 0
+        self.pose_status.setText(
+            f"视觉 {int(estimate.valid.sum())}/8 点有效 · 推理 {estimate.inference_ms:.0f} ms"
+            + (" · 回放保存结果" if self.replay_mode else f" · 观测龄期 {age_ms:.0f} ms · 输入跳过 {skipped}")
+            + " · " + estimate.diagnostics.get("reject_reason", "真实深度；纠偏仅作用于已启用融合部位"))
+        if not fresh:
+            self.pose_status.setText("推理结果过期，未显示为当前观测；原始采集继续")
+        elif not self.depth_preview.isChecked() and estimate.frame_rgb is not None:
+            rgb = draw_pose_rgb(estimate)
+            h, w = rgb.shape[:2]
+            self._display_image(QtGui.QImage(rgb.data, w, h, rgb.strides[0], QtGui.QImage.Format.Format_RGB888).copy())
+        if self.pose_dialog is not None:
+            self.pose_dialog.update_estimate(estimate)
+            if not fresh:
+                self.pose_dialog.canvas.estimate = None
+                self.pose_dialog.canvas.update()
+                self.pose_dialog.status.setText("结果过期；仅展示历史数值")
+        if self.session is not None:
+            try:
+                self.session.write_vision(estimate)
+            except (OSError, RuntimeError, ValueError) as exc:
+                self._stop_session()
+                self.statusBar().showMessage(f"视觉结果写入失败：{exc}")
+
+    def _poll_rgbd(self):
+        self._update_live_fusion_status()
+        self._poll_pose()
+        worker = self.camera_worker
+        if not isinstance(worker, OrbbecWorker):
+            return
+        observation = worker.take_latest()
+        if observation is None:
+            return
+        self.last_rgbd_observation = observation
+        self._on_observation(observation)
+        if self.rgbd_pose_enabled.isChecked() and self.pose_worker is not None:
+            self.pose_worker.submit(observation)
+        timing = observation.rgbd.timing
+        delta_ms = abs(timing["color_device_us"] - timing["depth_device_us"]) / 1000
+        self.camera_status.setText(
+            f"Gemini RGB-D · 输出上限 {worker.fps:g} FPS · 已收 {self.camera_count} 帧"
+            f" · 深度有效 {timing['valid_depth_fraction']:.0%} · RGB-D Δt {delta_ms:.3f} ms"
+            f" · GUI跳过 {worker.consumer_skipped}" + (" · RGB-D融合状态见下方" if GYRO_RGBD in self.engine.algorithm_modes.values() else " · 只采集，不做视觉纠偏"))
+        if self.depth_preview.isChecked() or not self.rgbd_pose_enabled.isChecked() or self.last_pose_estimate is None:
+            self._display_rgbd(observation)
+
+    def _display_rgbd(self, observation):
+        image = observation.frame_rgb
+        if self.depth_preview.isChecked():
+            import cv2
+            d = observation.rgbd.aligned_depth_mm
+            gray = np.uint8(np.clip(d / 6000 * 255, 0, 255))
+            image = cv2.cvtColor(cv2.applyColorMap(255 - gray, cv2.COLORMAP_JET), cv2.COLOR_BGR2RGB)
+            image[d <= 0] = 0
+        image = np.ascontiguousarray(image)
+        h, w = image.shape[:2]
+        frame = QtGui.QImage(image.data, w, h, image.strides[0], QtGui.QImage.Format.Format_RGB888).copy()
+        self._display_image(frame)
+
+    def _update_live_fusion_status(self):
+        text=[]
+        for part,state in self.live_fusion.states.items():
+            reason=state['reason']
+            if self.freeze_fusion.isChecked() or not self.rgbd_pose_enabled.isChecked():reason='视觉冻结/关闭；保留修正'
+            elif self.last_pose_estimate is None or time.monotonic_ns()-self.last_pose_estimate.captured_mono_ns>500_000_000:reason='视觉过期；保留修正'
+            text.append(f"{part}：{state['offset_deg']:+.2f}° · {reason}")
+        if text:self.live_fusion_status.setText('\n'.join(text))
+        events=self.live_fusion.drain_events()
+        if self._fusion_events_file is not None:
+            import json
+            try:
+                for event in events:self._fusion_events_file.write(json.dumps(event,ensure_ascii=False)+'\n')
+            except OSError as exc:
+                if self.session is not None:self.session.error='纠偏事件写入失败：'+str(exc)
+                self._stop_session()
+
+    def apply_camera_report(self,report):
+        if self.replay_mode or self.session is not None:raise ValueError('回放或录制中不能应用实时标定')
+        if self.x1_preview_dialog is not None and self.x1_preview_dialog.sender is not None:raise ValueError('请先停止X1随动，再应用标定')
+        if self.camera_worker is None or report.get('camera_epoch') is None or report['camera_epoch']!=getattr(self.camera_worker,'capture_epoch',None):raise ValueError('相机采集会话已变化，需重新标定')
+        self.live_fusion.install(report);self._live_camera_epoch=report['camera_epoch'];self._update_live_fusion_status()
+
+    def prepare_camera_gravity(self,devices,start_ns,end_ns):
+        return self.live_fusion.lock_gravity(devices,start_ns,end_ns)
+
+    def _algorithm_changed(self,key):
+        mode=self.algorithm_combos[key].currentData()
+        if (mode==GYRO_RGBD or self.engine.algorithm_modes[key]==GYRO_RGBD) and self.x1_preview_dialog is not None and self.x1_preview_dialog.sender is not None:
+            combo=self.algorithm_combos[key];combo.blockSignals(True)
+            combo.setCurrentIndex(combo.findData(self.engine.algorithm_modes[key]));combo.blockSignals(False)
+            QtWidgets.QMessageBox.warning(self,'先验证人体模型','请先停止X1随动，再启用新的融合算法。')
+            return
+        super()._algorithm_changed(key)
 
     def stop_camera(self) -> None:
         if self.camera_worker is not None:
+            self.rgbd_pose_enabled.setChecked(False)
+            if self.camera_source == "orbbec" and self.session is not None:
+                self._stop_session()
             self.camera_worker.stop()
             self.stop_camera_button.setEnabled(False)
             self.camera_status.setText("正在停止相机…")
@@ -263,14 +552,25 @@ class FusionWindow(BodyWindow):
     def _on_camera_error(self, message: str) -> None:
         self._camera_failed = True
         self.camera_status.setText(message)
+        if self.camera_source == "orbbec" and self.session is not None:
+            self.session.error = f"RGB-D 采集中断：{message}"
+            self._stop_session()
 
     def _on_camera_finished(self) -> None:
+        self.live_fusion.invalidate('相机停止/重启，需重新标定')
+        self.rgbd_pose_enabled.setChecked(False)
+        self.rgbd_timer.stop()
         worker = self.camera_worker
+        if isinstance(worker, OrbbecWorker) and self.session is not None:
+            self.session.error = self.session.error or "RGB-D 采集进程提前结束"
+            self._stop_session()
         self.camera_worker = None
         if worker is not None:
             worker.deleteLater()
         self.start_camera_button.setEnabled(not self.replay_mode)
         self.stop_camera_button.setEnabled(False)
+        self.camera_source_combo.setEnabled(not self.replay_mode and self.session is None)
+        self.rgbd_rate.setEnabled(not self.replay_mode and self.session is None)
         if not self._camera_failed:
             self.camera_status.setText("相机已停止")
 
@@ -282,10 +582,40 @@ class FusionWindow(BodyWindow):
             f" · 可信关键点 {self.visible_points}")
 
     def _display_image(self, frame: QtGui.QImage) -> None:
-        self.camera_preview.setPixmap(QtGui.QPixmap.fromImage(frame).scaled(
-            self.camera_preview.size(),
-            QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-            QtCore.Qt.TransformationMode.SmoothTransformation))
+        self.camera_preview.display_image(frame)
+
+    def _toggle_camera_preview_window(self):
+        if self.camera_preview_window is not None and self.camera_preview_window.isVisible():
+            self.camera_preview_window.close()
+            return
+        if self.camera_preview_window is None:
+            self.camera_preview_window = CameraPreviewWindow(self)
+            self.camera_preview_window.returning.connect(self._return_camera_preview)
+        self._camera_preview_layout.removeWidget(self.camera_preview)
+        self.camera_preview.setMinimumHeight(160)
+        self.camera_preview.setMaximumHeight(16777215)
+        self.camera_preview.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
+                                         QtWidgets.QSizePolicy.Policy.Ignored)
+        self.camera_preview_window.preview_layout.insertWidget(0, self.camera_preview, 1)
+        self.camera_preview_placeholder.show()
+        self.detach_camera_button.setText("相机画面返回主界面 ↙")
+        self.camera_preview_window.show()
+        self.camera_preview.show()
+        self.camera_preview_window.raise_()
+        self.camera_preview_window.activateWindow()
+
+    def _return_camera_preview(self):
+        if self.camera_preview.parentWidget() is not self.camera_preview_window:
+            return
+        self.camera_preview_window.preview_layout.removeWidget(self.camera_preview)
+        self.camera_preview.setFixedHeight(120)
+        self.camera_preview.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
+                                         QtWidgets.QSizePolicy.Policy.Fixed)
+        index = self._camera_preview_layout.indexOf(self.camera_preview_placeholder)
+        self._camera_preview_layout.insertWidget(index, self.camera_preview)
+        self.camera_preview_placeholder.hide()
+        self.camera_preview.show()
+        self.detach_camera_button.setText("相机画面独立窗口 ↗")
 
     def _on_observation(self, observation: CameraObservation) -> None:
         self.camera_count += 1
@@ -294,7 +624,7 @@ class FusionWindow(BodyWindow):
         if self.session is not None:
             try:
                 self.session.write_camera(observation)
-            except (OSError, RuntimeError) as exc:
+            except (OSError, RuntimeError, ValueError) as exc:
                 self._stop_session()
                 self.statusBar().showMessage(f"联合录制中断：{exc}")
 
@@ -306,18 +636,21 @@ class FusionWindow(BodyWindow):
             self.statusBar().showMessage(f"数据接收/回放失败：{exc}")
             return
         packets = []
+        runtime=self.source.take_runtime() if self.replay_mode and hasattr(self.source,'take_runtime') else {}
         for received_ns, packet in timed_packets:
             packets.append(packet)
             received_at = time.monotonic() if self.replay_mode else received_ns / 1e9
             self._check_calibration_reconnect(packet.device_id, received_at)
             self.engine.feed(packet, received_at=received_at)
+            if (received_ns,packet.device_id) in runtime:self.engine.restore_runtime(runtime[(received_ns,packet.device_id)])
+            if not self.replay_mode:self.live_fusion.feed(packet.device_id,received_ns)
             if self.calibration_dialog is not None:
                 self.calibration_dialog.on_packet(received_ns, packet)
             if self.candidate_engine is not None:
                 self.candidate_engine.feed(packet, received_at=received_at)
             if self.session is not None:
                 try:
-                    self.session.write_imu(received_ns, packet)
+                    self.session.write_imu(received_ns, packet,self.engine.runtime_snapshot(packet.device_id,received_ns))
                 except (OSError, RuntimeError) as exc:
                     self._stop_session()
                     self.statusBar().showMessage(f"联合录制中断：{exc}")
@@ -335,6 +668,10 @@ class FusionWindow(BodyWindow):
         if self.replay_mode:
             for observation in self.source.take_camera():
                 self._on_observation(observation)
+                if observation.rgbd is not None:
+                    self._display_rgbd(observation)
+                    self.camera_status.setText(f"回放 RGB-D · 第 {self.camera_count} 帧 · 深度可切换预览")
+                    continue
                 rgb = observation.frame_rgb
                 height, width = rgb.shape[:2]
                 frame = QtGui.QImage(rgb.data, width, height, rgb.strides[0],
@@ -342,33 +679,63 @@ class FusionWindow(BodyWindow):
                 self._display_image(frame)
                 self.camera_status.setText(
                     f"回放 {observation.backend} · 第 {self.camera_count} 帧")
+            for estimate in self.source.take_vision():
+                if self.rgbd_pose_enabled.isChecked():
+                    self._on_pose_estimate(estimate)
         now = time.monotonic()
         if self._render_dirty and now - self._last_render >= 1 / 30:
             self._render_pose()
 
     def toggle_session(self) -> None:
+        if self.camera_calibration_dialog is not None and self.camera_calibration_dialog.active:
+            self.statusBar().showMessage("相机标定正在录制，请在标定窗口中取消本轮。")
+            return
         if self.session is not None:
             self._stop_session()
             return
         self._cancel_record_schedule()
         self._start_session()
 
+    def _show_camera_calibration(self):
+        if self.camera_calibration_dialog is None:
+            self.camera_calibration_dialog = CameraCalibrationDialog(self)
+        self.camera_calibration_dialog.show()
+        self.camera_calibration_dialog.raise_()
+        self.camera_calibration_dialog.activateWindow()
+
     def _start_session(self) -> bool:
+        if self.camera_source == "orbbec" and (
+                self.last_rgbd_observation is None or self.camera_worker is None
+                or time.monotonic_ns() - self.last_rgbd_observation.captured_mono_ns > 1_000_000_000):
+            self.record_schedule_status.setText("RGB-D 尚未就绪，请先启动相机并等待预热完成")
+            return False
         default_parent = Path(__file__).resolve().parent.parent / "recordings"
         try:
             self.session = FusionSessionRecorder(
-                default_parent, assignments=self.engine.assignments,
+                default_parent, max_pending_frames=16 if self.camera_source == "orbbec" else 64,
+                assignments=self.engine.assignments,
                 axis_mappings=self.engine.axis_mappings,
                 algorithm_modes=self.engine.algorithm_modes)
         except OSError as exc:
             QtWidgets.QMessageBox.warning(self, "无法开始录制", str(exc))
             return False
         self.session_button.setText("结束联合录制")
+        self.session.continuous_basis_at_start={key:value.tolist() for key,value in self.engine.continuous_basis.items()}
+        self.session.camera_epoch=getattr(self.camera_worker,'capture_epoch',None)
+        self.session.fusion_at_start={part:{'calibration':data,'offset_deg':float(np.degrees(corrector.offset_rad))} for part,(data,corrector) in self.live_fusion.bindings.items()}
+        self._fusion_events_file=(self.session.path/'fusion_events.jsonl').open('w',encoding='utf-8')
+        self.camera_source_combo.setEnabled(False)
+        self.rgbd_rate.setEnabled(False)
+        if isinstance(self.camera_worker, OrbbecWorker):
+            self.session.camera_calibration = self.camera_worker.calibration
+            self._bridge_skipped_start = self.camera_worker.consumer_skipped
         self.record_schedule_status.setText("录制中；结束时末尾 3 秒不保存")
         self.statusBar().showMessage(f"正在录制：{self.session.path}")
         return True
 
     def _start_timed_session(self) -> None:
+        if self.camera_calibration_dialog is not None and self.camera_calibration_dialog.active:
+            return
         if self.replay_mode or self.session is not None or self._record_start_deadline is not None:
             return
         self._record_start_deadline = time.monotonic() + self.record_delay.value()
@@ -425,8 +792,14 @@ class FusionWindow(BodyWindow):
         self.record_delay.setEnabled(True)
         self.record_duration.setEnabled(True)
         session, self.session = self.session, None
+        if self._fusion_events_file is not None:
+            self._fusion_events_file.close();self._fusion_events_file=None
         if session is None:
             return
+        if isinstance(self.camera_worker, OrbbecWorker):
+            session.camera_bridge_skipped = self.camera_worker.consumer_skipped - self._bridge_skipped_start
+        self.camera_source_combo.setEnabled(not self.replay_mode and self.camera_worker is None)
+        self.rgbd_rate.setEnabled(not self.replay_mode and self.camera_worker is None)
         self.session_button.setText("开始联合录制")
         try:
             session.close()
@@ -434,6 +807,17 @@ class FusionWindow(BodyWindow):
             self.record_schedule_status.setText(f"录制不完整：{exc}")
             self.statusBar().showMessage(f"录制不完整：{exc}；目录 {session.path}")
         else:
+            import json
+            manifest_path=session.path/'manifest.json'
+            event_path=session.path/'fusion_events.jsonl'
+            if manifest_path.is_file() and event_path.is_file():
+                try:
+                    manifest=json.loads(manifest_path.read_text())
+                    with event_path.open() as stream:rows=[json.loads(line) for line in stream]
+                    rows=[r for r in rows if manifest['started_mono_ns']<=r['time_ns']<=manifest['retained_until_mono_ns']]
+                    event_path.write_text(''.join(json.dumps(r,ensure_ascii=False)+'\n' for r in rows))
+                except (OSError,ValueError) as exc:
+                    self.statusBar().showMessage('纠偏事件整理失败，原始数据保留：'+str(exc))
             self.record_schedule_status.setText(
                 ("定时录制完成" if auto else "录制已结束")
                 + f"；末尾 3 秒已剔除（IMU {session.trimmed_imu_packets} 包、"
@@ -443,12 +827,27 @@ class FusionWindow(BodyWindow):
                 f"（丢 {session.dropped_frames} 帧）：{session.path}", 10000)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        if self.camera_calibration_dialog is not None:
+            self.camera_calibration_dialog.shutdown()
+        self._cancel_record_schedule()
+        self._stop_session()  # Fix the recording cutoff before SDK shutdown latency.
+        self.rgbd_pose_enabled.blockSignals(True)
+        self.rgbd_pose_enabled.setChecked(False)
+        self.rgbd_pose_enabled.blockSignals(False)
+        if self.pose_worker is not None:
+            self.pose_worker.stop()
+            if not self.pose_worker.wait(5000):
+                self.pose_status.setText("视觉模型正在退出，请稍后关闭")
+                event.ignore()
+                return
+        if self.pose_dialog is not None:
+            self.pose_dialog.close()
+        if self.camera_preview_window is not None:
+            self.camera_preview_window.close()
         if self.camera_worker is not None:
             self.camera_worker.stop()
             if not self.camera_worker.wait(5000):
                 self.camera_status.setText("相机正在关闭，请稍后再试")
                 event.ignore()
                 return
-        self._cancel_record_schedule()
-        self._stop_session()
         super().closeEvent(event)

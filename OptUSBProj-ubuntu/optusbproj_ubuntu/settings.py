@@ -68,7 +68,7 @@ def save_config(path: Path, assignments: dict[str, str],
     payload = {"version": 3,
                "assignments": {key: assignments.get(key, "") for key in SENSOR_KEYS},
                "axis_mappings": mappings,
-               "algorithm_modes": {key: modes.get(key, VENDOR_RPY)
+               "algorithm_modes": {key: ('gyro_tilt' if modes.get(key)=='gyro_rgbd' else modes.get(key, VENDOR_RPY))
                                    for key in SENSOR_KEYS}}
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n",

@@ -18,6 +18,12 @@ DEFAULT_MODEL = PROJECT_DIR / "assets" / "mediapipe" / "pose_landmarker_lite.tas
 def main() -> int:
     parser = argparse.ArgumentParser(description="WT901 + 单目相机同步采集基线")
     parser.add_argument("--camera-index", type=int, default=0)
+    parser.add_argument("--camera-source", choices=("webcam", "orbbec"), default="webcam")
+    parser.add_argument("--orbbec-python", type=Path,
+                        default=Path.home() / "miniconda3/envs/orbbec336l/bin/python")
+    parser.add_argument("--rgbd-fps", type=int, default=10, help="RGB-D 输出/录制帧率上限 1～30")
+    parser.add_argument("--rgbd-warmup", type=float, default=2, help="启动预热秒数")
+    parser.add_argument("--rgbd-pose", action="store_true", help="开启 RGB-D 上半身三维诊断，不纠偏 IMU")
     parser.add_argument("--backend", choices=("rtmw3d", "mediapipe"), default="rtmw3d")
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
     parser.add_argument("--listen-ip", default="0.0.0.0")
@@ -28,11 +34,13 @@ def main() -> int:
                         help="仅回放：加载候选安装标定 JSON 作临时预览，可重复指定")
     parser.add_argument("--speed", type=float, default=1.0, help="回放倍速，默认 1")
     args = parser.parse_args()
+    if not 1 <= args.rgbd_fps <= 30 or not 0 <= args.rgbd_warmup <= 30:
+        parser.error("RGB-D 帧率需为 1～30，预热需为 0～30 秒")
     if args.speed <= 0:
         parser.error("回放倍速必须大于 0")
     if args.calibration and args.replay is None:
         parser.error("候选标定只能在 --replay 模式预览，不能直接用于实时控制")
-    if args.replay is None:
+    if args.replay is None and args.camera_source == "webcam":
         required = ["cv2", "rtmlib", "onnxruntime"] if args.backend == "rtmw3d" else [
             "cv2", "mediapipe"]
         missing = [name for name in required if importlib.util.find_spec(name) is None]
@@ -41,6 +49,8 @@ def main() -> int:
         if args.backend == "mediapipe" and (
                 not args.model.is_file() or args.model.stat().st_size == 0):
             parser.error(f"MediaPipe 模型不存在或为空：{args.model}")
+    if args.replay is None and args.camera_source == "orbbec" and not args.orbbec_python.is_file():
+        parser.error(f"Orbbec 解释器不存在：{args.orbbec_python}")
     if (os.environ.get("WAYLAND_DISPLAY")
             and os.environ.get("QT_QPA_PLATFORM", "").startswith("xcb")):
         os.environ["QT_QPA_PLATFORM"] = "wayland"
@@ -63,6 +73,8 @@ def main() -> int:
             replay_manifest = json.loads(
                 (args.replay / "manifest.json").read_text(encoding="utf-8"))
             algorithm_modes = replay_manifest.get("algorithm_modes_at_start", {})
+            assignments=replay_manifest.get('assignments_at_start',assignments)
+            axis_mappings=replay_manifest.get('axis_mappings_at_start',axis_mappings)
             if not isinstance(algorithm_modes, dict):
                 raise ValueError("姿态算法快照格式错误")
         except (OSError, ValueError) as exc:
@@ -114,6 +126,9 @@ def main() -> int:
         window = FusionWindow(source, args.settings, assignments, axis_mappings,
                               algorithm_modes=algorithm_modes,
                               camera_index=args.camera_index, backend=args.backend,
+                              camera_source=args.camera_source, orbbec_python=args.orbbec_python,
+                              rgbd_fps=args.rgbd_fps, rgbd_warmup=args.rgbd_warmup,
+                              rgbd_pose=args.rgbd_pose,
                               model_path=args.model,
                               calibration_candidates=candidates,
                               manual_mapping_source=manual_mapping_source)
