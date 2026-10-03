@@ -25,6 +25,7 @@ class FusionSessionReplay:
             raise ValueError("回放速度必须大于 0")
         self.path = path
         manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
+        self.manifest = manifest
         if manifest.get("format") not in ("wt901-fusion-session-v1", "wt901-fusion-session-v2"):
             raise ValueError("不是可识别的融合录制目录")
         self.camera_calibration = (json.loads((path / "camera_calibration.json").read_text())

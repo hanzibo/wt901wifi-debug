@@ -51,6 +51,8 @@ class FusionWindow(BodyWindow):
         self.pose_worker = None
         self.pose_dialog = None
         self.camera_calibration_dialog = None
+        self._heading_calibration_dialog = None
+        self._visual_wearing_dialog = None
         self.live_fusion = LiveRGBDFusion(self.engine)
         self._fusion_events_file = None
         self._live_camera_epoch = None
@@ -62,11 +64,22 @@ class FusionWindow(BodyWindow):
         self.candidate_engine: PoseEngine | None = None
         self.candidate_actors = []
         self.candidate_axis_actors = []
+        self.visual_wearing_candidates = {c['part']: c for c in calibration_candidates or []
+                                          if c.get('method') == 'visual_bone_v1'}
+        self.visual_direction_actors = []
+        self.comparison_neutral_devices = {c['device_id'] for c in
+            list(calibration_candidates or []) + list(comparison_shared_calibrations or [])}
+        if isinstance(source, FusionSessionReplay):
+            for key, matrix in source.manifest.get('continuous_basis_at_start', {}).items():
+                self.engine.set_continuous_basis(key, matrix)
         if calibration_candidates:
             if not self.replay_mode:
                 raise ValueError("候选标定只能用于回放预览")
             self.candidate_engine = PoseEngine(assignments, axis_mappings,
                                                algorithm_modes)
+            if isinstance(source, FusionSessionReplay):
+                for key, matrix in source.manifest.get('continuous_basis_at_start', {}).items():
+                    self.candidate_engine.set_continuous_basis(key, matrix)
             for shared in comparison_shared_calibrations or []:
                 key = shared["part"]
                 if self.engine.assignments.get(key) != shared["device_id"]:
@@ -175,6 +188,10 @@ class FusionWindow(BodyWindow):
         self.camera_calibration_button.setEnabled(not self.replay_mode)
         self.camera_calibration_button.clicked.connect(self._show_camera_calibration)
         group_layout.addWidget(self.camera_calibration_button)
+        self.visual_wearing_button = QtWidgets.QPushButton("视觉辅助穿戴标定 · 右臂（实验）")
+        self.visual_wearing_button.setEnabled(not self.replay_mode and camera_source == 'orbbec')
+        self.visual_wearing_button.clicked.connect(self._show_visual_wearing)
+        group_layout.addWidget(self.visual_wearing_button)
         self.freeze_fusion=QtWidgets.QCheckBox('冻结视觉纠偏（保留修正，继续IMU传播）')
         group_layout.addWidget(self.freeze_fusion)
         self.live_fusion_status=QtWidgets.QLabel('实时纠偏未标定；不影响当前算法')
@@ -280,8 +297,11 @@ class FusionWindow(BodyWindow):
         container_layout.setContentsMargins(0, 0, 0, 0)
         container_layout.setSpacing(2)
         labels = QtWidgets.QHBoxLayout()
-        for caption, color in ((f"你的映射 · 手动 XYZ（{manual_mapping_source}）", "#76D7FF"),
-                               ("我的候选 · 连续标定（仅回放）", "#FFBD72")):
+        baseline_caption = (f"对比基线 · {manual_mapping_source}" if self.visual_wearing_candidates else
+                            f"你的映射 · 手动 XYZ（{manual_mapping_source}）")
+        for caption, color in ((baseline_caption, "#76D7FF"),
+                               ("视觉辅助候选（仅回放）" if self.visual_wearing_candidates else
+                                "我的候选 · 连续标定（仅回放）", "#FFBD72")):
             label = QtWidgets.QLabel(caption)
             label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             label.setStyleSheet(
@@ -289,6 +309,12 @@ class FusionWindow(BodyWindow):
                 "padding: 6px; font-size: 13px;")
             labels.addWidget(label, 1)
         container_layout.addLayout(labels)
+        if self.visual_wearing_candidates:
+            failed = any(r.get('status') != '通过' for r in self.visual_wearing_candidates.values())
+            note = QtWidgets.QLabel(('候选含未通过结果，禁止实时应用。' if failed else '') +
+                '紫色箭头：RGB-D骨段方向，经中立归一化后显示；锚点取各模型关节。不是原始三维位置或GT；长轴扭转需另行检查。')
+            note.setWordWrap(True)
+            container_layout.addWidget(note)
         container_layout.addWidget(self.plotter.interactor, 1)
         layout.insertWidget(0, container, 3)
         triad = _axis_triad(0.105)
@@ -320,9 +346,46 @@ class FusionWindow(BodyWindow):
                 positioned = offset @ matrix
                 actor.user_matrix = positioned
                 axis_actor.user_matrix = positioned
+        if self.visual_wearing_candidates:
+            self._render_visual_direction_targets()
         self.plotter.render()
         self._render_dirty = False
         self._last_render = time.monotonic()
+
+    def _render_visual_direction_targets(self):
+        """Magenta directions are neutral-normalized observations, NOT raw GT."""
+        from .rgbd_fusion import visual_direction
+        from .skeleton import PART_BY_KEY
+        for actor in self.visual_direction_actors:
+            self.plotter.remove_actor(actor, render=False)
+        self.visual_direction_actors = []
+        estimate = getattr(self, 'last_pose_estimate', None)
+        if estimate is None:
+            return
+        row = estimate.to_record()
+        # Use the recorded source-frame timestamp, not a live wall clock.
+        stamp = estimate.captured_mono_ns
+        for engine, offset_y in ((self.engine, -.8), (self.candidate_engine, .8)):
+            transforms = engine.transforms()
+            for part, result in self.visual_wearing_candidates.items():
+                device = result['device_id']
+                # Hide an old observation if the replay IMU has advanced >0.5s.
+                current_stamp = getattr(self, '_last_replay_stamp', stamp)
+                if abs(current_stamp - stamp) > 500_000_000:
+                    continue
+                direction, _ = visual_direction(row, part, result['bone_length_m'])
+                if direction is None:
+                    continue
+                direction = (np.array(result['L_neutral_normalization']) @
+                             np.array(result['K_model_from_camera']) @ direction)
+                index = PART_BY_KEY[part]
+                start = transforms[index][:3, 3].copy()
+                start[1] += offset_y
+                length = .26349 if part == 'right_upper_arm' else .2724
+                actor = self.plotter.add_mesh(pv.Arrow(start=start, direction=direction, scale=length),
+                                             color='#ef70db', opacity=.75, pickable=False,
+                                             render=False)
+                self.visual_direction_actors.append(actor)
 
     def _toggle_axes(self, visible: bool) -> None:
         super()._toggle_axes(visible)
@@ -369,6 +432,7 @@ class FusionWindow(BodyWindow):
 
     def _change_camera_source(self):
         self.camera_source = self.camera_source_combo.currentData()
+        self.visual_wearing_button.setEnabled(not self.replay_mode and self.camera_source == 'orbbec')
         self.rgbd_pose_enabled.setChecked(False)
         self.rgbd_pose_enabled.setEnabled(self.camera_source == "orbbec")
 
@@ -435,6 +499,8 @@ class FusionWindow(BodyWindow):
 
     def _on_pose_estimate(self, estimate):
         self.last_pose_estimate = estimate
+        if self.visual_wearing_candidates:
+            self._render_dirty = True
         if not self.replay_mode:
             guide=self.camera_calibration_dialog
             allow=(self.rgbd_pose_enabled.isChecked() and not self.freeze_fusion.isChecked()
@@ -530,6 +596,46 @@ class FusionWindow(BodyWindow):
 
     def prepare_camera_gravity(self,devices,start_ns,end_ns):
         return self.live_fusion.lock_gravity(devices,start_ns,end_ns)
+
+    def apply_visual_wearing_report(self, report, parts):
+        from .visual_wearing import apply_wearing_report
+        if self.replay_mode or self.session is not None:
+            raise ValueError('回放或录制期间不能应用穿戴标定')
+        if self.x1_preview_dialog is not None and self.x1_preview_dialog.sender is not None:
+            raise ValueError('请先停止X1随动')
+        epoch = getattr(self.camera_worker, 'capture_epoch', None)
+        backup = {}
+        for part in parts:
+            device = self.engine.assignments.get(part)
+            backup[part] = {'device_id': device, 'epoch': self.engine.epochs.get(device),
+                            'basis': self.engine.continuous_basis.get(part),
+                            'neutrals': {m: r.copy() for m, r in self.engine.mode_neutral.get(device, {}).items()},
+                            'applied_basis': report['parts'][part].get('basis_matrix')}
+        apply_wearing_report(self.engine, report, epoch, parts)
+        self._render_dirty = True
+        self.statusBar().showMessage('已应用视觉辅助穿戴映射；未启用相机纠偏或机器人', 8000)
+        return backup
+
+    def restore_visual_wearing(self, backup):
+        if self.replay_mode or self.session is not None:
+            raise ValueError('回放或录制期间不能撤销')
+        if self.x1_preview_dialog is not None and self.x1_preview_dialog.sender is not None:
+            raise ValueError('请先停止X1随动')
+        for part, data in backup.items():
+            device = data['device_id']
+            if self.engine.assignments.get(part) != device or self.engine.epochs.get(device) != data['epoch']:
+                raise ValueError('绑定或积分参考系已变化，不能恢复旧中立位')
+            current = self.engine.continuous_basis.get(part)
+            if current is None or not np.allclose(current, data['applied_basis']):
+                raise ValueError('映射已由其他操作修改，不能覆盖，请重新标定')
+        for part, data in backup.items():
+            if data['basis'] is None:
+                self.engine.clear_calibration(part)
+            else:
+                self.engine.set_continuous_basis(part, data['basis'])
+            self.engine.mode_neutral[data['device_id']] = {m: r.copy() for m, r in data['neutrals'].items()}
+            self.engine._sync_active(data['device_id'])
+        self._render_dirty = True
 
     def _algorithm_changed(self,key):
         mode=self.algorithm_combos[key].currentData()
@@ -642,12 +748,32 @@ class FusionWindow(BodyWindow):
             received_at = time.monotonic() if self.replay_mode else received_ns / 1e9
             self._check_calibration_reconnect(packet.device_id, received_at)
             self.engine.feed(packet, received_at=received_at)
-            if (received_ns,packet.device_id) in runtime:self.engine.restore_runtime(runtime[(received_ns,packet.device_id)])
+            recorded_runtime = runtime.get((received_ns, packet.device_id))
+            if recorded_runtime is not None:
+                if self.candidate_engine is None:
+                    self.engine.restore_runtime(recorded_runtime)
+                else:
+                    # A/B uses the SAME actually recorded rotations, while
+                    # preserving the common fitted neutral and chosen B.
+                    from copy import deepcopy
+                    replay_row = deepcopy(recorded_runtime)
+                    if packet.device_id in self.comparison_neutral_devices:
+                        replay_row['neutral_by_mode'] = {m: r.tolist() for m, r in
+                            self.engine.mode_neutral[packet.device_id].items()}
+                    self.engine.restore_runtime(replay_row)
+            self._last_replay_stamp = received_ns
             if not self.replay_mode:self.live_fusion.feed(packet.device_id,received_ns)
             if self.calibration_dialog is not None:
                 self.calibration_dialog.on_packet(received_ns, packet)
             if self.candidate_engine is not None:
                 self.candidate_engine.feed(packet, received_at=received_at)
+                if recorded_runtime is not None:
+                    from copy import deepcopy
+                    replay_row = deepcopy(recorded_runtime)
+                    if packet.device_id in self.comparison_neutral_devices:
+                        replay_row['neutral_by_mode'] = {m: r.tolist() for m, r in
+                            self.candidate_engine.mode_neutral[packet.device_id].items()}
+                    self.candidate_engine.restore_runtime(replay_row)
             if self.session is not None:
                 try:
                     self.session.write_imu(received_ns, packet,self.engine.runtime_snapshot(packet.device_id,received_ns))
@@ -697,8 +823,30 @@ class FusionWindow(BodyWindow):
         self._start_session()
 
     def _show_camera_calibration(self):
-        if self.camera_calibration_dialog is None:
-            self.camera_calibration_dialog = CameraCalibrationDialog(self)
+        if self.camera_calibration_dialog is not None and (self.camera_calibration_dialog.active or
+                                                          self.camera_calibration_dialog.state == 'analyzing'):
+            self.camera_calibration_dialog.raise_()
+            return
+        if self._heading_calibration_dialog is None:
+            self._heading_calibration_dialog = CameraCalibrationDialog(self)
+        if self.camera_calibration_dialog is not None and self.camera_calibration_dialog is not self._heading_calibration_dialog:
+            self.camera_calibration_dialog.hide()
+        self.camera_calibration_dialog = self._heading_calibration_dialog
+        self.camera_calibration_dialog.show()
+        self.camera_calibration_dialog.raise_()
+        self.camera_calibration_dialog.activateWindow()
+
+    def _show_visual_wearing(self):
+        from .visual_wearing_gui import VisualWearingDialog
+        if self.camera_calibration_dialog is not None and (self.camera_calibration_dialog.active or
+                                                          self.camera_calibration_dialog.state == 'analyzing'):
+            self.camera_calibration_dialog.raise_()
+            return
+        if self._visual_wearing_dialog is None:
+            self._visual_wearing_dialog = VisualWearingDialog(self)
+        if self.camera_calibration_dialog is not None and self.camera_calibration_dialog is not self._visual_wearing_dialog:
+            self.camera_calibration_dialog.hide()
+        self.camera_calibration_dialog = self._visual_wearing_dialog
         self.camera_calibration_dialog.show()
         self.camera_calibration_dialog.raise_()
         self.camera_calibration_dialog.activateWindow()
@@ -827,8 +975,10 @@ class FusionWindow(BodyWindow):
                 f"（丢 {session.dropped_frames} 帧）：{session.path}", 10000)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
-        if self.camera_calibration_dialog is not None:
-            self.camera_calibration_dialog.shutdown()
+        dialogs = {dialog for dialog in (self.camera_calibration_dialog,
+                    self._heading_calibration_dialog, self._visual_wearing_dialog) if dialog is not None}
+        for dialog in dialogs:
+            dialog.shutdown()
         self._cancel_record_schedule()
         self._stop_session()  # Fix the recording cutoff before SDK shutdown latency.
         self.rgbd_pose_enabled.blockSignals(True)

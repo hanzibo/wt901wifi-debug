@@ -97,7 +97,9 @@ def main() -> int:
                 candidate = json.loads(path.read_text(encoding="utf-8"))
                 if Path(candidate["session"]).resolve() != args.replay.resolve():
                     raise ValueError(f"{path} 不属于当前回放会话")
-                if ((candidate.get("method") == "bone" and
+                if ((candidate.get("method") == "visual_bone_v1" and
+                     candidate.get("part") in ("right_upper_arm", "right_forearm")) or
+                    (candidate.get("method") == "bone" and
                      candidate.get("part") in ("left_upper_arm", "left_forearm",
                                                "right_upper_arm", "right_forearm")) or
                     (candidate.get("method") == "hand_bone_v1" and

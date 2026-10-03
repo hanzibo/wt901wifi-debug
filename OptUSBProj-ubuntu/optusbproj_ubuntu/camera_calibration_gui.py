@@ -9,7 +9,7 @@ from PySide6 import QtCore, QtWidgets
 
 
 def calibration_steps(preparation, hold, neutral, validation):
-    """Explicit preparation/hold phases; ONLY actual hold times enter fitting."""
+    """Label actual phases; individual analyzers choose their training windows."""
     return [
         ('neutral','中立位','站直、面向相机，右臂自然下垂；肩髋完整入镜。',preparation,neutral),
         ('forward','右臂前平举','肘伸直，右臂向正前方抬到水平；躯干不动。',preparation,hold),
@@ -79,6 +79,9 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
 
     def readiness_error(self):
         o=self.owner
+        other=getattr(o,'camera_calibration_dialog',None)
+        if other is not None and other is not self and (other.active or other.state=='analyzing'):
+            return '另一个标定流程正在执行，请先完成或取消。'
         if o.replay_mode or o.camera_source!='orbbec':return '仅支持实时 Gemini RGB-D 模式。'
         if o.session is not None or o._record_start_deadline is not None:return '已有录制/预约，请先结束或取消。'
         if o.last_rgbd_observation is None or time.monotonic_ns()-o.last_rgbd_observation.captured_mono_ns>1e9:return '相机尚未就绪或帧已过期。'
