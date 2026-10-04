@@ -8,6 +8,7 @@ from PySide6 import QtCore,QtWidgets
 
 from .camera_calibration_gui import CameraCalibrationDialog,PART_LABELS
 from .combined_calibration import apply_joint
+from .camera_protocol import OBLIQUE_PROTOCOL, add_oblique_steps
 from .recording_cleanup import validate_capture
 from .visual_wearing import needs_review
 from .visual_wearing_gui import wearing_steps
@@ -22,7 +23,7 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
         self._camera_preview_processes=[]
         self.validation.setValue(20)
         layout=self.layout()
-        layout.itemAt(0).widget().setText('一套动作、一次录制，两路分别拟合和验收。默认沿用原IMU双臂穿戴算法，可选视觉辅助；重复动作只验收，不参与拟合。保持当前积分器运行，不强制重新学习零偏；不自动应用或启动机器人。')
+        layout.itemAt(0).widget().setText('一套动作、一次录制，两路分别拟合和验收。原IMU穿戴保留正前举/侧举；相机改用斜前举/侧举，避开正面遮挡。可选旧视觉穿戴算法仍要求正前举可见。重复动作只验收，不参与拟合；不自动应用或启动机器人。')
         row=QtWidgets.QHBoxLayout();row.addWidget(QtWidgets.QLabel('穿戴算法'))
         self.method=QtWidgets.QComboBox()
         self.method.addItem('原 IMU 平举标定（默认）','imu');self.method.addItem('RGB-D 视觉辅助穿戴标定','visual')
@@ -55,11 +56,14 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
         self.wear_checks={};self.camera_checks={}
 
     def capture_steps(self):
-        return wearing_steps(self.preparation.value(),self.hold.value(),self.neutral.value(),self.validation.value(),self.scope_combo.currentData())
+        scope=self.scope_combo.currentData()
+        steps=wearing_steps(self.preparation.value(),self.hold.value(),self.neutral.value(),self.validation.value(),scope)
+        return add_oblique_steps(steps,self.preparation.value(),self.hold.value(),scope)
 
     def guide_extra(self):
         return {'workflow':'combined_wearing_camera_calibration','capture_scope':self.capture_scope,
-                'participants':list(self.devices),'wearing_method':self.capture_method}
+                'participants':list(self.devices),'wearing_method':self.capture_method,
+                'camera_pose_protocol':OBLIQUE_PROTOCOL}
 
     def begin(self):
         if self._cleanup_running():self.status.setText('正在删除原始录制，请等待完成。');return
@@ -118,7 +122,7 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
                 check=QtWidgets.QCheckBox();check.setEnabled(bool(values.get('accepted')))
                 check.setChecked(bool(values.get('accepted')));self.table.setCellWidget(row,column,check);checks[part]=check
             reason=c.get('reason') or ('独立复测通过' if c.get('accepted') else '拟合未通过')
-            for phase,label in (('forward_repeat','再次前举'),('lateral_repeat','再次侧举'),('neutral_return','回中立')):
+            for phase,label in (('forward_repeat','再次前举'),('oblique_repeat','再次斜前举'),('lateral_repeat','再次侧举'),('neutral_return','回中立')):
                 reason=reason.replace(phase,label)
             message=f'{PART_LABELS[part]} · 穿戴：'+('；'.join(w.get('warnings',[])) or w.get('status','失败'))+' · 相机：'+reason
             messages.append(message)

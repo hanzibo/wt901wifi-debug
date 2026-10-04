@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from optusbproj_ubuntu.rgbd_fusion import (SEGMENTS, ARM_SEGMENTS, unit, angle_deg, fit_mounting,
                                          HeadingCorrector, load_six_axis, visual_direction)
 from optusbproj_ubuntu.rgbd_fusion import load_live_series
+from optusbproj_ubuntu.camera_protocol import camera_phases, OBLIQUE_PROTOCOL
 
 
 def window(text):
@@ -61,10 +62,16 @@ def main():
     if not rows:
         parser.error('没有 RGB-D 三维观测')
     origin = int(manifest['started_mono_ns'])
+    guide_path=args.session/'camera_guide.json'
+    guide=json.loads(guide_path.read_text()) if guide_path.exists() else {}
+    visible_protocol=guide.get('camera_pose_protocol')==OBLIQUE_PROTOCOL
+    if guide.get('camera_pose_protocol') is not None:camera_phases(guide)
+    if visible_protocol and (guide.get('status')!='complete' or not args.live_state):
+        parser.error('斜前举协议要求完整录制及实时IMU姿态记录')
     static_windows = []
-    if args.static_train_only:
-        guide = json.loads((args.session/'camera_guide.json').read_text())
-        for step in ('neutral','forward','lateral'):
+    if args.static_train_only or visible_protocol:
+        train_phases,_=camera_phases(guide)
+        for step in train_phases:
             matches = [e for e in guide['events'] if e['step']==step and e['phase']=='hold' and e.get('end_s') is not None]
             if len(matches)!=1:parser.error('首次静止训练窗口缺失或重复')
             e = matches[0];static_windows.append((e['start_s']+.5,e['end_s']-.2))
@@ -105,17 +112,26 @@ def main():
             if args.live_state:series,up_world,imu_samples,bootstrap=load_live_series(args.session,device,neutral_ns)
             else:series, up_world, imu_samples, bootstrap = load_six_axis(args.session, device,neutral_ns=neutral_ns)
             train = [r for r in rows if args.train[0] <= seconds(r) <= args.train[1] and
-                     (not args.static_train_only or any(a<=seconds(r)<=b for a,b in static_windows))]
+                     (not (args.static_train_only or visible_protocol) or any(a<=seconds(r)<=b for a,b in static_windows))]
             lengths = [r['bone_lengths_m'][part] for r in train if r['bone_lengths_m'].get(part) is not None]
             if not lengths:
                 raise ValueError('没有标定骨长')
             expected = float(np.median(lengths))
             matrices, directions = [], []
+            phase_directions={p:[] for p in camera_phases(guide)[0]} if visible_protocol else {}
             for r in train:
                 matrix = series.at(r['captured_mono_ns'])
                 d, _ = visual_direction(r,part,expected)
                 if matrix is not None and d is not None:
                     matrices.append(matrix);directions.append(d)
+                    for phase,(a,b) in zip(phase_directions,static_windows):
+                        if a<=seconds(r)<=b:phase_directions[phase].append(d)
+            if visible_protocol:
+                for phase,values in phase_directions.items():
+                    if len(values)<8:raise ValueError(f'{phase} 拟合同期可信观测不足8帧，请调整姿态让肩肘腕分开')
+                means={p:unit(np.mean(v,axis=0)) for p,v in phase_directions.items()}
+                separation=angle_deg(means['oblique'],means['lateral'])
+                if separation<20:raise ValueError('斜前举与侧举方向相差不足20°，不能提供足够独立信息')
             fit = fit_mounting(matrices,directions,up_world,up_camera)
         except ValueError as exc:
             report['parts'][part] = {'accepted':False,'device_id':device,'reason':str(exc)}
@@ -131,6 +147,9 @@ def main():
                    'gravity_initialization':bootstrap,
                    'imu_packets':len(imu_samples),'max_so3_distance':max(x['so3_distance'] for x in imu_samples)}
         report['parts'][part] = summary
+        if visible_protocol:
+            summary['training_phase_samples']={p:len(v) for p,v in phase_directions.items()}
+            summary['oblique_lateral_separation_deg']=separation
         corrector = HeadingCorrector(up_camera,max_offset_deg=args.max_offset_deg)
         gates, baseline_errors, fused_before_errors, fused_after_errors = Counter(), [], [], []
         events = []
@@ -184,6 +203,11 @@ def main():
                 stream.write(json.dumps(sample,allow_nan=False)+'\n')
         print(part, 'accepted=',fit.accepted,'fit median=',round(fit.median_error_deg,2),
               'validation pure/fused(before)=',summary['validation_pure_direction_error'],summary['validation_fused_before_current_observation_error'],flush=True)
+    if visible_protocol:
+        from optusbproj_ubuntu.combined_calibration import validate_camera
+        report['camera_pose_protocol']=OBLIQUE_PROTOCOL
+        report['training_phases']=list(camera_phases(guide)[0])
+        report=validate_camera(args.session,report)
     (args.output/'report.json').write_text(json.dumps(report,ensure_ascii=False,allow_nan=False,indent=2))
     with (args.output/'comparison.jsonl').open('w') as stream:
         for row in outputs:

@@ -22,6 +22,7 @@ class Owner(QtWidgets.QWidget):
         for key in ['session_button','timed_session_button','cancel_session_button']:setattr(self,key,QtWidgets.QPushButton())
         self.refresh();self.starts=self.stops=0
         self.gravity_calls=[]
+        self.live_fusion=SimpleNamespace(at=lambda *_:None)
 
     def prepare_camera_gravity(self,devices,start_ns,end_ns):
         self.gravity_calls.append((devices,start_ns,end_ns))
@@ -29,7 +30,8 @@ class Owner(QtWidgets.QWidget):
 
     def refresh(self):
         self.last_rgbd_observation=SimpleNamespace(captured_mono_ns=int(self.clock[0]*1e9))
-        self.last_pose_estimate=SimpleNamespace(captured_mono_ns=int(self.clock[0]*1e9))
+        self.last_pose_estimate=SimpleNamespace(captured_mono_ns=int(self.clock[0]*1e9),
+            to_record=lambda:{'valid':[False]*8})
 
     def _start_session(self):
         self.starts+=1;self.path.mkdir(exist_ok=True)
@@ -61,7 +63,8 @@ class GuideTests(unittest.TestCase):
                 self.assertEqual(saved['status'],'complete')
                 self.assertEqual(len(owner.gravity_calls),1)
                 self.assertEqual(set(saved['gravity_reference']),{'A','B'})
-                self.assertEqual(len(saved['events']),16)
+                self.assertEqual(len(saved['events']),20)
+                self.assertEqual(saved['camera_pose_protocol'],'visible-oblique-v1')
                 neutral,train=dialog.analysis_windows()
                 self.assertLess(train[0],neutral[0]);self.assertLess(neutral[1],train[1])
                 self.assertTrue(all(e['end_s']>e['start_s'] for e in saved['events']))
@@ -125,3 +128,22 @@ class GuideTests(unittest.TestCase):
         self.assertEqual(steps[-1][0],'tail');self.assertGreater(steps[-1][4],3)
         self.assertEqual(steps[-2][0],'validation')
         self.assertIn('forward_repeat',[s[0] for s in steps])
+
+    def test_live_feedback_counts_only_unique_synced_hold_frames(self):
+        with TemporaryDirectory() as folder:
+            clock=[100.];owner=Owner(Path(folder)/'record',clock);dialog=CameraCalibrationDialog(owner)
+            dialog.devices={'right_upper_arm':'A','right_forearm':'B'}
+            dialog.started_ns=99_000_000_000;dialog.events=[{'start_s':0}]
+            dialog.deadline=105.;dialog.state='hold';dialog._observed_counts={'right_upper_arm':0,'right_forearm':0};dialog._observed_stamp=None
+            owner.live_fusion.at=lambda *_:object()
+            row={'valid':[True]*8,'confidence':[1.]*133,'support':[1.]*8,
+                 'points_camera_m':[[0,0,1],[0,0,1],[0,0,1],[.3,0,1],[0,0,1],[.6,0,1],[0,0,1],[0,0,1]]}
+            owner.last_pose_estimate.to_record=lambda:row
+            with patch('optusbproj_ubuntu.camera_calibration_gui.time.monotonic_ns',return_value=100_000_000_000):
+                dialog.observation_feedback('oblique');dialog.observation_feedback('oblique')
+                self.assertEqual(dialog._observed_counts['right_upper_arm'],1)
+                owner.last_pose_estimate.captured_mono_ns+=10_000_000
+                row['valid'][5]=False;dialog.observation_feedback('oblique')
+                self.assertEqual(dialog._observed_counts['right_upper_arm'],2)
+                self.assertEqual(dialog._observed_counts['right_forearm'],1)
+            dialog.state='idle';dialog.close();owner.close()

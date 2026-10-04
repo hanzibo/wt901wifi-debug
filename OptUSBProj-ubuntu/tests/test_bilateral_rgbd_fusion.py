@@ -95,7 +95,7 @@ class BilateralTests(unittest.TestCase):
             owner.engine.assignments.update(left_upper_arm='C',left_forearm='D')
             dialog=CameraCalibrationDialog(owner);dialog.delay.setValue(0);dialog.auto_analyze.setChecked(False)
             self.assertEqual(dialog.scope_combo.currentData(),'bilateral')
-            self.assertIn('同时向左右两侧',dialog.capture_steps()[3][2])
+            self.assertIn('同时向左右两侧',next(s[2] for s in dialog.capture_steps() if s[0]=='lateral'))
             with patch('optusbproj_ubuntu.camera_calibration_gui.time.monotonic',side_effect=lambda:clock[0]),patch('optusbproj_ubuntu.camera_calibration_gui.time.monotonic_ns',side_effect=lambda:int(clock[0]*1e9)):
                 dialog.begin();dialog.timer.stop();self.assertFalse(dialog.scope_combo.isEnabled())
                 while dialog.active:
@@ -111,7 +111,7 @@ class BilateralTests(unittest.TestCase):
             owner.engine.assignments={'left_upper_arm':'C','left_forearm':'D'}
             dialog=CameraCalibrationDialog(owner)
             self.assertEqual(dialog.scope_combo.currentData(),'left')
-            self.assertIn('向左侧',dialog.capture_steps()[3][2])
+            self.assertIn('向左侧',next(s[2] for s in dialog.capture_steps() if s[0]=='lateral'))
             with patch('optusbproj_ubuntu.camera_calibration_gui.time.monotonic_ns',return_value=100_000_000_000):
                 self.assertIsNone(dialog.readiness_error())
                 dialog.scope_combo.setCurrentIndex(dialog.scope_combo.findData('bilateral'))

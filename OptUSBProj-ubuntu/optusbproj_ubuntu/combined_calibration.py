@@ -9,6 +9,7 @@ import time
 import numpy as np
 
 from .calibration_reuse import proper
+from .camera_protocol import camera_phases
 from .guided_calibration import fit_guided_arm, neutral_matrices_by_mode, reference_motion_deg
 from .pose import GYRO_TILT
 from .rgbd_fusion import ARM_SEGMENTS, angle_deg, gravity_alignment, load_live_series, visual_direction
@@ -30,11 +31,14 @@ def load_capture(session):
     windows = {}
     for e in guide['events']:
         if e['phase'] == 'hold' and e.get('end_s') is not None:
+            if e['step'] in windows:raise ValueError('静止窗口重复，不能确定拟合/复测数据')
             start = origin+round((e['start_s']+.5)*1e9)
             end = min(cutoff, origin+round((e['end_s']-.2)*1e9))
             if end <= start:raise ValueError('静止窗口太短')
             windows[e['step']] = (start, end)
     required = set(PHASES.values()) | {'lateral_repeat'}
+    train_phases, check_phases = camera_phases(guide)
+    required |= set(train_phases) | set(check_phases)
     if not required.issubset(windows):raise ValueError('缺少联合标定训练/复测窗口')
     return manifest, guide, parts, windows
 
@@ -95,7 +99,8 @@ def imu_wearing(session):
 def validate_camera(session, report):
     """Independent repeat/return observation tests, not GT and not folded into the fit."""
     if not any(d.get('accepted') for d in report['parts'].values()):return report
-    session = Path(session);_, _, parts, windows = load_capture(session)
+    session = Path(session);_, guide, parts, windows = load_capture(session)
+    _, check_phases = camera_phases(guide)
     with (session/'vision.jsonl').open() as stream:vision = [json.loads(line) for line in stream]
     for part in parts:
         data = report['parts'].get(part)
@@ -105,7 +110,7 @@ def validate_camera(session, report):
         try:
             series, _, _, _ = load_live_series(session, data['device_id'], windows['neutral'])
             q = proper(data['Q_camera_from_imu_world']);bone = np.asarray(data['bone_axis_sensor'])
-            for phase in ('forward_repeat', 'lateral_repeat', 'neutral_return'):
+            for phase in check_phases:
                 errors = []
                 for row in vision:
                     if not windows[phase][0] <= row['captured_mono_ns'] <= windows[phase][1]:continue

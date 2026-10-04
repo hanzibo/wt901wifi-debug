@@ -21,8 +21,8 @@ from test_pose_backend_gui import Source
 from test_visual_wearing import fixture
 
 
-def capture(path, corrupt=False):
-    fixture(path,bilateral=True,corrupt_left_repeat=corrupt)
+def capture(path, corrupt=False, **kwargs):
+    fixture(path,bilateral=True,corrupt_left_repeat=corrupt,**kwargs)
     with (path/'imu.csv').open() as stream:rows=list(csv.DictReader(stream))
     for row in rows:row.update(roll=0,pitch=0,yaw=0)
     with (path/'imu.csv').open('w') as stream:
@@ -114,8 +114,48 @@ class CombinedTests(unittest.TestCase):
                 report['wearing']['parts']['left_forearm']['accepted']=False;report['wearing']['parts']['left_forearm']['status']='需重录'
                 d.show_results();self.assertFalse(d.wear_checks['left_forearm'].isEnabled())
                 self.assertTrue(d.camera_checks['left_forearm'].isEnabled());self.assertFalse(w.engine.continuous_basis)
-                self.assertEqual(len(d.capture_steps()),9)
+                self.assertEqual(len(d.capture_steps()),11)
             finally:w.close()
+
+    def test_oblique_protocol_front_occlusion_and_held_out_checks(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp);session=root/'capture';session.mkdir()
+            capture(session,camera_oblique=True,occluded_forward=True)
+            script=Path(__file__).resolve().parents[1]/'combined_calibration_analyze.py'
+            result=subprocess.run([sys.executable,str(script),str(session),'--output',str(root/'output')],capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr+result.stdout)
+            report=json.loads((root/'output'/'report.json').read_text())
+            self.assertTrue(all(d['accepted'] for d in report['wearing']['parts'].values()))
+            for data in report['camera']['parts'].values():
+                self.assertTrue(data['accepted'],data)
+                self.assertEqual(set(data['training_phase_samples']),{'neutral','oblique','lateral'})
+                self.assertEqual(set(data['independent_validation']),{'oblique_repeat','lateral_repeat','neutral_return'})
+            standalone=script.with_name('rgbd_fuse_offline.py')
+            result=subprocess.run([sys.executable,str(standalone),str(session),'--output',str(root/'standalone'),
+                '--live-state','--neutral','0.5:2.8','--train','0.5:14.8'],capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr+result.stdout)
+            standalone_report=json.loads((root/'standalone'/'report.json').read_text())
+            self.assertTrue(all(d['accepted'] for d in standalone_report['parts'].values()))
+            capture(session,corrupt=True,camera_oblique=True,occluded_forward=True)
+            checked=build_joint_report(session,report['camera'])
+            self.assertFalse(checked['camera']['parts']['left_upper_arm']['accepted'])
+            self.assertTrue(checked['camera']['parts']['right_upper_arm']['accepted'])
+            guide=json.loads((session/'camera_guide.json').read_text())
+            guide['events']=[e for e in guide['events'] if e['step']!='oblique_repeat']
+            (session/'camera_guide.json').write_text(json.dumps(guide))
+            with self.assertRaises(ValueError):load_capture(session)
+
+    def test_oblique_training_must_have_diverse_directions(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp);session=root/'capture';session.mkdir()
+            capture(session,camera_oblique=True,degenerate_oblique=True)
+            script=Path(__file__).resolve().parents[1]/'combined_calibration_analyze.py'
+            result=subprocess.run([sys.executable,str(script),str(session),'--output',str(root/'output')],capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr+result.stdout)
+            report=json.loads((root/'output'/'report.json').read_text())
+            for data in report['camera']['parts'].values():
+                self.assertFalse(data['accepted'])
+                self.assertIn('不足20°',data['reason'])
 
 
 if __name__=='__main__':unittest.main()

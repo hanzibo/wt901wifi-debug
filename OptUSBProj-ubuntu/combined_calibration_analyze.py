@@ -8,6 +8,7 @@ import sys
 
 sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
 from optusbproj_ubuntu.combined_calibration import build_joint_report, load_capture
+from optusbproj_ubuntu.camera_protocol import camera_phases
 
 
 def main():
@@ -22,7 +23,8 @@ def main():
         origin = manifest['started_mono_ns']
         seconds = lambda ns:(ns-origin)/1e9
         neutral = ':'.join(str(seconds(ns)) for ns in windows['neutral'])
-        train = f'{seconds(windows["neutral"][0])}:{seconds(windows["lateral"][1])}'
+        train_phases,_=camera_phases(guide)
+        train = f'{seconds(windows["neutral"][0])}:{max(seconds(windows[p][1]) for p in train_phases)}'
         command = [sys.executable,'-u',str(Path(__file__).with_name('rgbd_fuse_offline.py')),str(args.session),
             '--output',str(args.output/'camera'),'--live-state','--static-train-only','--parts',*parts,'--neutral',neutral,'--train',train]
         limit = guide.get('heading_max_offset_deg',30.)

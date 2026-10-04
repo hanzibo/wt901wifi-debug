@@ -6,6 +6,8 @@ import time
 import uuid
 
 from PySide6 import QtCore, QtWidgets
+from .camera_protocol import OBLIQUE_PROTOCOL, add_oblique_steps
+from .rgbd_fusion import visual_direction
 
 CAPTURE_SCOPES = {
     'right': ('right_upper_arm', 'right_forearm'),
@@ -101,7 +103,7 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
     def update_plan(self):
         steps=self.capture_steps()
         total=sum(s[3]+s[4] for s in steps)
-        self.plan.setText(f'流程：中立 → 前举 → 放下 → 侧举 → 再前举 → 再侧举 → 中立 → 独立验证 → 结束保护。录制约 {total} 秒，另有开始前 {self.delay.value()} 秒倒计时。')
+        self.plan.setText('流程：'+' → '.join(s[1] for s in steps)+f'。录制约 {total} 秒，另有开始前 {self.delay.value()} 秒倒计时。')
         if hasattr(self,'instruction') and self.state=='idle':
             arm={'right':'右臂','left':'左臂','bilateral':'双臂'}[self.scope_combo.currentData()]
             self.instruction.setText(f'先启动 Gemini 和三维观测，确认{arm}上臂、前臂设备在线且均选择陀螺＋加计。')
@@ -110,11 +112,13 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
         return CAPTURE_SCOPES[self.scope_combo.currentData()]
 
     def capture_steps(self):
-        return calibration_steps(self.preparation.value(),self.hold.value(),self.neutral.value(),self.validation.value(),self.scope_combo.currentData())
+        scope=self.scope_combo.currentData()
+        steps=calibration_steps(self.preparation.value(),self.hold.value(),self.neutral.value(),self.validation.value(),scope)
+        return add_oblique_steps(steps,self.preparation.value(),self.hold.value(),scope)
 
     def guide_extra(self):
         return {'workflow':'camera_heading_calibration','capture_scope':self.capture_scope,
-                'participants':list(self.devices)}
+                'participants':list(self.devices),'camera_pose_protocol':OBLIQUE_PROTOCOL}
 
     def readiness_error(self):
         o=self.owner
@@ -197,7 +201,8 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
         self.step_label.setText(f'{self.index+1}/{len(self.steps)} · {title} · '+phase_text+f' {remaining:.1f} 秒')
         self.instruction.setText(instruction+(' 请调整姿态，尚未进入静止采样。' if self.state=='prepare' else (' 请保持静止。' if key not in ('validation','tail') else '')))
         elapsed=(time.monotonic_ns()-self.started_ns)/1e9
-        self.status.setText(f'已录制 {elapsed:.1f} 秒；目录 {self.recording_path}')
+        feedback=self.observation_feedback(key)
+        self.status.setText(f'已录制 {elapsed:.1f} 秒；目录 {self.recording_path}'+('\n'+feedback if feedback else ''))
         self.progress.setRange(0,len(self.steps));self.progress.setValue(self.index)
         if now<self.deadline:return
         self.events[-1]['end_s']=elapsed
@@ -216,6 +221,7 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
 
     def enter_phase(self,phase):
         self.state=phase
+        self._observed_counts={p:0 for p in self.devices};self._observed_stamp=None
         key,title,instruction,prep,hold=self.steps[self.index]
         stamp=time.monotonic_ns()
         self.deadline=stamp/1e9+(prep if phase=='prepare' else hold)
@@ -225,6 +231,26 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
         self.step_label.setText(f'{self.index+1}/{len(self.steps)} · {title} · '+phase_text)
         self.instruction.setText(instruction)
         QtWidgets.QApplication.beep()
+
+    def observation_feedback(self,key):
+        """Unique source frames, using live matching gates; final offline count wins."""
+        if key in ('validation','tail'):return ''
+        estimate=getattr(self.owner,'last_pose_estimate',None)
+        reasons={p:'等待新视觉帧' for p in self.devices}
+        if estimate is not None and time.monotonic_ns()-estimate.captured_mono_ns<=500_000_000:
+            stamp=estimate.captured_mono_ns;row=estimate.to_record()
+            start=self.started_ns+round((self.events[-1]['start_s']+.5)*1e9)
+            end=round((self.deadline-.2)*1e9)
+            for part,device in self.devices.items():
+                direction,reason=visual_direction(row,part)
+                synced=self.owner.live_fusion.at(device,stamp) is not None
+                reasons[part]=reason if direction is None else ('同期IMU不足' if not synced else '当前可信')
+                if self.state=='hold' and start<=stamp<=end and stamp!=self._observed_stamp and direction is not None and synced:
+                    self._observed_counts[part]+=1
+            self._observed_stamp=stamp
+        optional=any(s[0]=='oblique' for s in self.steps) and key in ('forward','forward_repeat','down')
+        label='正前举用于穿戴；相机观测仅提示，不作为必过项。' if optional else '相机可信同期帧实时抽样（离线使用全部帧，再检查骨长与重复误差）：'
+        return label+'\n'+'；'.join(f'{PART_LABELS[p]} {self._observed_counts[p]} 帧 · {reasons[p]}' for p in self.devices)
 
     def save_guide(self,status,reason=None):
         if self.recording_path is None:return True
@@ -270,7 +296,9 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
         holds={e['step']:e for e in self.events if e['phase']=='hold' and e['end_s'] is not None}
         neutral=holds['neutral'];end=holds['neutral_return']
         # Exclude the first 0.5s settling and last 0.2s of the static neutral.
-        return (neutral['start_s']+.5,neutral['end_s']-.2),(neutral['start_s'],end['end_s'])
+        from .camera_protocol import camera_phases
+        train_phases,_=camera_phases(self.guide_extra())
+        return (neutral['start_s']+.5,neutral['end_s']-.2),(neutral['start_s'],max(holds[p]['end_s'] for p in train_phases))
 
     def analyze_recording(self):
         if self.state!='complete':return

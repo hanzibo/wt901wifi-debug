@@ -17,7 +17,8 @@ from optusbproj_ubuntu.visual_wearing import (FORMAT, DOWN, analyze_wearing, bod
                                               assess_body_motion, PASS, REVIEW)
 
 
-def fixture(path, *, corrupt_repeat=False, bilateral=False, corrupt_left_repeat=False):
+def fixture(path, *, corrupt_repeat=False, bilateral=False, corrupt_left_repeat=False,
+            camera_oblique=False, occluded_forward=False, degenerate_oblique=False):
     """Nonvertical rest bones and arbitrarily tilted camera; no RPY fitting."""
     origin = 10_000_000_000
     c_from_model = Rotation.from_euler('xyz', [77, 12, -16], degrees=True).as_matrix()
@@ -27,6 +28,8 @@ def fixture(path, *, corrupt_repeat=False, bilateral=False, corrupt_left_repeat=
     bone = r0.T @ q.T @ c_from_model @ n0
     steps = ['neutral', 'forward', 'down', 'lateral', 'forward_repeat',
              'lateral_repeat', 'neutral_return', 'validation']
+    if camera_oblique:
+        steps.insert(3,'oblique');steps.insert(6,'oblique_repeat')
     events = [{'step': s, 'phase': 'hold', 'start_s': i*3, 'end_s': (i+1)*3}
               for i, s in enumerate(steps)]
     ids = {'right_upper_arm': 'A', 'right_forearm': 'B'}
@@ -40,7 +43,7 @@ def fixture(path, *, corrupt_repeat=False, bilateral=False, corrupt_left_repeat=
         lb = lr0.T @ lq.T @ c_from_model @ left_n0
         sensor_configs[device] = (lq, lr0, lb)
     manifest = {'started_mono_ns': origin, 'camera_epoch': 'camera', 'error': None,
-                'retained_until_mono_ns': origin + 24_000_000_000,
+                'retained_until_mono_ns': origin + len(steps)*3_000_000_000,
                 'assignments_at_start': ids,
                 'algorithm_modes_at_start': {p: GYRO_TILT for p in ids},
                 'axis_mappings_at_start': {p: ['+X', '+Y', '+Z'] for p in ids}}
@@ -51,24 +54,31 @@ def fixture(path, *, corrupt_repeat=False, bilateral=False, corrupt_left_repeat=
     guide = {'status': 'complete', 'devices': ids, 'events': events,
              'gravity_reference': {d: {'epoch': 'epoch'+d, 'up_world': [0, 0, 1],
                                        'locked_at_ns': origin} for d in ids.values()}}
+    if camera_oblique:guide['camera_pose_protocol']='visible-oblique-v1'
     if bilateral:
         guide.update(participants=list(ids), capture_scope='bilateral')
     (path/'manifest.json').write_text(json.dumps(manifest))
     (path/'camera_guide.json').write_text(json.dumps(guide))
     runtime, vision, imu = [], [], []
-    for i in range(1200):
+    for i in range(len(steps)*150):
         t = i * .02
-        step = steps[min(int(t // 3), 7)]
+        step = steps[min(int(t // 3), len(steps)-1)]
         if step in ('forward', 'forward_repeat'):
             movement = Rotation.from_euler('y', -90, degrees=True).as_matrix()
         elif step in ('lateral', 'lateral_repeat'):
             movement = Rotation.from_euler('x', -90, degrees=True).as_matrix()
+        elif step in ('oblique','oblique_repeat'):
+            movement = Rotation.from_euler('xy', [-35,-45], degrees=True).as_matrix()
+            if degenerate_oblique:movement=Rotation.from_euler('x',-90,degrees=True).as_matrix()
         elif step == 'validation':
             movement = Rotation.from_euler('xy', [-35, -45], degrees=True).as_matrix()
         else:
             movement = np.eye(3)
         left_movement = (Rotation.from_euler('x', 90, degrees=True).as_matrix()
                          if step in ('lateral', 'lateral_repeat') else movement)
+        if step in ('oblique','oblique_repeat'):
+            left_movement=Rotation.from_euler('xy',[35,-45],degrees=True).as_matrix()
+            if degenerate_oblique:left_movement=Rotation.from_euler('x',90,degrees=True).as_matrix()
         stamp = origin + round(t*1e9)
         for device in ids.values():
             dq, dr0, _ = sensor_configs[device]
@@ -87,7 +97,7 @@ def fixture(path, *, corrupt_repeat=False, bilateral=False, corrupt_left_repeat=
             left_direction = left_movement @ left_n0
             if corrupt_repeat and step == 'forward_repeat':
                 direction = Rotation.from_euler('z', 40, degrees=True).apply(direction)
-            if corrupt_left_repeat and step == 'forward_repeat':
+            if corrupt_left_repeat and step == ('oblique_repeat' if camera_oblique else 'forward_repeat'):
                 left_direction = Rotation.from_euler('z', -40, degrees=True).apply(left_direction)
             xyz = np.array([[0, .18, 1.], [0, -.18, 1.], [0, .18, .75],
                             np.array([0, -.18, 1.]) + .26*direction,
@@ -102,6 +112,8 @@ def fixture(path, *, corrupt_repeat=False, bilateral=False, corrupt_left_repeat=
                            'points_camera_m': xyz.tolist(),
                            'bone_lengths_m': {'right_upper_arm': .26, 'right_forearm': .27,
                                               'left_upper_arm': .26, 'left_forearm': .27}})
+            if occluded_forward and step in ('forward','forward_repeat'):
+                for index in (2,3,4,5):vision[-1]['valid'][index]=False
     for name, rows in (('runtime_pose.jsonl', runtime), ('vision.jsonl', vision)):
         (path/name).write_text('\n'.join(json.dumps(r) for r in rows))
     with (path/'imu.csv').open('w') as stream:
