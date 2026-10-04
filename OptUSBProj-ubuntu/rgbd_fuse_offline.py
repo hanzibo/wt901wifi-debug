@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Experimental right-arm heading fusion. Never modifies captures or GUI settings."""
+"""Experimental single/bilateral arm heading fusion; never modifies captures."""
 import argparse
 from collections import Counter
 import json
@@ -10,7 +10,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from optusbproj_ubuntu.rgbd_fusion import (SEGMENTS, unit, angle_deg, fit_mounting,
+from optusbproj_ubuntu.rgbd_fusion import (SEGMENTS, ARM_SEGMENTS, unit, angle_deg, fit_mounting,
                                          HeadingCorrector, load_six_axis, visual_direction)
 from optusbproj_ubuntu.rgbd_fusion import load_live_series
 
@@ -26,24 +26,48 @@ def metrics(values):
     return {'samples': len(values), 'median_deg': float(np.median(values)) if values else None,
             'p90_deg': float(np.percentile(values, 90)) if values else None}
 
+def capture_parts(session, requested=None):
+    """Honor explicit scope, not other devices incidentally online in a capture."""
+    guide_path=session/'camera_guide.json'
+    guide=json.loads(guide_path.read_text()) if guide_path.exists() else {}
+    parts=requested if requested is not None else guide.get('participants',list(guide.get('devices',{})) or list(SEGMENTS))
+    if not parts or len(parts)!=len(set(parts)) or any(p not in ARM_SEGMENTS for p in parts):
+        raise ValueError('参与部位必须为不重复的左右上臂/前臂')
+    return list(parts)
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('session', type=Path)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--live-state',action='store_true',help='Fit actual GUI gyro poses, preserving its reference epoch')
+    parser.add_argument('--parts',nargs='+',choices=tuple(ARM_SEGMENTS),help='Explicit single/bilateral participants; otherwise follow guided capture metadata')
+    parser.add_argument('--max-offset-deg',type=float,default=30.,help='累计纠偏范围5～90度，默认30；不改变创新门限或速率')
+    parser.add_argument('--unlimited-offset',action='store_true',help='实验：不限累计角度，其他安全门限不变')
+    parser.add_argument('--static-train-only',action='store_true',help='联合标定：仅首次中立/前举/侧举静止窗口拟合，重复动作独立验收')
     parser.add_argument('--neutral', type=window, default=(3.,6.), help='seconds relative to recording start; default 3:6')
     parser.add_argument('--train', type=window, default=(3.,18.), help='calibration prefix; default 3:18; correction only starts afterwards')
     args = parser.parse_args()
+    if not np.isfinite(args.max_offset_deg) or not 5<=args.max_offset_deg<=90:parser.error('max-offset-deg必须在5～90之间')
+    if args.unlimited_offset:args.max_offset_deg=None
     if args.output.resolve().is_relative_to(args.session.resolve()) or args.output.exists():
         parser.error('输出必须为原始录制之外、尚不存在的目录')
     if not args.train[0] <= args.neutral[0] < args.neutral[1] <= args.train[1]:
         parser.error('neutral 必须位于 train 内')
     manifest = json.loads((args.session/'manifest.json').read_text())
+    try:participants=capture_parts(args.session,args.parts)
+    except ValueError as exc:parser.error(str(exc))
     rows = [json.loads(l) for l in (args.session/'vision.jsonl').open()]
     if not rows:
         parser.error('没有 RGB-D 三维观测')
     origin = int(manifest['started_mono_ns'])
+    static_windows = []
+    if args.static_train_only:
+        guide = json.loads((args.session/'camera_guide.json').read_text())
+        for step in ('neutral','forward','lateral'):
+            matches = [e for e in guide['events'] if e['step']==step and e['phase']=='hold' and e.get('end_s') is not None]
+            if len(matches)!=1:parser.error('首次静止训练窗口缺失或重复')
+            e = matches[0];static_windows.append((e['start_s']+.5,e['end_s']-.2))
     def seconds(row):
         return (row['captured_mono_ns']-origin)/1e9
     up_vectors = []
@@ -60,16 +84,18 @@ def main():
     report = {'format':'rgbd-heading-fusion-experiment-v1', 'source_session':str(args.session.resolve()),
               'orientation_source':'live_runtime_pose' if args.live_state else 'recomputed_from_raw_imu',
               'camera_epoch':manifest.get('camera_epoch'),
+              'vision_config':manifest.get('vision_config'),'vision_epoch':manifest.get('vision_epoch'),
+              'heading_max_offset_deg':args.max_offset_deg,
               'neutral_window_s':args.neutral, 'training_window_s':args.train,
               'camera_up_assumption':'upright torso shoulder-to-hip direction in neutral window; NOT a measured floor gravity',
               'camera_up':up_camera.tolist(), 'neutral_up_spread_p90_deg':up_spread,
               'clock_note':'device time for gyro integration, host arrival for matching; lag=0 not physically synchronized',
               'measurement_note':'direction errors are against noisy RGB-D surfaces, NOT ground-truth pose accuracy; no axial twist correction',
-              'parts':{}}
+              'participants':participants,'parts':{}}
     outputs = [{'captured_mono_ns':r['captured_mono_ns'],'completed_mono_ns':r['completed_mono_ns'],
                 'time_s':seconds(r),'frame':r['frame'],'vision':r, 'parts':{}} for r in rows]
     args.output.mkdir(parents=True)
-    for part in SEGMENTS:
+    for part in participants:
         device = manifest['assignments_at_start'].get(part)
         if not device:
             report['parts'][part] = {'accepted':False,'reason':'部位未分配设备'}
@@ -78,7 +104,8 @@ def main():
             neutral_ns=(origin+int(args.neutral[0]*1e9),origin+int(args.neutral[1]*1e9))
             if args.live_state:series,up_world,imu_samples,bootstrap=load_live_series(args.session,device,neutral_ns)
             else:series, up_world, imu_samples, bootstrap = load_six_axis(args.session, device,neutral_ns=neutral_ns)
-            train = [r for r in rows if args.train[0] <= seconds(r) <= args.train[1]]
+            train = [r for r in rows if args.train[0] <= seconds(r) <= args.train[1] and
+                     (not args.static_train_only or any(a<=seconds(r)<=b for a,b in static_windows))]
             lengths = [r['bone_lengths_m'][part] for r in train if r['bone_lengths_m'].get(part) is not None]
             if not lengths:
                 raise ValueError('没有标定骨长')
@@ -104,7 +131,7 @@ def main():
                    'gravity_initialization':bootstrap,
                    'imu_packets':len(imu_samples),'max_so3_distance':max(x['so3_distance'] for x in imu_samples)}
         report['parts'][part] = summary
-        corrector = HeadingCorrector(up_camera)
+        corrector = HeadingCorrector(up_camera,max_offset_deg=args.max_offset_deg)
         gates, baseline_errors, fused_before_errors, fused_after_errors = Counter(), [], [], []
         events = []
         for r, output in zip(rows,outputs):

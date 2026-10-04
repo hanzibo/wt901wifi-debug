@@ -18,6 +18,9 @@ from wt901_viz.yaw_guard import PacketClock
 from .fusion_sync import OrientationSeries
 
 SEGMENTS = {"right_upper_arm": (1, 3), "right_forearm": (3, 5)}
+# Both arms share direction observations. SEGMENTS is the legacy right-only
+# default for offline captures without explicit participant metadata.
+ARM_SEGMENTS = {'left_upper_arm': (0, 2), 'left_forearm': (2, 4), **SEGMENTS}
 
 
 def unit(vector):
@@ -103,7 +106,7 @@ def fit_mounting(rotations, directions, up_world, up_camera):
 
 class HeadingCorrector:
     """World-gravity left correction; no Euler yaw, tilt change or axial fit."""
-    def __init__(self, up_camera, *, tau_s=3., max_rate_deg_s=3., max_innovation_deg=30., min_innovation_deg=0.):
+    def __init__(self, up_camera, *, tau_s=3., max_rate_deg_s=3., max_innovation_deg=30., min_innovation_deg=0., max_offset_deg=30.):
         self.up = unit(up_camera)
         self.tau_s = tau_s
         self.max_rate = math.radians(max_rate_deg_s)
@@ -111,9 +114,31 @@ class HeadingCorrector:
         self.min_innovation = math.radians(min_innovation_deg)
         self.offset_rad = 0.
         self.last_update_s = None
+        self.limit_reached=False
+        self.set_max_offset(max_offset_deg)
+
+    def set_max_offset(self,degrees):
+        # None explicitly selects experimental unlimited cumulative correction.
+        if degrees is None:
+            self.max_offset=None
+            self.limit_reached=False
+            return
+        if not math.isfinite(degrees) or not 5<=degrees<=90:raise ValueError('累计纠偏范围必须在±5°～±90°之间')
+        value=math.radians(degrees)
+        if abs(self.offset_rad)>value+1e-12:raise ValueError('当前累计修正已超过新范围；不能缩小范围或强行截断姿态')
+        self.max_offset=value
+        self.limit_reached=False
+
+    def limit_status(self):
+        if self.max_offset is None:return '实验：不限累计角度'
+        limit=math.degrees(self.max_offset)
+        if self.limit_reached:return f'已拒绝超出±{limit:g}°的补偿'
+        if abs(self.offset_rad)>=.9*self.max_offset:return f'接近累计上限±{limit:g}°'
+        return None
 
     def rotation(self):
-        return Rotation.from_rotvec(self.up*self.offset_rad).as_matrix()
+        # Keep the unwrapped total for diagnostics, reduce only for evaluation.
+        return Rotation.from_rotvec(self.up*math.remainder(self.offset_rad,2*math.pi)).as_matrix()
 
     def update(self, time_s, predicted_direction, observed_direction):
         if self.last_update_s is not None and time_s <= self.last_update_s:
@@ -136,9 +161,11 @@ class HeadingCorrector:
             return False,"小残差死区：不追随视觉噪声",math.degrees(innovation)
         delta = float(np.clip((1-math.exp(-dt/self.tau_s))*innovation, -self.max_rate*dt, self.max_rate*dt))
         candidate = self.offset_rad+delta
-        if abs(candidate) > math.radians(30):
-            return False, "累计纠偏超过初版安全范围", math.degrees(innovation)
+        if self.max_offset is not None and abs(candidate) > self.max_offset:
+            self.limit_reached=True
+            return False, f"累计纠偏将超过±{math.degrees(self.max_offset):g}°，已拒绝继续补偿", math.degrees(innovation)
         self.offset_rad = candidate
+        self.limit_reached=False
         return True, "低频重力轴纠偏", math.degrees(innovation)
 
 
@@ -196,7 +223,7 @@ def load_six_axis(path: Path, device_id: str, *, neutral_ns=None):
 
 
 def visual_direction(row, part, expected_length=None):
-    a, b = SEGMENTS[part]
+    a, b = ARM_SEGMENTS[part]
     if not row['valid'][a] or not row['valid'][b]:
         return None, "视觉端点无效"
     indices = [5,6,7,8,9,10,11,12]

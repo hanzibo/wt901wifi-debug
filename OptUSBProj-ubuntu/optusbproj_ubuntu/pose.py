@@ -82,8 +82,8 @@ class PoseEngine:
         if key not in self.algorithm_modes or mode not in ORIENTATION_MODES:
             raise ValueError(f"无效姿态算法：{key} / {mode}")
         device_id = self.assignments[key]
-        if mode == GYRO_RGBD and (key not in ("right_upper_arm","right_forearm") or device_id not in self.fusion_ready):
-            raise ValueError("需先应用本次实时参考系的相机标定；首版仅支持右上臂/前臂")
+        if mode == GYRO_RGBD and (key not in ("left_upper_arm","left_forearm","right_upper_arm","right_forearm") or device_id not in self.fusion_ready):
+            raise ValueError("需先应用本次实时参考系的相机标定；仅支持左右上臂/前臂")
         if (device_id and device_id in self.packets and
                 mode not in self.mode_current.get(device_id, {})):
             raise ValueError("该设备尚无陀螺＋加计数据；请等待完整数据包")

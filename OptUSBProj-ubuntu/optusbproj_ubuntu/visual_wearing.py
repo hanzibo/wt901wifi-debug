@@ -16,13 +16,157 @@ from scipy.spatial.transform import Rotation
 from .axis_mapping import DEFAULT_AXIS_MAPPING, mapping_matrix
 from .guided_calibration import fit_guided_arm, _hold, neutral_matrices_by_mode
 from .pose import GYRO_TILT, ORIENTATION_MODES
-from .rgbd_fusion import (SEGMENTS, angle_deg, fit_mounting, gravity_alignment,
+from .rgbd_fusion import (ARM_SEGMENTS, angle_deg, fit_mounting, gravity_alignment,
                           load_live_series, unit, visual_direction)
 
 FORMAT = "rgbd-assisted-wearing-v1"
 TRAIN_STEPS = ("neutral", "forward", "lateral")
 CHECK_STEPS = ("forward_repeat", "lateral_repeat", "neutral_return")
 DOWN = np.array([0., 0., -1.])
+PART_LABELS = {'left_upper_arm': '左上臂', 'left_forearm': '左前臂',
+               'right_upper_arm': '右上臂', 'right_forearm': '右前臂'}
+PASS = '通过'
+REVIEW = '通过，但需人工复核'
+FAIL = '需重录'
+POSE_STEPS = ('forward', 'lateral', 'forward_repeat', 'lateral_repeat')
+
+
+def needs_review(result):
+    return result.get('status') == REVIEW or bool(result.get('review_reasons'))
+
+
+def _trusted_points(row, indices):
+    coco = (5, 6, 7, 8, 9, 10, 11, 12)
+    if not all(row['valid'][i] and row['support'][i] >= .7 and
+               row['confidence'][coco[i]] >= .6 for i in indices):
+        return None
+    xyz = np.asarray(row['points_camera_m'], float)
+    return xyz if np.isfinite(xyz[list(indices)]).all() else None
+
+
+def _horizontal(vector, up, minimum=.08):
+    projected = vector - up * (vector @ up)
+    return unit(projected) if np.linalg.norm(projected) >= minimum else None
+
+
+def _heading(reference, direction, up):
+    return float(np.degrees(np.arctan2(up @ np.cross(reference, direction), reference @ direction)))
+
+
+def _window_stat(values, total, *, circular=False):
+    if not values:
+        return {'frames': 0, 'coverage': 0., 'reliable': False,
+                'median_deg': None, 'p90_abs_deg': None, 'spread_p90_deg': None}
+    values = np.asarray(values, float)
+    if circular:
+        centre = np.degrees(np.angle(np.mean(np.exp(1j*np.radians(values)))))
+        values = centre + (values-centre+180) % 360 - 180
+    median = float(np.median(values))
+    spread = float(np.percentile(abs(values-median), 90))
+    coverage = len(values)/max(1, total)
+    return {'frames': len(values), 'coverage': coverage,
+            'reliable': len(values) >= 5 and coverage >= .6 and spread <= 8.,
+            'median_deg': median, 'p90_abs_deg': float(np.percentile(abs(values), 90)),
+            'spread_p90_deg': spread}
+
+
+def assess_body_motion(vision, windows, k, runtime=(), torso_device=None):
+    """Separate torso tilt from shoulder protraction and corroborated heading.
+
+    All decisions are per hold, against that source's own neutral baseline.
+    Unknown/disagreeing sources generate review, never a 'stable' assertion.
+    """
+    up = k.T[:, 2]
+    y = k.T[:, 1]
+    neutral_hips = []
+    for row in vision:
+        if in_window(row['captured_mono_ns'], windows['neutral']):
+            xyz = _trusted_points(row, (6, 7))
+            direction = None if xyz is None else _horizontal(xyz[6]-xyz[7], up)
+            if direction is not None:
+                neutral_hips.append(direction)
+    hip_reference = unit(np.mean(neutral_hips, axis=0)) if len(neutral_hips) >= 5 else None
+    hip_neutral = _window_stat([_heading(hip_reference, d, up) for d in neutral_hips],
+                              sum(in_window(r['captured_mono_ns'], windows['neutral']) for r in vision),
+                              circular=True) if hip_reference is not None else _window_stat([], 1)
+    imu_rows = [r for r in runtime if torso_device and r['device_id'] == torso_device]
+    imu_neutral = [r for r in imu_rows if in_window(r['host_recv_mono_ns'], windows['neutral'])]
+    imu_mode = None
+    imu_r0 = None
+    if len(imu_neutral) >= 30 and len({r['epoch'] for r in imu_rows}) == 1:
+        for mode in (GYRO_TILT, 'vendor_rpy'):
+            if all(mode in r['orientation_by_mode'] for r in imu_neutral):
+                imu_mode = mode
+                imu_r0 = Rotation.from_matrix([r['orientation_by_mode'][mode] for r in imu_neutral]).mean().as_matrix()
+                break
+    hard, review, summaries = [], [], {}
+    for step in POSE_STEPS:
+        rows = [r for r in vision if in_window(r['captured_mono_ns'], windows[step])]
+        tilts, shoulders, hips = [], [], []
+        for row in rows:
+            xyz = _trusted_points(row, (0, 1, 6, 7))
+            if xyz is not None:
+                vector = (xyz[0]+xyz[1]-xyz[6]-xyz[7])/2
+                if np.linalg.norm(vector) >= .15:
+                    tilts.append(angle_deg(vector, up))
+            xyz = _trusted_points(row, (0, 1))
+            side = None if xyz is None else _horizontal(xyz[0]-xyz[1], up, .1)
+            if side is not None:
+                shoulders.append(_heading(y, side, up))
+            xyz = _trusted_points(row, (6, 7))
+            side = None if xyz is None else _horizontal(xyz[6]-xyz[7], up)
+            if side is not None and hip_reference is not None:
+                hips.append(_heading(hip_reference, side, up))
+        tilt = _window_stat(tilts, len(rows))
+        shoulder = _window_stat(shoulders, len(rows), circular=True)
+        hip = _window_stat(hips, len(rows), circular=True)
+        hip['reliable'] = hip['reliable'] and hip_neutral['reliable']
+        current_imu = [r for r in imu_rows if in_window(r['host_recv_mono_ns'], windows[step])]
+        imu_angles = []
+        if imu_r0 is not None:
+            imu_angles = [float(np.degrees(Rotation.from_matrix(
+                imu_r0.T @ proper_rotation(r['orientation_by_mode'][imu_mode])).magnitude()))
+                for r in current_imu if imu_mode in r['orientation_by_mode']]
+        imu = _window_stat(imu_angles, len(current_imu))
+        imu['reliable'] = imu['reliable'] and len(imu_angles) >= 30
+        if not tilt['reliable']:
+            review.append(f'{step} 躯干倾斜观测不足/不稳定，无法可靠核验')
+        elif tilt['median_deg'] > 12:
+            hard.append(f"{step} 躯干持续倾斜中位{tilt['median_deg']:.1f}°（上限12°）")
+        elif tilt['p90_abs_deg'] > 5:
+            review.append(f"{step} 躯干倾斜P90 {tilt['p90_abs_deg']:.1f}°，请复核姿势")
+        conclusion = '无法可靠核验转向'
+        if shoulder['reliable'] and hip['reliable']:
+            s, h = shoulder['median_deg'], hip['median_deg']
+            difference = abs((s-h+180) % 360 - 180)
+            if s*h > 0 and min(abs(s), abs(h)) > 12 and difference <= 8:
+                conclusion = '肩髋共同转向'
+                review.append(f'{step} 肩髋共同转向，动作规范性需复核（安装拟合不因此直接否决）')
+            elif abs(s) > 12 and abs(h) <= 8:
+                conclusion = '肩部局部变化或表面深度偏差'
+                review.append(f"{step} 肩线变化{s:.1f}°、髋线变化{h:.1f}°；不能据此判定整体转身")
+            elif difference > 8:
+                conclusion = '肩髋转向不一致'
+                review.append(f'{step} 肩髋转向不一致，无法可靠核验整体转向')
+            elif max(abs(s), abs(h)) > 5:
+                conclusion = '轻微肩髋转向，需复核'
+                review.append(f'{step} 肩髋存在轻微转向，建议复核')
+            else:
+                conclusion = '肩髋转向未见明显异常'
+        else:
+            review.append(f'{step} 肩线或髋线观测不足/不稳定，无法可靠核验整体转向')
+        if torso_device:
+            if not imu['reliable']:
+                review.append(f'{step} 躯干IMU缺少稳定同参考系数据，不能补充核验')
+            elif imu['p90_abs_deg'] > 12:
+                review.append(f"{step} 躯干IMU相对转动P90 {imu['p90_abs_deg']:.1f}°，请复核")
+            elif shoulder['reliable'] and abs(shoulder['median_deg']) > 12:
+                review.append(f'{step} 躯干IMU未见同幅转动，肩线大变化不代表整体转身')
+        summaries[step] = {'tilt': tilt, 'shoulder_heading': shoulder, 'hip_heading': hip,
+                           'torso_imu_rotation': imu, 'heading_conclusion': conclusion}
+    return {'windows': summaries, 'hard_failures': hard, 'review_reasons': review,
+            'hip_neutral_quality': hip_neutral, 'torso_device_id': torso_device,
+            'note': 'surface shoulders are not a rigid torso; all headings relative to own neutral'}
 
 
 def proper_rotation(value):
@@ -141,15 +285,28 @@ def analyze_wearing(session: Path):
     neutral_vision = [r for r in vision if in_window(r['captured_mono_ns'], windows['neutral'])]
     k, body_quality = body_frame(neutral_vision)
     up_c = k.T @ np.array([0., 0., 1.])
+    posture = assess_body_motion(vision, windows, k, runtime,
+                                 manifest['assignments_at_start'].get('torso'))
+    participants = guide.get('participants')
+    if participants is None:
+        # Old right-only guides may have other devices online in the manifest;
+        # only the explicitly captured devices took part in this protocol.
+        participants = [part for part in ARM_SEGMENTS if part in guide.get('devices', {})]
+    if (not participants or len(set(participants)) != len(participants) or
+            not set(participants).issubset(ARM_SEGMENTS)):
+        raise ValueError('引导录制的参与部位无效')
     report = {'format': FORMAT, 'session': str(session),
               'camera_epoch': manifest['camera_epoch'], 'K_model_from_camera': k.tolist(),
-              'body_frame_quality': body_quality, 'parts': {},
+              'vision_config':manifest.get('vision_config'),'vision_epoch':manifest.get('vision_epoch'),
+              'body_frame_quality': body_quality, 'parts': {}, 'posture_assessment': posture,
+              'acceptance_revision': 2, 'participants': participants,
+              'capture_scope': guide.get('capture_scope', 'legacy_right'),
               'train_steps': list(TRAIN_STEPS), 'check_steps': list(CHECK_STEPS),
               'windows_ns': {name: list(win) for name, win in windows.items()},
               'measurement_note': 'RGB-D surface directions, not joint-centre GT; no axial twist validation',
               'neutral_policy': 'shortest per-segment neutral normalization to model -Z',
               'clock_note': 'host-time SLERP, max gap 100ms, no hardware synchronization'}
-    for part in SEGMENTS:
+    for part in participants:
         device = guide['devices'].get(part)
         try:
             if not device or manifest['assignments_at_start'].get(part) != device:
@@ -227,34 +384,26 @@ def analyze_wearing(session: Path):
             return_angle = float(np.degrees(Rotation.from_matrix(r0.T @ holds['neutral_return']).magnitude()))
             if return_angle > 15:
                 warnings.append(f"设备回中立整体旋转偏差{return_angle:.1f}°，检查漂移/绑带/姿势")
-            # Check body motion during static raises separately from segment fit.
-            torso_angles, elbow_angles = [], []
-            for step in ('forward', 'lateral', 'forward_repeat', 'lateral_repeat'):
-                body_count = 0
-                for row in paired[step][2]:
-                    try:
-                        instantaneous, _ = body_frame([row] * 5)
-                        torso_angles.append(float(np.degrees(
-                            Rotation.from_matrix(instantaneous @ k.T).magnitude())))
-                        body_count += 1
-                    except ValueError:
-                        continue
-                    upper, _ = visual_direction(row, 'right_upper_arm')
-                    fore, _ = visual_direction(row, 'right_forearm')
+            # Protocol findings are independent of direction-fit quality.
+            review_reasons = list(posture['review_reasons'])
+            hard_failures = list(warnings)
+            hard_failures.extend(posture['hard_failures'])
+            elbow_windows = {}
+            for step in POSE_STEPS:
+                rows = [row for row in vision if in_window(row['captured_mono_ns'], windows[step])]
+                angles = []
+                for row in rows:
+                    side = part.split('_', 1)[0]
+                    upper, _ = visual_direction(row, side + '_upper_arm')
+                    fore, _ = visual_direction(row, side + '_forearm')
                     if upper is not None and fore is not None:
-                        elbow_angles.append(angle_deg(upper, fore))
-                if body_count < 5:
-                    warnings.append(f"{step} 缺少可信肩髋观测，无法验收身体朝向")
-            torso_motion = float(np.percentile(torso_angles, 90)) if torso_angles else 0.
-            elbow_bend = float(np.percentile(elbow_angles, 90)) if elbow_angles else 0.
-            if torso_motion > 12:
-                warnings.append(f"静止平举时躯干/肩线变化P90 {torso_motion:.1f}°，请保持身体朝向")
-            elif torso_motion > 5:
-                notes.append(f"躯干/肩线变化{torso_motion:.1f}°，建议复核")
-            if elbow_bend > 25:
-                warnings.append(f"平举时视觉肘弯曲P90 {elbow_bend:.1f}°，请伸直肘部")
-            if not elbow_angles:
-                warnings.append("缺少可信肩肘腕同时观测，无法检查肘伸直")
+                        angles.append(angle_deg(upper, fore))
+                quality = _window_stat(angles, len(rows))
+                elbow_windows[step] = quality
+                if not quality['reliable']:
+                    review_reasons.append(f'{step} 肘伸直观测不足/不稳定，请检查回放')
+                elif quality['p90_abs_deg'] > 25:
+                    review_reasons.append(f"{step} 肘弯曲P90 {quality['p90_abs_deg']:.1f}°，动作规范性需复核")
             mapping = tuple(manifest.get('axis_mappings_at_start', {}).get(part, DEFAULT_AXIS_MAPPING))
             prior_basis = np.asarray(manifest.get('continuous_basis_at_start', {}).get(part, mapping_matrix(mapping)), float)
             legacy_samples = {}
@@ -270,14 +419,17 @@ def analyze_wearing(session: Path):
             visual_n0 = unit(k @ unit(np.mean(paired['neutral'][1], axis=0)))
             offset = float(np.degrees(Rotation.from_matrix(basis @ prior_basis.T).magnitude()))
             if offset > 45:
-                notes.append(f"候选映射与现有映射相差{offset:.1f}°，须人工检查轴向转动")
+                review_reasons.append(f"候选映射与现有映射相差{offset:.1f}°，须人工检查轴向转动")
             candidate = {'format': FORMAT, 'method': 'visual_bone_v1', 'session': str(session),
                          'part': part, 'device_id': device, 'reference_epoch': epoch,
                          'attitude_mode': GYRO_TILT, 'basis_matrix': basis.tolist(),
                          'neutral_matrix': r0.tolist(),
                          'neutral_matrices_by_mode': {mode: r.tolist() for mode, r in
                                                      neutral_matrices_by_mode(sample_rows['neutral']).items()},
-                         'status': '通过' if not warnings else '需重录', 'warnings': warnings,
+                         'status': FAIL if hard_failures else REVIEW if review_reasons else PASS,
+                         'warnings': hard_failures, 'hard_failures': hard_failures,
+                         'core_passed': not warnings, 'review_reasons': review_reasons,
+                         'acceptance_revision': 2,
                          'notes': notes, 'Q_camera_from_imu_world': q.tolist(),
                          'up_world': up_w.tolist(), 'bone_axis_sensor': bone.tolist(),
                          'L_neutral_normalization': normalization.tolist(),
@@ -286,8 +438,7 @@ def analyze_wearing(session: Path):
                          'neutral_tilt_deg': angle_deg(visual_n0, DOWN),
                          'bone_axis_difference_deg': angle_deg(assumed_bone, bone),
                          'mapping_offset_deg': offset, 'return_rotation_deg': return_angle,
-                         'torso_motion_p90_deg': torso_motion,
-                         'elbow_bend_p90_deg': elbow_bend,
+                         'posture_assessment': posture, 'elbow_windows': elbow_windows,
                          'fit_median_deg': fit.median_error_deg, 'fit_p90_deg': fit.p90_error_deg,
                          'jacobian_singular_values': fit.jacobian_singular_values.tolist(),
                          'checks': checks, 'gravity_initialization': bootstrap,
@@ -300,7 +451,7 @@ def analyze_wearing(session: Path):
     return report
 
 
-def apply_wearing_report(engine, report, camera_epoch, parts):
+def apply_wearing_report(engine, report, camera_epoch, parts, *, review_acknowledged=False):
     """Validate everything before writing. Does not enable visual feedback."""
     if report.get('format') != FORMAT or camera_epoch is None or report.get('camera_epoch') != camera_epoch:
         raise ValueError("相机采集会话已变化或标定格式不匹配")
@@ -308,8 +459,10 @@ def apply_wearing_report(engine, report, camera_epoch, parts):
     for part in parts:
         result = report['parts'].get(part, {})
         device = result.get('device_id')
-        if part not in SEGMENTS or result.get('status') != '通过':
-            raise ValueError("只能应用合格的右臂部位结果")
+        if part not in ARM_SEGMENTS or result.get('status') not in (PASS, REVIEW) or result.get('hard_failures'):
+            raise ValueError("只能应用合格的双臂部位结果")
+        if needs_review(result) and not review_acknowledged:
+            raise ValueError('存在需人工复核结果，请先查看回放并明确确认')
         if not result.get('reference_epoch') or engine.assignments.get(part) != device or engine.epochs.get(device) != result.get('reference_epoch'):
             raise ValueError("设备绑定或积分参考系已变化，请重录")
         if engine.algorithm_modes[part] != GYRO_TILT or not engine.is_live(device, max_age=2):

@@ -4,7 +4,7 @@ import time
 import numpy as np
 from scipy.spatial.transform import Rotation,Slerp
 from .pose import GYRO_TILT,GYRO_RGBD
-from .rgbd_fusion import HeadingCorrector,visual_direction,unit,angle_deg
+from .rgbd_fusion import ARM_SEGMENTS,HeadingCorrector,visual_direction,unit,angle_deg
 
 
 class LiveRGBDFusion:
@@ -12,6 +12,16 @@ class LiveRGBDFusion:
         self.engine=engine;self.history={};self.bindings={};self.states={};self.last_stamp={}
         self.gravity_history={}
         self.events=deque()
+        self.max_offset_deg=30.
+
+    def set_max_offset(self,degrees):
+        # Validate ALL parts before changing any limit. Never clamp a pose.
+        HeadingCorrector([0,0,1],max_offset_deg=degrees)
+        if degrees is not None and any(abs(c.offset_rad)>np.radians(degrees)+1e-12 for _,c in self.bindings.values()):
+            raise ValueError('有部位的累计修正已超过新范围，不能缩小；请保持原范围或在重标定后设置')
+        for _,corrector in self.bindings.values():corrector.set_max_offset(degrees)
+        self.max_offset_deg=None if degrees is None else float(degrees)
+        self.events.append({'time_ns':time.monotonic_ns(),'type':'heading_limit_changed','max_offset_deg':self.max_offset_deg})
 
     def feed(self,device,stamp):
         base=self.engine.current_for(device,GYRO_TILT)
@@ -67,20 +77,26 @@ class LiveRGBDFusion:
         if report.get('orientation_source')!='live_runtime_pose':raise ValueError('旧离线标定没有实时参考系，需重新引导录制')
         proposed={}
         for part,data in report['parts'].items():
-            if part not in ('right_upper_arm','right_forearm') or not data.get('accepted'):continue
+            if part not in ARM_SEGMENTS or not data.get('accepted'):continue
             device=data['device_id'];epoch=data.get('reference_epoch')
+            if any(entry[0]['device_id']==device for entry in proposed.values()):raise ValueError('多个部位不能使用同一设备进行纠偏')
             if self.engine.assignments.get(part)!=device or self.engine.epochs.get(device)!=epoch:raise ValueError('设备绑定/积分参考系已变化，请重新标定')
             if self.engine.algorithm_modes[part]==GYRO_RGBD:raise ValueError('请先切回陀螺＋加计，再应用新标定')
             up=unit(data['up_world']);estimator=self.engine._tilt_filters.get(device)
             if estimator is None:raise ValueError('没有实时积分器')
             if estimator.neutral_up is not None and angle_deg(up,estimator.neutral_up)>5:raise ValueError('实时重力参考与标定不一致')
             q=np.asarray(data['Q_camera_from_imu_world'],float)
-            if not np.isfinite(q).all() or not np.allclose(q.T@q,np.eye(3),atol=1e-6) or np.linalg.det(q)<.99:raise ValueError('标定Q无效')
+            if q.shape!=(3,3) or not np.isfinite(q).all() or not np.allclose(q.T@q,np.eye(3),atol=1e-6) or np.linalg.det(q)<.99:raise ValueError('标定Q无效')
             if angle_deg(q@up,report['camera_up'])>.5:raise ValueError('Q没有对齐两系重力，拒绝改变倾斜')
             bone=np.asarray(data['bone_axis_sensor'],float)
             if bone.shape!=(3,) or not np.isfinite(bone).all() or not np.isclose(np.linalg.norm(bone),1,atol=1e-5):raise ValueError('标定骨轴无效')
-            proposed[part]=(data,HeadingCorrector(report['camera_up'],min_innovation_deg=1.))
+            proposed[part]=(data,HeadingCorrector(report['camera_up'],min_innovation_deg=1.,max_offset_deg=self.max_offset_deg))
         if not proposed:raise ValueError('没有通过的部位标定')
+        for part,data in report['parts'].items():
+            if part in ARM_SEGMENTS and not data.get('accepted') and part in self.bindings:
+                old_device=self.bindings[part][0]['device_id']
+                self.engine.fusion_ready.discard(old_device)
+                self.states[part]={'reason':'本轮标定未通过，原纠偏已停用','offset_deg':0.}
         for part,(data,corrector) in proposed.items():
             device=data['device_id'];estimator=self.engine._tilt_filters[device]
             if estimator.neutral_up is None:estimator.neutral_up=unit(data['up_world'])
@@ -89,7 +105,7 @@ class LiveRGBDFusion:
             neutral=self.engine.neutral_for(device,GYRO_TILT)
             if neutral is not None:self.engine.set_neutral_for_mode(device,GYRO_RGBD,neutral)
             self.states[part]={'reason':'已应用，待选择融合算法','offset_deg':0.}
-        self.events.append({'time_ns':time.monotonic_ns(),'type':'install','report':report})
+        self.events.append({'time_ns':time.monotonic_ns(),'type':'install','report':report,'max_offset_deg':self.max_offset_deg})
 
     def at(self,device,stamp):
         rows=self.history.get(device,())
@@ -119,7 +135,8 @@ class LiveRGBDFusion:
                     predicted=q@base@np.asarray(data['bone_axis_sensor'])
                     applied,reason,innovation=corrector.update(stamp/1e9,predicted,direction)
                     if applied:self.engine.set_fusion_correction(device,q.T@corrector.rotation()@q)
-            state={'reason':reason,'offset_deg':float(np.degrees(corrector.offset_rad)), 'innovation_deg':innovation,'applied':applied,'age_ms':(now-stamp)/1e6}
+            state={'reason':reason,'offset_deg':float(np.degrees(corrector.offset_rad)), 'innovation_deg':innovation,'applied':applied,'age_ms':(now-stamp)/1e6,
+                   'max_offset_deg':self.max_offset_deg,'limit_status':corrector.limit_status()}
             self.states[part]=state
             self.events.append({'time_ns':now,'type':'observation','source_ns':stamp,'part':part,**state})
 

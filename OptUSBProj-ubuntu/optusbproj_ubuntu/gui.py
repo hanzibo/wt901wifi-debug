@@ -257,7 +257,7 @@ class BodyWindow(QtWidgets.QMainWindow):
             algorithm = QtWidgets.QComboBox()
             algorithm.addItem("厂商 R/P/Y", VENDOR_RPY)
             algorithm.addItem("陀螺＋加计", GYRO_TILT)
-            if part.key in ('right_upper_arm','right_forearm'):
+            if part.key in ('left_upper_arm','left_forearm','right_upper_arm','right_forearm'):
                 algorithm.addItem("陀螺＋加计＋RGB-D（需相机标定）",GYRO_RGBD)
             algorithm.setCurrentIndex(algorithm.findData(self.engine.algorithm_modes[part.key]))
             algorithm.setToolTip("仅切换本部位软件姿态估计；不改变设备的 6/9 轴寄存器设置")

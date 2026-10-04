@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare raw visual surface points, pure six-axis and offline fused right arm."""
+"""Compare RGB-D, pure IMU and fused single/bilateral arm directions."""
 import argparse
 from dataclasses import replace
 import json
@@ -11,6 +11,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from optusbproj_ubuntu.rgbd_pose import RGBDPoseEstimate
 from optusbproj_ubuntu.rgbd_pose_gui import MetricSkeletonWidget
 from optusbproj_ubuntu.camera_preview import CameraPreview
+from optusbproj_ubuntu.rgbd_fusion import ARM_SEGMENTS
 
 
 class SharedViewCanvas(MetricSkeletonWidget):
@@ -29,11 +30,12 @@ class ComparisonWindow(QtWidgets.QWidget):
     def __init__(self, analysis):
         super().__init__()
         self.report=json.loads((analysis/'report.json').read_text())
-        self.rows=[json.loads(l) for l in (analysis/'comparison.jsonl').open()]
+        self.rows=[json.loads(l) for l in (analysis/'comparison.jsonl').read_text().splitlines()]
         if not self.rows:
             raise ValueError('没有回放帧')
         self.source=Path(self.report['source_session'])
-        self.setWindowTitle('右臂离线对比 · RGB-D / 纯IMU / 航向融合（非实时控制）')
+        self.parts=[p for p in ARM_SEGMENTS if p in self.report['parts']]
+        self.setWindowTitle('手臂离线对比 · RGB-D / 纯IMU / 航向融合（非实时控制）')
         self.resize(1200,850)
         layout=QtWidgets.QVBoxLayout(self)
         note=QtWidgets.QLabel('左：相机表面点；中：纯陀螺＋加计；右：同一IMU＋视觉低频航向纠偏。三图使用相同视角/比例。IMU图肩点来自相机，骨长固定为标定中值；不是STL模型或机器人轨迹。前段标定，后段才融合。')
@@ -42,13 +44,15 @@ class ComparisonWindow(QtWidgets.QWidget):
         self.image.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,QtWidgets.QSizePolicy.Policy.Fixed)
         layout.addWidget(self.image)
         panels=QtWidgets.QHBoxLayout();self.canvases=[]
-        shoulder_points=[r['vision']['points_camera_m'][1] for r in self.rows if r['vision']['valid'][1]]
+        shoulder_indices=sorted({0 if p.startswith('left_') else 1 for p in self.parts})
+        self.shoulder_indices=shoulder_indices
+        shoulder_points=[r['vision']['points_camera_m'][i] for r in self.rows for i in shoulder_indices if r['vision']['valid'][i]]
         center=np.nanmedian(np.array(shoulder_points,float),axis=0)+np.array([0,.15,0])
         for title in ('RGB-D原始表面观测（并非真值）','纯IMU（固定方向标定）','IMU＋视觉低频航向纠偏'):
             column=QtWidgets.QVBoxLayout()
             heading=QtWidgets.QLabel(title);heading.setFixedHeight(24);column.addWidget(heading)
-            canvas=SharedViewCanvas();canvas.view_center=center;canvas.view_span=.75
-            canvas.title_text='右臂 · 拖动旋转 / 滚轮缩放'
+            canvas=SharedViewCanvas();canvas.view_center=center;canvas.view_span=1.25 if len(shoulder_indices)>1 else .75
+            canvas.title_text='手臂 · 拖动旋转 / 滚轮缩放'
             canvas.view_changed.connect(self.sync_view)
             column.addWidget(canvas,1);panels.addLayout(column);self.canvases.append(canvas)
         layout.addLayout(panels,1)
@@ -84,19 +88,20 @@ class ComparisonWindow(QtWidgets.QWidget):
         row=self.rows[index]
         self.image.display_image(QtGui.QImage(str(self.source/row['frame'])))
         visual=RGBDPoseEstimate.from_record(row['vision'])
-        only_right=np.zeros(8,bool);only_right[[1,3,5]]=visual.valid[[1,3,5]]
-        visual=replace(visual,valid=only_right)
+        indices=sorted({i for p in self.parts for i in ARM_SEGMENTS[p]})
+        selected=np.zeros(8,bool);selected[indices]=visual.valid[indices]
+        visual=replace(visual,valid=selected)
         self.canvases[0].estimate=visual
-        shoulder=visual.points_camera_m[1]
         for mode,canvas in zip(('pure','fused'),self.canvases[1:]):
             xyz=np.full((8,3),np.nan);valid=np.zeros(8,bool)
-            if visual.valid[1]:
-                xyz[1]=shoulder;valid[1]=True
-                for part,a,b in [('right_upper_arm',1,3),('right_forearm',3,5)]:
-                    info=self.report['parts'].get(part,{})
-                    direction=row['parts'].get(part,{}).get('direction_'+mode)
-                    if valid[a] and direction is not None:
-                        xyz[b]=xyz[a]+np.asarray(direction)*info['bone_length_m'];valid[b]=True
+            for i in self.shoulder_indices:
+                if visual.valid[i]:xyz[i]=visual.points_camera_m[i];valid[i]=True
+            for part in self.parts:
+                a,b=ARM_SEGMENTS[part]
+                info=self.report['parts'].get(part,{})
+                direction=row['parts'].get(part,{}).get('direction_'+mode)
+                if valid[a] and direction is not None:
+                    xyz[b]=xyz[a]+np.asarray(direction)*info['bone_length_m'];valid[b]=True
             canvas.estimate=replace(visual,points_camera_m=xyz,valid=valid)
         for canvas in self.canvases:canvas.update()
         states=[f"{part}: {value.get('offset_deg',0):+.2f}° · {value['reason']}" for part,value in row['parts'].items()]

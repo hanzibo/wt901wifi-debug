@@ -10,7 +10,7 @@ from optusbproj_ubuntu.visual_wearing import analyze_wearing
 
 
 def main():
-    parser = argparse.ArgumentParser(description='右臂视觉辅助穿戴标定（只读原录制）')
+    parser = argparse.ArgumentParser(description='双臂/单臂视觉辅助穿戴标定（只读原录制）')
     parser.add_argument('session', type=Path)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()

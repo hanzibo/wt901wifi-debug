@@ -1,4 +1,6 @@
-# 右臂 RGB-D＋六轴 IMU 离线航向实验
+# 单臂 / 双臂 RGB-D＋六轴 IMU 离线航向实验
+
+新增左臂与双臂范围：GUI选择后按同一轮动作独立拟合各段；分析与三路回放展示实际参与的手臂。CLI可用 `--parts left_upper_arm left_forearm right_upper_arm right_forearm` 指定四部位；未指定则读取 `camera_guide.json` 的参与部位或设备列表，无引导元数据时保持原右臂默认。本文较早的数值实验仍为右臂数据，并非双臂实测。
 
 这是独立实验，不改写录制、手动轴映射、穿戴标定、实时人体模型或 X1 配置。当前只修正上臂/前臂的重力轴航向，不推断手掌朝向、不修正骨段长轴扭转。没有新增依赖，使用 OptUSBProj-fusion 中已有 NumPy、SciPy、PySide6。
 

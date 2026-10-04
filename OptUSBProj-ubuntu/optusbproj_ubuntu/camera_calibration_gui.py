@@ -7,10 +7,17 @@ import uuid
 
 from PySide6 import QtCore, QtWidgets
 
+CAPTURE_SCOPES = {
+    'right': ('right_upper_arm', 'right_forearm'),
+    'left': ('left_upper_arm', 'left_forearm'),
+    'bilateral': ('left_upper_arm', 'left_forearm', 'right_upper_arm', 'right_forearm'),
+}
+PART_LABELS = {'left_upper_arm':'左上臂','left_forearm':'左前臂',
+               'right_upper_arm':'右上臂','right_forearm':'右前臂'}
 
-def calibration_steps(preparation, hold, neutral, validation):
+def calibration_steps(preparation, hold, neutral, validation, scope='right'):
     """Label actual phases; individual analyzers choose their training windows."""
-    return [
+    steps = [
         ('neutral','中立位','站直、面向相机，右臂自然下垂；肩髋完整入镜。',preparation,neutral),
         ('forward','右臂前平举','肘伸直，右臂向正前方抬到水平；躯干不动。',preparation,hold),
         ('down','放下右臂','右臂缓慢放下，回到自然下垂。',preparation,hold),
@@ -21,21 +28,39 @@ def calibration_steps(preparation, hold, neutral, validation):
         ('validation','独立验证','重复前举、侧举、屈肘、轻微转身；水平/斜向姿态停留2–3秒。',0,validation),
         ('tail','结束保护','动作已完成，请保持静止，等待自动结束。末尾3秒会剔除。',0,4),
     ]
+    arm = {'right': '右臂', 'left': '左臂', 'bilateral': '双臂'}[scope]
+    result = [(key, title.replace('右臂', arm), instruction.replace('右臂', arm), prep, duration)
+              for key, title, instruction, prep, duration in steps]
+    if scope != 'right':
+        side = '同时向左右两侧' if scope == 'bilateral' else '向左侧'
+        result = [(key, title, instruction.replace('向右侧', side), prep, duration)
+                  for key, title, instruction, prep, duration in result]
+    return result
 
 
 class CameraCalibrationDialog(QtWidgets.QDialog):
     def __init__(self, owner):
         super().__init__(owner,QtCore.Qt.WindowType.Window)
         self.owner=owner
-        self.setWindowTitle('相机标定 · 右臂联合录制引导')
-        self.resize(760,650)
+        self.setWindowTitle('相机标定 · 双臂 / 单臂航向纠偏')
+        self.resize(820,760)
         self.state='idle';self.recording_path=None;self.analysis_path=None
         self.steps=[];self.events=[];self.index=0;self.deadline=0.;self.started_ns=None
         self.devices={};self.process=None;self.log=''
         self.gravity_reference={};self.reference_epochs={}
         layout=QtWidgets.QVBoxLayout(self)
-        note=QtWidgets.QLabel('相机移动或设备重新穿戴后重新执行。当前仅标定右上臂＋右前臂到相机的骨段方向；无需先标定STL轴映射。固定相机和绑带，不发送设备清零指令，不覆盖人体/机器人配置。')
+        note=QtWidgets.QLabel('支持左右上臂/前臂，同一轮双臂动作独立拟合四份相机标定。相机移动或重新穿戴后重做；固定相机和绑带，不发送设备清零指令，不覆盖穿戴轴映射，也不自动启动机器人。')
         note.setWordWrap(True);layout.addWidget(note)
+        scope_row=QtWidgets.QHBoxLayout();scope_row.addWidget(QtWidgets.QLabel('录制范围'))
+        self.scope_combo=QtWidgets.QComboBox()
+        for text,value in (('双臂联合 · 四部位','bilateral'),('仅右臂 · 两部位','right'),('仅左臂 · 两部位','left')):
+            self.scope_combo.addItem(text,value)
+        assigned=owner.engine.assignments
+        initial='bilateral' if all(assigned.get(p) for p in CAPTURE_SCOPES['bilateral']) else (
+            'left' if all(assigned.get(p) for p in CAPTURE_SCOPES['left']) and
+            not all(assigned.get(p) for p in CAPTURE_SCOPES['right']) else 'right')
+        self.scope_combo.setCurrentIndex(self.scope_combo.findData(initial))
+        scope_row.addWidget(self.scope_combo);layout.addLayout(scope_row)
         form=QtWidgets.QFormLayout();self.spins=[]
         self.delay=self.spin(form,'开始前倒计时',0,120,10)
         self.preparation=self.spin(form,'每个动作准备时间',2,30,4)
@@ -62,6 +87,7 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
         self.replay=QtWidgets.QPushButton('打开三路离线对比');self.replay.setEnabled(False);self.replay.clicked.connect(self.open_replay);layout.addWidget(self.replay)
         self.apply=QtWidgets.QPushButton('应用相机标定到本次实时会话');self.apply.setEnabled(False);self.apply.clicked.connect(self.apply_live);layout.addWidget(self.apply)
         self.timer=QtCore.QTimer(self);self.timer.setInterval(100);self.timer.timeout.connect(self.tick)
+        self.scope_combo.currentIndexChanged.connect(self.update_plan)
         self.update_plan()
 
     @property
@@ -73,9 +99,22 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
         form.addRow(label,spin);self.spins.append(spin);return spin
 
     def update_plan(self):
-        steps=calibration_steps(self.preparation.value(),self.hold.value(),self.neutral.value(),self.validation.value())
+        steps=self.capture_steps()
         total=sum(s[3]+s[4] for s in steps)
         self.plan.setText(f'流程：中立 → 前举 → 放下 → 侧举 → 再前举 → 再侧举 → 中立 → 独立验证 → 结束保护。录制约 {total} 秒，另有开始前 {self.delay.value()} 秒倒计时。')
+        if hasattr(self,'instruction') and self.state=='idle':
+            arm={'right':'右臂','left':'左臂','bilateral':'双臂'}[self.scope_combo.currentData()]
+            self.instruction.setText(f'先启动 Gemini 和三维观测，确认{arm}上臂、前臂设备在线且均选择陀螺＋加计。')
+
+    def capture_parts(self):
+        return CAPTURE_SCOPES[self.scope_combo.currentData()]
+
+    def capture_steps(self):
+        return calibration_steps(self.preparation.value(),self.hold.value(),self.neutral.value(),self.validation.value(),self.scope_combo.currentData())
+
+    def guide_extra(self):
+        return {'workflow':'camera_heading_calibration','capture_scope':self.capture_scope,
+                'participants':list(self.devices)}
 
     def readiness_error(self):
         o=self.owner
@@ -86,14 +125,20 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
         if o.session is not None or o._record_start_deadline is not None:return '已有录制/预约，请先结束或取消。'
         if o.last_rgbd_observation is None or time.monotonic_ns()-o.last_rgbd_observation.captured_mono_ns>1e9:return '相机尚未就绪或帧已过期。'
         if not o.rgbd_pose_enabled.isChecked() or o.last_pose_estimate is None or time.monotonic_ns()-o.last_pose_estimate.captured_mono_ns>1e9:return '请开启三维观测并等待模型就绪。'
-        for part in ('right_upper_arm','right_forearm'):
+        for part in self.capture_parts():
             device=o.engine.assignments.get(part)
             if not device or not o.engine.is_live(device,max_age=1):return f'{part} 未分配在线设备；请检查电源、热点和部位分配。'
+            modes=getattr(o.engine,'algorithm_modes',{})
+            if modes and modes.get(part)!='gyro_tilt':return f'{part} 请先选择“陀螺＋加计”，不要用视觉纠偏流拟合。'
+        if len({o.engine.assignments[p] for p in self.capture_parts()})!=len(self.capture_parts()):return '参与部位须使用不同设备。'
+        robot=getattr(o,'x1_preview_dialog',None)
+        if robot is not None and robot.sender is not None:return '请先停止X1随动，再执行相机标定。'
         return None
 
     def set_controls(self,running):
         for spin in self.spins:spin.setEnabled(not running)
         self.auto_analyze.setEnabled(not running)
+        self.scope_combo.setEnabled(not running)
         self.start.setEnabled(not running);self.cancel.setEnabled(running)
         for button in (self.owner.session_button,self.owner.timed_session_button,self.owner.cancel_session_button):
             button.setEnabled(not running and not self.owner.replay_mode)
@@ -102,10 +147,15 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
     def begin(self):
         error=self.readiness_error()
         if error:self.status.setText(error);return
-        self.devices={k:self.owner.engine.assignments[k] for k in ('right_upper_arm','right_forearm')}
+        self.devices={k:self.owner.engine.assignments[k] for k in self.capture_parts()}
+        self.capture_scope=self.scope_combo.currentData()
         self.reference_epochs={d:getattr(self.owner.engine,'epochs',{}).get(d) for d in self.devices.values()}
+        self.capture_camera_epoch=getattr(getattr(self.owner,'camera_worker',None),'capture_epoch',None)
+        self.capture_vision_epoch=getattr(self.owner,'vision_epoch',None)
+        self.capture_vision_config=getattr(self.owner,'vision_metadata',None)
+        self.capture_heading_limit=getattr(getattr(self.owner,'live_fusion',None),'max_offset_deg',30.)
         self.gravity_reference={}
-        self.steps=calibration_steps(self.preparation.value(),self.hold.value(),self.neutral.value(),self.validation.value())
+        self.steps=self.capture_steps()
         self.events=[];self.recording_path=None;self.analysis_path=None;self.started_ns=None;self.index=0
         self.progress.setRange(0,len(self.steps));self.progress.setValue(0)
         self.analyze.setEnabled(False);self.replay.setEnabled(False)
@@ -114,10 +164,14 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
         self.set_controls(True);self.timer.start();self.tick()
 
     def monitor_error(self):
+        if self.capture_camera_epoch is not None and getattr(getattr(self.owner,'camera_worker',None),'capture_epoch',None)!=self.capture_camera_epoch:return '相机采集会话变化，请重新标定。'
+        if self.capture_vision_epoch is not None and getattr(self.owner,'vision_epoch',None)!=self.capture_vision_epoch:return '二维模型会话变化，请重新标定。'
         for part,device in self.devices.items():
             if self.owner.engine.assignments.get(part)!=device:return '设备分配发生变化，本轮无效。'
             if getattr(self.owner.engine,'epochs',{}).get(device)!=self.reference_epochs.get(device):return f'{device} 积分参考系发生变化，请重录。'
             if not self.owner.engine.is_live(device,max_age=2):return f'{device} 超过2秒没有数据，本轮已停止。'
+            modes=getattr(self.owner.engine,'algorithm_modes',{})
+            if modes and modes.get(part)!='gyro_tilt':return f'{part} 姿态算法变化，请重录。'
         if self.owner.last_rgbd_observation is None or time.monotonic_ns()-self.owner.last_rgbd_observation.captured_mono_ns>2e9:return 'RGB-D 数据中断，本轮已停止。'
         if not self.owner.rgbd_pose_enabled.isChecked():return '三维观测已关闭，本轮已停止。'
         if self.owner.last_pose_estimate is None or time.monotonic_ns()-self.owner.last_pose_estimate.captured_mono_ns>3e9:return '三维推理结果超过3秒未更新，本轮已停止。'
@@ -177,8 +231,11 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
         payload={'format':'rgbd-guided-camera-calibration-v1','status':status,'reason':reason,
                  'devices':self.devices,'events':self.events,'recording_started_mono_ns':self.started_ns,
                  'gravity_reference':self.gravity_reference,
+                 'vision_epoch':getattr(self,'capture_vision_epoch',None),'vision_config':getattr(self,'capture_vision_config',None),
+                 'heading_max_offset_deg':getattr(self,'capture_heading_limit',30.),
                  'settings':{'delay_s':self.delay.value(),'preparation_s':self.preparation.value(),'hold_s':self.hold.value(),'neutral_s':self.neutral.value(),'validation_s':self.validation.value()},
                  'note':'actual host monotonic phase times; prepare phases not static samples; no live mapping writes'}
+        payload.update(self.guide_extra())
         try:
             (self.recording_path/'camera_guide.json').write_text(json.dumps(payload,ensure_ascii=False,indent=2))
         except OSError as exc:
@@ -226,10 +283,12 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
         self.process.finished.connect(self.analysis_finished)
         self.process.errorOccurred.connect(self.analysis_error)
         self.process.setProgram(sys.executable)
-        self.process.setArguments(['-u',str(script),str(self.recording_path),'--output',str(self.analysis_path),'--neutral',f'{neutral[0]:.6f}:{neutral[1]:.6f}','--train',f'{train[0]:.6f}:{train[1]:.6f}'])
+        self.process.setArguments(['-u',str(script),str(self.recording_path),'--output',str(self.analysis_path),'--parts',*self.devices,'--neutral',f'{neutral[0]:.6f}:{neutral[1]:.6f}','--train',f'{train[0]:.6f}:{train[1]:.6f}'])
+        limit=getattr(self,'capture_heading_limit',30.)
+        self.process.setArguments(self.process.arguments()+(['--unlimited-offset'] if limit is None else ['--max-offset-deg',str(limit)]))
         if (self.recording_path/'runtime_pose.jsonl').is_file() and (self.recording_path/'runtime_pose.jsonl').stat().st_size:
             self.process.setArguments(self.process.arguments()+['--live-state'])
-        self.state='analyzing';self.start.setEnabled(False);self.analyze.setEnabled(False);self.log=''
+        self.state='analyzing';self.start.setEnabled(False);self.scope_combo.setEnabled(False);self.analyze.setEnabled(False);self.log=''
         self.status.setText('正在按实际时间窗计算离线标定；不会改动实时映射。');self.process.start()
 
     def read_log(self):
@@ -237,30 +296,30 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
 
     def analysis_error(self,error):
         if error==QtCore.QProcess.ProcessError.FailedToStart:
-            self.state='complete';self.start.setEnabled(True);self.analyze.setEnabled(True);self.status.setText('分析进程启动失败：'+self.process.errorString())
+            self.state='complete';self.start.setEnabled(True);self.scope_combo.setEnabled(True);self.analyze.setEnabled(True);self.status.setText('分析进程启动失败：'+self.process.errorString())
 
     def analysis_finished(self,code,_status):
-        self.read_log();self.state='complete';self.start.setEnabled(True);self.analyze.setEnabled(True)
+        self.read_log();self.state='complete';self.start.setEnabled(True);self.scope_combo.setEnabled(True);self.analyze.setEnabled(True)
         report_path=self.analysis_path/'report.json'
         if code!=0 or not report_path.is_file():self.status.setText('离线分析失败，原始录制保留。\n'+self.log[-1500:]);return
         report=json.loads(report_path.read_text());parts=report['parts']
         self.apply.setEnabled(report.get('orientation_source')=='live_runtime_pose' and any(p.get('accepted') for p in parts.values()))
-        messages=[f'{part}：'+('标定通过' if p.get('accepted') else '需重录 / '+p.get('reason','方向拟合未通过')) for part,p in parts.items()]
-        self.status.setText('；'.join(messages)+f'\n分析目录：{self.analysis_path}\n通过仅代表方向标定可用，并不保证融合优于纯IMU。')
+        messages=[f'{PART_LABELS.get(part,part)}：'+('标定通过' if p.get('accepted') else '需重录 / '+p.get('reason','方向拟合未通过')) for part,p in parts.items()]
+        self.status.setText('\n'.join(messages)+f'\n分析目录：{self.analysis_path}\n通过仅代表方向标定可用，并不保证融合优于纯IMU。')
         self.replay.setEnabled(True)
 
     def apply_live(self):
         try:report=json.loads((self.analysis_path/'report.json').read_text())
         except (OSError,ValueError) as exc:
             QtWidgets.QMessageBox.warning(self,'标定未应用','无法读取标定结果：'+str(exc));return
-        answer=QtWidgets.QMessageBox.question(self,'确认应用','请先停止机器人随动并保持安全姿态。应用只绑定本次参考系，不修改轴映射，也不自动切换算法。之后可先在人体模型中选择右臂“陀螺＋加计＋RGB-D”验证。是否应用？')
+        answer=QtWidgets.QMessageBox.question(self,'确认应用','请先停止机器人随动并保持安全姿态。仅应用本轮通过的部位，未通过部位不启用；不修改穿戴轴映射，不自动切换算法。之后逐部位选择“陀螺＋加计＋RGB-D”验证。是否应用？')
         if answer!=QtWidgets.QMessageBox.StandardButton.Yes:return
         try:self.owner.apply_camera_report(report)
         except ValueError as exc:
             self.status.setText('未应用：'+str(exc))
             QtWidgets.QMessageBox.warning(self,'标定未应用',str(exc)+'\n没有启用融合模式。')
             return
-        self.status.setText('已应用到本次会话。请先在人体现有算法下确认中立位，再选择右上臂/前臂RGB-D融合模式；应用不会自动启用机器人。')
+        self.status.setText('已应用本次合格部位。请先确认人体中立位，再分别选择左右上臂/前臂RGB-D融合模式；未通过部位保持原算法，不自动启用机器人。')
         self.apply.setEnabled(False)
         QtWidgets.QMessageBox.information(self,'标定已应用','已应用到本次实时参考系。现在可以选择已通过部位的RGB-D融合模式；未自动启动机器人。')
 

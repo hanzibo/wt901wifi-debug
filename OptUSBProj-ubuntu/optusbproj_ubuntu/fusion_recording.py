@@ -87,6 +87,8 @@ class FusionSessionRecorder:
         self.runtime_file = (self.path/'runtime_pose.jsonl').open('w',encoding='utf-8')
         self.continuous_basis_at_start = {}
         self.camera_epoch=None
+        self.vision_config=None;self.vision_epoch=None
+        self.heading_max_offset_deg=30.
         self.fusion_at_start={}
         self._closed = False
         self._queue: Queue[tuple[int, CameraObservation] | tuple[str, dict] | None] = Queue(
@@ -261,6 +263,8 @@ class FusionSessionRecorder:
             "continuous_basis_at_start":self.continuous_basis_at_start,
             "runtime_pose_records":self.runtime_count,
             "camera_epoch":self.camera_epoch,
+            "vision_config":self.vision_config,"vision_epoch":self.vision_epoch,
+            "heading_max_offset_deg":self.heading_max_offset_deg,
             "fusion_at_start":self.fusion_at_start,
             "rgbd_frames": self.rgbd_count,
             "camera_bridge_skipped": self.camera_bridge_skipped,
