@@ -15,6 +15,7 @@ from .camera_preview import CameraPreview, CameraPreviewWindow
 from .camera_calibration_gui import CameraCalibrationDialog
 from .orbbec_worker import OrbbecWorker, DEFAULT_PYTHON
 from .rgbd_pose_worker import RGBDPoseWorker
+from .pose_2d import Pose2DConfig,DEFAULT_YOLO
 from .rgbd_pose_gui import RGBDPoseDialog, draw_pose_rgb
 from .fusion_capture import CameraObservation
 from .fusion_recording import FusionSessionRecorder
@@ -31,7 +32,8 @@ class FusionWindow(BodyWindow):
                  *, camera_index: int = 0, backend: str = "rtmw3d",
                  camera_source: str = "webcam", orbbec_python: Path = DEFAULT_PYTHON,
                  rgbd_fps: float = 10., rgbd_warmup: float = 2.,
-                 rgbd_pose: bool = False,
+                 rgbd_pose: bool = False, pose_backend: str = 'rtmw',
+                 yolo_model: Path = DEFAULT_YOLO, pose_imgsz: int = 640,
                  algorithm_modes: dict[str, str] | None = None,
                  model_path: Path | None = None,
                  calibration_candidates: list[dict] | None = None,
@@ -49,10 +51,22 @@ class FusionWindow(BodyWindow):
         self.rgbd_fps, self.rgbd_warmup = rgbd_fps, rgbd_warmup
         self.last_rgbd_observation = None
         self.pose_worker = None
+        import uuid
+        self.vision_config=Pose2DConfig(pose_backend,Path(yolo_model),pose_imgsz)
+        self.vision_metadata=self.vision_config.metadata()
+        self.vision_epoch=uuid.uuid4().hex
+        self._vision_changed=False
+        if isinstance(source,FusionSessionReplay) and source.manifest.get('vision_config'):
+            saved=source.manifest['vision_config']
+            model=Path(saved['weights'][0]['path']) if saved['backend']=='yolo26' else Path(yolo_model)
+            self.vision_config=Pose2DConfig(saved['backend'],model,saved.get('imgsz') or 640)
+            self.vision_metadata=saved;self.vision_epoch=source.manifest.get('vision_epoch')
         self.pose_dialog = None
         self.camera_calibration_dialog = None
         self._heading_calibration_dialog = None
         self._visual_wearing_dialog = None
+        self._reuse_calibration_dialog = None
+        self._combined_calibration_dialog = None
         self.live_fusion = LiveRGBDFusion(self.engine)
         self._fusion_events_file = None
         self._live_camera_epoch = None
@@ -156,7 +170,7 @@ class FusionWindow(BodyWindow):
         self.depth_preview = QtWidgets.QCheckBox("预览配准深度（伪彩色仅用于显示）")
         group_layout.addWidget(self.depth_preview)
         pose_row = QtWidgets.QHBoxLayout()
-        self.rgbd_pose_enabled = QtWidgets.QCheckBox("三维观测：RTMW二维＋真实深度（不纠偏）")
+        self.rgbd_pose_enabled = QtWidgets.QCheckBox("三维观测：二维关键点＋真实深度")
         self.rgbd_pose_enabled.setEnabled(camera_source == "orbbec" and not self.replay_mode)
         self.rgbd_pose_enabled.toggled.connect(self._set_rgbd_pose)
         pose_row.addWidget(self.rgbd_pose_enabled)
@@ -164,9 +178,46 @@ class FusionWindow(BodyWindow):
         self.pose_details.clicked.connect(self._show_pose_details)
         pose_row.addWidget(self.pose_details)
         group_layout.addLayout(pose_row)
+        model_row=QtWidgets.QHBoxLayout()
+        model_row.addWidget(QtWidgets.QLabel('二维模型'))
+        self.pose_backend_combo=QtWidgets.QComboBox()
+        self.pose_backend_combo.addItem('RTMW（现有）','rtmw');self.pose_backend_combo.addItem('YOLO26 Pose','yolo26')
+        self.pose_backend_combo.setCurrentIndex(self.pose_backend_combo.findData(self.vision_config.backend))
+        model_row.addWidget(self.pose_backend_combo)
+        self.pose_imgsz_combo=QtWidgets.QComboBox()
+        for size in (640,960):self.pose_imgsz_combo.addItem(f'{size} 像素',size)
+        self.pose_imgsz_combo.setCurrentIndex(self.pose_imgsz_combo.findData(self.vision_config.imgsz))
+        model_row.addWidget(self.pose_imgsz_combo)
+        self.pose_model_button=QtWidgets.QPushButton('YOLO权重…')
+        self.pose_model_button.setToolTip(str(yolo_model));model_row.addWidget(self.pose_model_button)
+        group_layout.addLayout(model_row)
+        self.pose_backend_combo.currentIndexChanged.connect(self._change_pose_config)
+        self.pose_imgsz_combo.currentIndexChanged.connect(self._change_pose_config)
+        self.pose_model_button.clicked.connect(self._choose_pose_model)
         self.pose_status = QtWidgets.QLabel("视觉观测关闭；原人体模型仍由 IMU 驱动")
         self.pose_status.setWordWrap(True)
+        self.pose_status.setMinimumHeight(52)
         group_layout.addWidget(self.pose_status)
+        self._sync_pose_controls()
+        limit_row=QtWidgets.QHBoxLayout()
+        limit_row.addWidget(QtWidgets.QLabel('累计纠偏范围 ±'))
+        self.heading_limit=QtWidgets.QSpinBox();self.heading_limit.setRange(5,90)
+        self.heading_limit.setSingleStep(5);self.heading_limit.setValue(30);self.heading_limit.setSuffix(' °')
+        self.heading_limit.setToolTip('四个臂段共用累计范围；默认±30°，可试±60°。创新门限30°和纠偏速率3°/s不变；更大范围可能追随错误视觉。仅本次运行有效。')
+        limit_row.addWidget(self.heading_limit)
+        self.heading_unlimited=QtWidgets.QCheckBox('不限累计角度（实验）')
+        self.heading_unlimited.setToolTip('只取消累计上限；创新门限30°、限速3°/s及观测质量检查保留。可能累计错误视觉修正。默认关闭，重启恢复±30°。')
+        self.heading_unlimited.toggled.connect(lambda checked:self.heading_limit.setEnabled(not checked and self._pose_change_error() is None))
+        limit_row.addWidget(self.heading_unlimited)
+        self.heading_limit_apply=QtWidgets.QPushButton('应用范围')
+        self.heading_limit_apply.clicked.connect(self._apply_heading_limit);limit_row.addWidget(self.heading_limit_apply)
+        group_layout.addLayout(limit_row)
+        if isinstance(source,FusionSessionReplay):
+            recorded_limit=source.manifest.get('heading_max_offset_deg',30)
+            self.heading_unlimited.setChecked(recorded_limit is None)
+            if recorded_limit is not None:self.heading_limit.setValue(round(recorded_limit))
+            self.live_fusion.set_max_offset(recorded_limit)
+        self._sync_pose_controls()
         self.camera_preview = CameraPreview()
         self.camera_preview.setMinimumWidth(240)
         self.camera_preview.setFixedHeight(120)
@@ -188,10 +239,18 @@ class FusionWindow(BodyWindow):
         self.camera_calibration_button.setEnabled(not self.replay_mode)
         self.camera_calibration_button.clicked.connect(self._show_camera_calibration)
         group_layout.addWidget(self.camera_calibration_button)
-        self.visual_wearing_button = QtWidgets.QPushButton("视觉辅助穿戴标定 · 右臂（实验）")
+        self.visual_wearing_button = QtWidgets.QPushButton("视觉辅助穿戴标定 · 双臂 / 单臂（实验）")
         self.visual_wearing_button.setEnabled(not self.replay_mode and camera_source == 'orbbec')
         self.visual_wearing_button.clicked.connect(self._show_visual_wearing)
         group_layout.addWidget(self.visual_wearing_button)
+        self.combined_calibration_button = QtWidgets.QPushButton('双臂一体标定 · 穿戴＋相机（一次动作）')
+        self.combined_calibration_button.setEnabled(not self.replay_mode and camera_source == 'orbbec')
+        self.combined_calibration_button.clicked.connect(self._show_combined_calibration)
+        group_layout.addWidget(self.combined_calibration_button)
+        self.reuse_calibration_button = QtWidgets.QPushButton('历史标定 · 保存 / 快速恢复')
+        self.reuse_calibration_button.setEnabled(not self.replay_mode and camera_source == 'orbbec')
+        self.reuse_calibration_button.clicked.connect(self._show_calibration_reuse)
+        group_layout.addWidget(self.reuse_calibration_button)
         self.freeze_fusion=QtWidgets.QCheckBox('冻结视觉纠偏（保留修正，继续IMU传播）')
         group_layout.addWidget(self.freeze_fusion)
         self.live_fusion_status=QtWidgets.QLabel('实时纠偏未标定；不影响当前算法')
@@ -310,8 +369,10 @@ class FusionWindow(BodyWindow):
             labels.addWidget(label, 1)
         container_layout.addLayout(labels)
         if self.visual_wearing_candidates:
-            failed = any(r.get('status') != '通过' for r in self.visual_wearing_candidates.values())
-            note = QtWidgets.QLabel(('候选含未通过结果，禁止实时应用。' if failed else '') +
+            failed = any(r.get('status') not in ('通过', '通过，但需人工复核') for r in self.visual_wearing_candidates.values())
+            review = any(r.get('status') == '通过，但需人工复核' for r in self.visual_wearing_candidates.values())
+            note = QtWidgets.QLabel(('候选含未通过结果，禁止实时应用。' if failed else
+                                    '候选需人工复核，不能仅凭方向误差认定轴向动作正确。' if review else '') +
                 '紫色箭头：RGB-D骨段方向，经中立归一化后显示；锚点取各模型关节。不是原始三维位置或GT；长轴扭转需另行检查。')
             note.setWordWrap(True)
             container_layout.addWidget(note)
@@ -335,10 +396,11 @@ class FusionWindow(BodyWindow):
         if getattr(self, "candidate_engine", None) is None:
             super()._render_pose()
             return
+        spacing = 1.0 if self.visual_wearing_candidates else .8
         for actors, axis_actors, engine, offset_y in (
-                (self.actors, self.axis_actors, self.engine, -0.8),
+                (self.actors, self.axis_actors, self.engine, -spacing),
                 (self.candidate_actors, self.candidate_axis_actors,
-                 self.candidate_engine, +0.8)):
+                 self.candidate_engine, +spacing)):
             offset = np.eye(4)
             offset[1, 3] = offset_y
             for actor, axis_actor, matrix in zip(
@@ -351,6 +413,16 @@ class FusionWindow(BodyWindow):
         self.plotter.render()
         self._render_dirty = False
         self._last_render = time.monotonic()
+
+    def _front_view(self):
+        if getattr(self, 'visual_wearing_candidates', None) and self.candidate_engine is not None:
+            # Reserve the full bilateral T-pose envelope, not only the small
+            # neutral-pose bounds at startup. R restores this fixed view.
+            self.plotter.camera_position = [(4., 0., .15), (0., 0., .15), (0., 0., 1.)]
+            self.plotter.reset_camera(bounds=(-1., 1., -2., 2., -1., 1.3))
+            self.plotter.camera.zoom(1.2)
+        else:
+            super()._front_view()
 
     def _render_visual_direction_targets(self):
         """Magenta directions are neutral-normalized observations, NOT raw GT."""
@@ -365,7 +437,7 @@ class FusionWindow(BodyWindow):
         row = estimate.to_record()
         # Use the recorded source-frame timestamp, not a live wall clock.
         stamp = estimate.captured_mono_ns
-        for engine, offset_y in ((self.engine, -.8), (self.candidate_engine, .8)):
+        for engine, offset_y in ((self.engine, -1.), (self.candidate_engine, 1.)):
             transforms = engine.transforms()
             for part, result in self.visual_wearing_candidates.items():
                 device = result['device_id']
@@ -381,7 +453,7 @@ class FusionWindow(BodyWindow):
                 index = PART_BY_KEY[part]
                 start = transforms[index][:3, 3].copy()
                 start[1] += offset_y
-                length = .26349 if part == 'right_upper_arm' else .2724
+                length = .26349 if part.endswith('_upper_arm') else .2724
                 actor = self.plotter.add_mesh(pv.Arrow(start=start, direction=direction, scale=length),
                                              color='#ef70db', opacity=.75, pickable=False,
                                              render=False)
@@ -433,6 +505,8 @@ class FusionWindow(BodyWindow):
     def _change_camera_source(self):
         self.camera_source = self.camera_source_combo.currentData()
         self.visual_wearing_button.setEnabled(not self.replay_mode and self.camera_source == 'orbbec')
+        self.reuse_calibration_button.setEnabled(not self.replay_mode and self.camera_source == 'orbbec')
+        self.combined_calibration_button.setEnabled(not self.replay_mode and self.camera_source == 'orbbec')
         self.rgbd_pose_enabled.setChecked(False)
         self.rgbd_pose_enabled.setEnabled(self.camera_source == "orbbec")
 
@@ -453,12 +527,80 @@ class FusionWindow(BodyWindow):
             self.pose_status.setText("三维观测需要 Gemini RGB-D 数据")
             return
         if self.pose_worker is None:
-            worker = RGBDPoseWorker(self)
-            worker.error.connect(self._on_pose_error)
-            worker.status.connect(self.pose_status.setText)
+            worker = RGBDPoseWorker(self,config=self.vision_config,vision_epoch=self.vision_epoch)
+            epoch=self.vision_epoch
+            worker.error.connect(lambda message: self._on_pose_error(message) if epoch==self.vision_epoch else None)
+            worker.status.connect(lambda message: self.pose_status.setText(message) if epoch==self.vision_epoch else None)
             worker.finished.connect(self._on_pose_finished)
             self.pose_worker = worker
             worker.start()
+
+    def _pose_change_error(self):
+        if self.replay_mode:return '回放显示录制时的模型结果，不能切换推理后端'
+        if self.session is not None or self._record_start_deadline is not None:return '录制或预约期间不能切换二维模型'
+        for dialog in (self.camera_calibration_dialog,self._heading_calibration_dialog,self._visual_wearing_dialog):
+            if dialog is not None and (dialog.active or dialog.state=='analyzing'):return '标定或分析期间不能切换二维模型'
+        if self.x1_preview_dialog is not None and self.x1_preview_dialog.sender is not None:return '请先停止X1随动再切换二维模型'
+        if self.calibration_dialog is not None and self.calibration_dialog.isVisible():return '请先关闭IMU穿戴标定窗口'
+        return None
+
+    def _sync_pose_controls(self):
+        if not hasattr(self,'pose_backend_combo'):return
+        self.pose_backend_combo.blockSignals(True);self.pose_imgsz_combo.blockSignals(True)
+        self.pose_backend_combo.setCurrentIndex(self.pose_backend_combo.findData(self.vision_config.backend))
+        self.pose_imgsz_combo.setCurrentIndex(self.pose_imgsz_combo.findData(self.vision_config.imgsz))
+        self.pose_backend_combo.blockSignals(False);self.pose_imgsz_combo.blockSignals(False)
+        permitted=self._pose_change_error() is None
+        self.pose_backend_combo.setEnabled(permitted)
+        self.pose_imgsz_combo.setEnabled(permitted and self.vision_config.backend=='yolo26')
+        self.pose_model_button.setEnabled(permitted and self.vision_config.backend=='yolo26')
+        self.pose_model_button.setToolTip(str(self.vision_config.model))
+        if hasattr(self,'heading_limit_apply'):
+            self.heading_limit.setEnabled(permitted and not self.heading_unlimited.isChecked())
+            self.heading_unlimited.setEnabled(permitted);self.heading_limit_apply.setEnabled(permitted)
+
+    def _restore_heading_limit_controls(self):
+        value=self.live_fusion.max_offset_deg
+        self.heading_unlimited.setChecked(value is None)
+        if value is not None:self.heading_limit.setValue(round(value))
+
+    def _apply_heading_limit(self):
+        error=self._pose_change_error()
+        if error:
+            self._restore_heading_limit_controls()
+            self.pose_status.setText(error);return
+        try:self.live_fusion.set_max_offset(None if self.heading_unlimited.isChecked() else self.heading_limit.value())
+        except ValueError as exc:
+            self._restore_heading_limit_controls()
+            QtWidgets.QMessageBox.warning(self,'范围未修改',str(exc));return
+        self._update_live_fusion_status()
+        label='不限累计角度（实验）' if self.live_fusion.max_offset_deg is None else f'±{self.live_fusion.max_offset_deg:g}°'
+        self.statusBar().showMessage(f'累计纠偏范围已改为{label}；创新门限30°、限速3°/s不变',10000)
+
+    def _choose_pose_model(self):
+        error=self._pose_change_error()
+        if error:self.pose_status.setText(error);return
+        path,_=QtWidgets.QFileDialog.getOpenFileName(self,'选择已下载的YOLO26 Pose权重',str(self.vision_config.model.parent),'模型 (*.pt)')
+        if path:self._change_pose_config(model=Path(path))
+
+    def _change_pose_config(self,_index=None,*,model=None):
+        error=self._pose_change_error()
+        if error:self._sync_pose_controls();self.pose_status.setText(error);return
+        new=Pose2DConfig(self.pose_backend_combo.currentData(),model or self.vision_config.model,self.pose_imgsz_combo.currentData())
+        metadata=new.metadata()
+        if metadata['signature']==self.vision_metadata['signature']:
+            self.vision_config=new;self._sync_pose_controls();return
+        import uuid
+        self.live_fusion.invalidate('二维模型/参数已改变，保留修正；需重新相机标定')
+        self.vision_config=new;self.vision_metadata=metadata;self.vision_epoch=uuid.uuid4().hex;self._vision_changed=True
+        self.last_pose_estimate=None
+        if self.pose_dialog is not None:
+            self.pose_dialog.canvas.estimate=None;self.pose_dialog.canvas.update()
+            self.pose_dialog.status.setText('二维模型已切换；表格为旧模型历史结果，等待新观测')
+        if self.pose_worker is not None:self.pose_worker.stop()
+        elif self.rgbd_pose_enabled.isChecked():self._set_rgbd_pose(True)
+        self._sync_pose_controls()
+        self.pose_status.setText('模型已切换：旧相机纠偏停用，穿戴映射保留；加载完成后请重新相机标定')
 
     def _on_pose_error(self, message):
         self.rgbd_pose_enabled.blockSignals(True)
@@ -484,9 +626,11 @@ class FusionWindow(BodyWindow):
         self.pose_dialog.raise_()
 
     def _poll_pose(self):
+        self._sync_pose_controls()
         if self.pose_worker is None:
             return
         estimate = self.pose_worker.take_latest()
+        if estimate is not None and estimate.diagnostics.get('vision_epoch')!=self.vision_epoch:return
         if estimate is not None and self.rgbd_pose_enabled.isChecked():
             self._on_pose_estimate(estimate)
         elif self.last_pose_estimate is not None and time.monotonic_ns()-self.last_pose_estimate.captured_mono_ns > 1_000_000_000:
@@ -502,6 +646,8 @@ class FusionWindow(BodyWindow):
         if self.visual_wearing_candidates:
             self._render_dirty = True
         if not self.replay_mode:
+            if self._reuse_calibration_dialog is not None:
+                self._reuse_calibration_dialog.on_estimate(estimate)
             guide=self.camera_calibration_dialog
             allow=(self.rgbd_pose_enabled.isChecked() and not self.freeze_fusion.isChecked()
                    and self.camera_worker is not None and getattr(self.camera_worker,'capture_epoch',None)==self._live_camera_epoch
@@ -577,7 +723,10 @@ class FusionWindow(BodyWindow):
             reason=state['reason']
             if self.freeze_fusion.isChecked() or not self.rgbd_pose_enabled.isChecked():reason='视觉冻结/关闭；保留修正'
             elif self.last_pose_estimate is None or time.monotonic_ns()-self.last_pose_estimate.captured_mono_ns>500_000_000:reason='视觉过期；保留修正'
-            text.append(f"{part}：{state['offset_deg']:+.2f}° · {reason}")
+            name={'left_upper_arm':'左上臂','left_forearm':'左前臂','right_upper_arm':'右上臂','right_forearm':'右前臂'}.get(part,part)
+            binding=self.live_fusion.bindings.get(part)
+            warning=binding[1].limit_status() if binding and hasattr(binding[1],'limit_status') else state.get('limit_status')
+            text.append(f"{name}：{state['offset_deg']:+.2f}° · {reason}"+(f' · ⚠ {warning}' if warning else ''))
         if text:self.live_fusion_status.setText('\n'.join(text))
         events=self.live_fusion.drain_events()
         if self._fusion_events_file is not None:
@@ -592,18 +741,27 @@ class FusionWindow(BodyWindow):
         if self.replay_mode or self.session is not None:raise ValueError('回放或录制中不能应用实时标定')
         if self.x1_preview_dialog is not None and self.x1_preview_dialog.sender is not None:raise ValueError('请先停止X1随动，再应用标定')
         if self.camera_worker is None or report.get('camera_epoch') is None or report['camera_epoch']!=getattr(self.camera_worker,'capture_epoch',None):raise ValueError('相机采集会话已变化，需重新标定')
+        self._check_vision_report(report)
         self.live_fusion.install(report);self._live_camera_epoch=report['camera_epoch'];self._update_live_fusion_status()
 
     def prepare_camera_gravity(self,devices,start_ns,end_ns):
         return self.live_fusion.lock_gravity(devices,start_ns,end_ns)
 
-    def apply_visual_wearing_report(self, report, parts):
+    def _check_vision_report(self,report):
+        config=report.get('vision_config')
+        if config is None:
+            if self.vision_config.backend!='rtmw' or self._vision_changed:raise ValueError('旧报告没有二维模型参考信息，需重新标定')
+        elif config.get('signature')!=self.vision_metadata['signature'] or report.get('vision_epoch')!=self.vision_epoch:
+            raise ValueError('二维模型/权重/输入尺寸或视觉会话已变化，需重新标定')
+
+    def apply_visual_wearing_report(self, report, parts, *, review_acknowledged=False):
         from .visual_wearing import apply_wearing_report
         if self.replay_mode or self.session is not None:
             raise ValueError('回放或录制期间不能应用穿戴标定')
         if self.x1_preview_dialog is not None and self.x1_preview_dialog.sender is not None:
             raise ValueError('请先停止X1随动')
         epoch = getattr(self.camera_worker, 'capture_epoch', None)
+        self._check_vision_report(report)
         backup = {}
         for part in parts:
             device = self.engine.assignments.get(part)
@@ -611,7 +769,11 @@ class FusionWindow(BodyWindow):
                             'basis': self.engine.continuous_basis.get(part),
                             'neutrals': {m: r.copy() for m, r in self.engine.mode_neutral.get(device, {}).items()},
                             'applied_basis': report['parts'][part].get('basis_matrix')}
-        apply_wearing_report(self.engine, report, epoch, parts)
+        apply_wearing_report(self.engine, report, epoch, parts, review_acknowledged=review_acknowledged)
+        self.live_fusion.events.append({'type': 'wearing_application', 'time_ns': time.monotonic_ns(),
+            'parts': list(parts), 'source_session': report.get('session'),
+            'acceptance_revision': report.get('acceptance_revision', 1),
+            'review_acknowledged': bool(review_acknowledged)})
         self._render_dirty = True
         self.statusBar().showMessage('已应用视觉辅助穿戴映射；未启用相机纠偏或机器人', 8000)
         return backup
@@ -836,6 +998,30 @@ class FusionWindow(BodyWindow):
         self.camera_calibration_dialog.raise_()
         self.camera_calibration_dialog.activateWindow()
 
+    def _show_calibration_reuse(self):
+        if self.camera_calibration_dialog is not None and self.camera_calibration_dialog.active:
+            self.camera_calibration_dialog.raise_();return
+        error=self._pose_change_error()
+        if error:self.statusBar().showMessage(error,8000);return
+        from .calibration_reuse_gui import CalibrationReuseDialog
+        if self._reuse_calibration_dialog is None:self._reuse_calibration_dialog=CalibrationReuseDialog(self)
+        if self.camera_calibration_dialog is not None:self.camera_calibration_dialog.hide()
+        self.camera_calibration_dialog=self._reuse_calibration_dialog
+        self.camera_calibration_dialog.show();self.camera_calibration_dialog.raise_()
+        self.camera_calibration_dialog.activateWindow()
+
+    def _show_combined_calibration(self):
+        if self.camera_calibration_dialog is not None and self.camera_calibration_dialog.active:
+            self.camera_calibration_dialog.raise_();return
+        error=self._pose_change_error()
+        if error:self.statusBar().showMessage(error,8000);return
+        from .combined_calibration_gui import CombinedCalibrationDialog
+        if self._combined_calibration_dialog is None:self._combined_calibration_dialog=CombinedCalibrationDialog(self)
+        if self.camera_calibration_dialog is not None:self.camera_calibration_dialog.hide()
+        self.camera_calibration_dialog=self._combined_calibration_dialog
+        self.camera_calibration_dialog.show();self.camera_calibration_dialog.raise_()
+        self.camera_calibration_dialog.activateWindow()
+
     def _show_visual_wearing(self):
         from .visual_wearing_gui import VisualWearingDialog
         if self.camera_calibration_dialog is not None and (self.camera_calibration_dialog.active or
@@ -870,6 +1056,8 @@ class FusionWindow(BodyWindow):
         self.session_button.setText("结束联合录制")
         self.session.continuous_basis_at_start={key:value.tolist() for key,value in self.engine.continuous_basis.items()}
         self.session.camera_epoch=getattr(self.camera_worker,'capture_epoch',None)
+        self.session.vision_config=self.vision_metadata;self.session.vision_epoch=self.vision_epoch
+        self.session.heading_max_offset_deg=self.live_fusion.max_offset_deg
         self.session.fusion_at_start={part:{'calibration':data,'offset_deg':float(np.degrees(corrector.offset_rad))} for part,(data,corrector) in self.live_fusion.bindings.items()}
         self._fusion_events_file=(self.session.path/'fusion_events.jsonl').open('w',encoding='utf-8')
         self.camera_source_combo.setEnabled(False)
@@ -976,7 +1164,8 @@ class FusionWindow(BodyWindow):
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         dialogs = {dialog for dialog in (self.camera_calibration_dialog,
-                    self._heading_calibration_dialog, self._visual_wearing_dialog) if dialog is not None}
+                    self._heading_calibration_dialog, self._visual_wearing_dialog, self._reuse_calibration_dialog,
+                    self._combined_calibration_dialog) if dialog is not None}
         for dialog in dialogs:
             dialog.shutdown()
         self._cancel_record_schedule()

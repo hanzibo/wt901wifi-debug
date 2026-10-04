@@ -24,6 +24,9 @@ def main() -> int:
     parser.add_argument("--rgbd-fps", type=int, default=10, help="RGB-D 输出/录制帧率上限 1～30")
     parser.add_argument("--rgbd-warmup", type=float, default=2, help="启动预热秒数")
     parser.add_argument("--rgbd-pose", action="store_true", help="开启 RGB-D 上半身三维诊断，不纠偏 IMU")
+    parser.add_argument('--pose-backend',choices=('rtmw','yolo26'),default='rtmw',help='Gemini RGB-D二维关键点后端')
+    parser.add_argument('--yolo-model',type=Path,default=PROJECT_DIR.parent/'no-improtent/yolo-models/yolo26m-pose.pt')
+    parser.add_argument('--pose-imgsz',type=int,choices=(640,960),default=640)
     parser.add_argument("--backend", choices=("rtmw3d", "mediapipe"), default="rtmw3d")
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
     parser.add_argument("--listen-ip", default="0.0.0.0")
@@ -98,7 +101,7 @@ def main() -> int:
                 if Path(candidate["session"]).resolve() != args.replay.resolve():
                     raise ValueError(f"{path} 不属于当前回放会话")
                 if ((candidate.get("method") == "visual_bone_v1" and
-                     candidate.get("part") in ("right_upper_arm", "right_forearm")) or
+                     candidate.get("part") in ("left_upper_arm", "left_forearm", "right_upper_arm", "right_forearm")) or
                     (candidate.get("method") == "bone" and
                      candidate.get("part") in ("left_upper_arm", "left_forearm",
                                                "right_upper_arm", "right_forearm")) or
@@ -131,6 +134,7 @@ def main() -> int:
                               camera_source=args.camera_source, orbbec_python=args.orbbec_python,
                               rgbd_fps=args.rgbd_fps, rgbd_warmup=args.rgbd_warmup,
                               rgbd_pose=args.rgbd_pose,
+                              pose_backend=args.pose_backend,yolo_model=args.yolo_model,pose_imgsz=args.pose_imgsz,
                               model_path=args.model,
                               calibration_candidates=candidates,
                               manual_mapping_source=manual_mapping_source)

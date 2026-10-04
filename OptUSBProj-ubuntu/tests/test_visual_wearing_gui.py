@@ -14,8 +14,8 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from PySide6 import QtWidgets
-from optusbproj_ubuntu.visual_wearing import analyze_wearing
-from optusbproj_ubuntu.visual_wearing_gui import VisualWearingDialog
+from optusbproj_ubuntu.visual_wearing import analyze_wearing, REVIEW, PART_LABELS
+from optusbproj_ubuntu.visual_wearing_gui import VisualWearingDialog, wearing_steps
 from optusbproj_ubuntu.fusion_gui import FusionWindow
 from optusbproj_ubuntu.pose import PoseEngine, GYRO_TILT
 from test_camera_calibration_gui import Owner
@@ -31,6 +31,66 @@ class VisualGuiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def test_bilateral_capture_locks_four_devices_and_saves_shared_windows(self):
+        with TemporaryDirectory() as folder:
+            clock = [100.]; owner = Owner(Path(folder)/'record', clock)
+            owner.engine.assignments = dict(zip(PART_LABELS, ('C','D','A','B')))
+            owner.engine.algorithm_modes = {p: GYRO_TILT for p in PART_LABELS}
+            owner.engine.epochs = {d: 'epoch'+d for d in owner.engine.assignments.values()}
+            owner.camera_worker = SimpleNamespace(capture_epoch='camera')
+            owner.x1_preview_dialog = None
+            dialog = VisualWearingDialog(owner); dialog.auto_analyze.setChecked(False)
+            try:
+                self.assertEqual(dialog.scope_combo.currentData(), 'bilateral')
+                with patch('optusbproj_ubuntu.camera_calibration_gui.time.monotonic', side_effect=lambda: clock[0]), \
+                     patch('optusbproj_ubuntu.camera_calibration_gui.time.monotonic_ns', side_effect=lambda: int(clock[0]*1e9)):
+                    dialog.begin(); dialog.timer.stop()
+                    self.assertFalse(dialog.scope_combo.isEnabled())
+                    clock[0] = dialog.deadline+.1; owner.refresh(); dialog.tick()
+                    while dialog.active:
+                        clock[0] = dialog.deadline+.1; owner.refresh(); dialog.tick()
+                guide = json.loads((owner.path/'camera_guide.json').read_text())
+                self.assertEqual(guide['capture_scope'], 'bilateral')
+                self.assertEqual(set(guide['participants']), set(PART_LABELS))
+                self.assertEqual(len(owner.gravity_calls[0][0]), 4)
+                self.assertEqual(len(guide['events']), 16)
+                self.assertEqual(dialog.state, 'complete')
+                self.assertTrue(dialog.scope_combo.isEnabled())
+                self.assertIn('T字', next(s[2] for s in dialog.steps if s[0]=='lateral'))
+            finally:
+                dialog.close(); owner.close()
+
+    def test_side_selection_and_partial_failure_application(self):
+        with TemporaryDirectory() as folder:
+            path = Path(folder); fixture(path, bilateral=True, corrupt_left_repeat=True)
+            report = analyze_wearing(path)
+            (path/'report.json').write_text(json.dumps(report))
+            owner = Owner(path, [100.]); owner.x1_preview_dialog = None
+            owner.camera_worker = SimpleNamespace(capture_epoch='camera')
+            owner.engine.algorithm_modes = {p: GYRO_TILT for p in PART_LABELS}
+            dialog = VisualWearingDialog(owner)
+            try:
+                dialog.scope_combo.setCurrentIndex(dialog.scope_combo.findData('bilateral'))
+                with patch('optusbproj_ubuntu.camera_calibration_gui.time.monotonic_ns', return_value=100_000_000_000):
+                    self.assertIn('left_upper_arm', dialog.readiness_error())
+                    dialog.scope_combo.setCurrentIndex(dialog.scope_combo.findData('right'))
+                    self.assertIsNone(dialog.readiness_error())
+                dialog.analysis_path = path; dialog.read_log = lambda: None
+                calls = []
+                owner.apply_visual_wearing_report = lambda r, parts, **kw: calls.append(parts) or {}
+                dialog.analysis_finished(0, None)
+                self.assertFalse(dialog.part_checks['left_upper_arm'].isEnabled())
+                self.assertFalse(dialog.part_checks['left_forearm'].isEnabled())
+                self.assertTrue(dialog.part_checks['right_upper_arm'].isChecked())
+                with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.StandardButton.Yes):
+                    dialog.apply_live()
+                self.assertEqual(set(calls[0]), {'right_upper_arm','right_forearm'})
+                left = wearing_steps(3, 3, 5, 20, 'left')
+                self.assertIn('左侧', next(s[2] for s in left if s[0]=='lateral'))
+                self.assertFalse(any('右臂' in s[2] for s in left))
+            finally:
+                dialog.close(); owner.close()
 
     def test_failed_parts_cannot_be_selected_and_application_is_explicit(self):
         with TemporaryDirectory() as folder:
@@ -53,6 +113,39 @@ class VisualGuiTests(unittest.TestCase):
                     dialog.apply_live()
                 self.assertEqual(calls, [['right_upper_arm']])
                 self.assertTrue(dialog.restore_button.isEnabled())
+            finally:
+                dialog.close(); owner.close()
+
+    def test_review_requires_preview_and_explicit_unchecked_confirmation(self):
+        with TemporaryDirectory() as folder:
+            path = Path(folder); fixture(path)
+            report = analyze_wearing(path)
+            report['parts']['right_upper_arm'].update(status=REVIEW, review_reasons=['肩线变化不等于转身'])
+            (path/'report.json').write_text(json.dumps(report))
+            owner = Owner(path, [100.]); owner.x1_preview_dialog = None
+            dialog = VisualWearingDialog(owner); dialog.analysis_path = path
+            dialog.read_log = lambda: None
+            calls = []
+            owner.apply_visual_wearing_report = lambda r, parts, **kw: calls.append((parts, kw)) or {}
+            try:
+                dialog.analysis_finished(0, None)
+                self.assertFalse(dialog.apply.isEnabled())
+                self.assertFalse(dialog.review_confirmation.isChecked())
+                self.assertFalse(dialog.review_confirmation.isEnabled())
+                with patch.object(QtWidgets.QMessageBox, 'warning') as warning:
+                    dialog.apply_live(); warning.assert_called_once()
+                self.assertEqual(calls, [])
+                # Equivalent to the successful open_replay callback; merely
+                # selecting a baseline or checking a part is insufficient.
+                dialog._preview_opened = True; dialog.update_apply_gate()
+                self.assertTrue(dialog.review_confirmation.isEnabled())
+                self.assertFalse(dialog.apply.isEnabled())
+                dialog.review_confirmation.setChecked(True)
+                self.assertTrue(dialog.apply.isEnabled())
+                with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.StandardButton.Yes):
+                    dialog.apply_live()
+                self.assertTrue(calls[0][1]['review_acknowledged'])
+                self.assertFalse(dialog.apply.isEnabled())
             finally:
                 dialog.close(); owner.close()
 

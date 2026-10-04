@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Separate RGB-D entry; leave the original pure-IMU launcher unchanged.
+# Prefer the complete dual-backend environment; keep pure-IMU entry unchanged.
 set -u
 
 rgbd_project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,16 +12,23 @@ fi
 rgbd_log_dir="${XDG_STATE_HOME:-$HOME/.local/state}/wt901"
 mkdir -p -- "$rgbd_log_dir"
 rgbd_log_file="$rgbd_log_dir/rgbd-capture.log"
+rgbd_environment="OptUSBProj-fusion"
+rgbd_yolo_python="$HOME/miniconda3/envs/OptUSBProj-yolo/bin/python"
+if [[ -x "$rgbd_yolo_python" ]] && "$rgbd_yolo_python" -c \
+    'import importlib.util; import sys; sys.exit(not all(importlib.util.find_spec(n) is not None for n in ("torch", "ultralytics", "rtmlib", "onnxruntime", "PySide6")))'; then
+    rgbd_environment="OptUSBProj-yolo"
+fi
 
 if [[ -z "$rgbd_conda_executable" || ! -x "$rgbd_conda_executable" ]]; then
     printf 'Conda executable not found.\n' > "$rgbd_log_file"
     rgbd_status=127
 else
     cd -- "$rgbd_repo_dir" || exit 1
-    "$rgbd_conda_executable" run --no-capture-output -n OptUSBProj-fusion \
+    printf 'RGB-D GUI environment: %s\n' "$rgbd_environment" > "$rgbd_log_file"
+    "$rgbd_conda_executable" run --no-capture-output -n "$rgbd_environment" \
         python -u "$rgbd_project_dir/fusion_run.py" \
         --camera-source orbbec --rgbd-fps 10 --rgbd-warmup 2 "$@" \
-        > "$rgbd_log_file" 2>&1
+        >> "$rgbd_log_file" 2>&1
     rgbd_status=$?
 fi
 

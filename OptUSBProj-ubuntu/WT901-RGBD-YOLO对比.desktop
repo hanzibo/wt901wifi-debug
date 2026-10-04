@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=WT901-RGBD-YOLO对比
+Comment=Gemini真实深度，RTMW与YOLO26二维关键点可切换
+Exec=/home/hzb/Work/WT901/OptUSBProj-ubuntu/launch_rgbd_yolo.sh
+Path=/home/hzb/Work/WT901
+Icon=/home/hzb/Work/WT901/OptUSBProj-ubuntu/assets/wt901-upper-body.svg
+Terminal=false
+Categories=Science;
+Keywords=WT901;RGBD;YOLO26;RTMW;Orbbec;
+StartupNotify=true
