@@ -1163,6 +1163,9 @@ class FusionWindow(BodyWindow):
                 f"（丢 {session.dropped_frames} 帧）：{session.path}", 10000)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        if self._combined_calibration_dialog is not None and self._combined_calibration_dialog._cleanup_running():
+            self.statusBar().showMessage('原始录制正在删除，请等待完成后关闭程序。')
+            event.ignore();return
         dialogs = {dialog for dialog in (self.camera_calibration_dialog,
                     self._heading_calibration_dialog, self._visual_wearing_dialog, self._reuse_calibration_dialog,
                     self._combined_calibration_dialog) if dialog is not None}

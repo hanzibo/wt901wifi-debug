@@ -8,6 +8,7 @@ from PySide6 import QtCore,QtWidgets
 
 from .camera_calibration_gui import CameraCalibrationDialog,PART_LABELS
 from .combined_calibration import apply_joint
+from .recording_cleanup import validate_capture
 from .visual_wearing import needs_review
 from .visual_wearing_gui import wearing_steps
 
@@ -17,6 +18,8 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
         super().__init__(owner)
         self.setWindowTitle('双臂一体标定 · 穿戴映射＋相机纠偏');self.resize(920,850)
         self.report=None;self._preview_opened=False;self.applied=False
+        self._cleanup_process=None;self._cleanup_capture=None;self._deleted_capture=None
+        self._camera_preview_processes=[]
         self.validation.setValue(20)
         layout=self.layout()
         layout.itemAt(0).widget().setText('一套动作、一次录制，两路分别拟合和验收。默认沿用原IMU双臂穿戴算法，可选视觉辅助；重复动作只验收，不参与拟合。保持当前积分器运行，不强制重新学习零偏；不自动应用或启动机器人。')
@@ -42,7 +45,13 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
         self.review=QtWidgets.QCheckBox('已查看本轮回放，确认需人工复核的视觉穿戴结果可接受')
         layout.addWidget(self.review)
         self.camera_replay=QtWidgets.QPushButton('相机纠偏三路离线对比')
-        self.camera_replay.setEnabled(False);self.camera_replay.clicked.connect(self.open_camera_preview);layout.addWidget(self.camera_replay)
+        self.camera_replay.setEnabled(False);self.camera_replay.clicked.connect(self.open_camera_preview)
+        self.delete_recording=QtWidgets.QPushButton('删除本次原始录制（释放磁盘空间）')
+        self.delete_recording.setEnabled(False)
+        self.delete_recording.setToolTip('本轮计算完成并生成报告后才能操作，包括全部未通过的结果。永久删除原始数据，保留报告和内存结果；不能再回放或重新分析。')
+        self.delete_recording.clicked.connect(self.delete_current_capture)
+        cleanup_row=QtWidgets.QHBoxLayout();cleanup_row.addWidget(self.camera_replay);cleanup_row.addWidget(self.delete_recording)
+        layout.addLayout(cleanup_row)
         self.wear_checks={};self.camera_checks={}
 
     def capture_steps(self):
@@ -53,9 +62,11 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
                 'participants':list(self.devices),'wearing_method':self.capture_method}
 
     def begin(self):
+        if self._cleanup_running():self.status.setText('正在删除原始录制，请等待完成。');return
         error=self.owner._pose_change_error()
         if error:self.status.setText(error);return
         self.capture_method=self.method.currentData();self.report=None;self.applied=False;self._preview_opened=False
+        self._cleanup_capture=None;self._deleted_capture=None;self.delete_recording.setEnabled(False)
         self.table.setRowCount(0);self.review.setChecked(False);self.camera_replay.setEnabled(False)
         super().begin()
 
@@ -64,7 +75,9 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
         if hasattr(self,'method'):self.method.setEnabled(not running)
 
     def analyze_recording(self):
+        if self._cleanup_running() or self._deleted_capture is not None:return
         if self.state!='complete':return
+        self.delete_recording.setEnabled(False);self._cleanup_capture=None
         self.analysis_method=self.method.currentData()
         self._preview_opened=False;self.review.setChecked(False);self.applied=False
         self.analysis_path=self.recording_path.parent/'analysis_combined'/(self.recording_path.name+'-'+uuid.uuid4().hex[:6])
@@ -90,6 +103,7 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
         try:
             if code!=0:raise ValueError(self.log[-2500:])
             self.report=json.loads((self.analysis_path/'report.json').read_text());self.show_results()
+            self._authorize_cleanup()
         except (OSError,ValueError,KeyError) as exc:self.status.setText('联合分析失败；原始数据保留：'+str(exc))
 
     def show_results(self):
@@ -129,7 +143,19 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
         self.applied=True;self.apply.setEnabled(False)
         self.status.setText('已应用所选合格结果。请先观察人体模型，再手动选择已应用相机部位的RGB-D融合算法；没有自动启动机器人。')
 
+    def _authorize_cleanup(self):
+        # Freeze the exact computed session identity, not a later mutable path.
+        try:
+            target=Path(self.recording_path).resolve()
+            if target != Path(self.report['session']).resolve():raise ValueError('报告与录制路径不一致')
+            manifest=json.loads((target/'manifest.json').read_text())
+            validate_capture(target,manifest['started_mono_ns'])
+            self._cleanup_capture=(target,manifest['started_mono_ns']);self.delete_recording.setEnabled(True)
+        except (OSError,ValueError,KeyError,TypeError):
+            self._cleanup_capture=None;self.delete_recording.setEnabled(False)
+
     def open_wearing_preview(self):
+        if self._cleanup_running() or self._deleted_capture is not None:return
         if self.report is None:return
         from .fusion_gui import FusionWindow
         from .fusion_replay import FusionSessionReplay
@@ -153,5 +179,75 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
             self.status.setText('回放失败：'+str(exc))
 
     def open_camera_preview(self):
-        ok,_=QtCore.QProcess.startDetached(sys.executable,[str(Path(__file__).resolve().parents[1]/'rgbd_fusion_viewer.py'),str(self.analysis_path/'camera')])
-        if not ok:self.status.setText('无法启动相机纠偏对比窗口')
+        if self._cleanup_running() or self._deleted_capture is not None:return
+        process=QtCore.QProcess(self)
+        process.setProgram(sys.executable)
+        process.setArguments([str(Path(__file__).resolve().parents[1]/'rgbd_fusion_viewer.py'),str(self.analysis_path/'camera')])
+        self._camera_preview_processes.append(process)
+        process.finished.connect(lambda *_:self._release_preview_process(process))
+        process.errorOccurred.connect(lambda error:self._release_preview_process(process) if error==QtCore.QProcess.ProcessError.FailedToStart else None)
+        process.start()
+
+    def _release_preview_process(self,process):
+        if process in self._camera_preview_processes:self._camera_preview_processes.remove(process)
+        process.deleteLater()
+
+    def _cleanup_running(self):
+        return self._cleanup_process is not None and self._cleanup_process.state()!=QtCore.QProcess.ProcessState.NotRunning
+
+    def cleanup_error(self):
+        if self.report is None or self._cleanup_capture is None:return '请先完成本轮计算并生成结果'
+        if self.active or self.state=='analyzing' or self._cleanup_running():return '采集、分析或删除仍在进行'
+        if self.owner.session is not None or self.owner._record_start_deadline is not None:return '请先结束录制/预约'
+        target,token=self._cleanup_capture
+        if self.recording_path is None or Path(self.recording_path).resolve()!=target:return '当前录制已改变'
+        if self.analysis_path is None or Path(self.analysis_path).resolve().is_relative_to(target):return '分析目录必须位于原录制之外'
+        if self._camera_preview_processes:return '请先关闭本轮相机三路回放窗口'
+        for window in self.owner._dialogs:
+            source=getattr(window,'source',None)
+            if getattr(source,'is_replay',False) and Path(source.path).resolve()==target:
+                if not getattr(getattr(source,'imu_file',None),'closed',False):return '请先关闭正在使用本轮录制的人体回放窗口'
+        try:validate_capture(target,token)
+        except (OSError,ValueError,KeyError,TypeError) as exc:return str(exc)
+        return None
+
+    def delete_current_capture(self):
+        error=self.cleanup_error()
+        if error:self.status.setText('未删除：'+error);return
+        target,token=self._cleanup_capture
+        answer=QtWidgets.QMessageBox.question(self,'永久删除本次原始录制',
+            f'仅永久删除以下原始录制目录：\n{target}\n\n分析报告保留在：\n{self.analysis_path}\n\n内存结果和已应用标定不受影响；尚未应用的合格结果仍可在本窗口应用。需人工复核的视觉结果请先完成回放确认。请确认其他独立程序也未使用该目录。删除后不能回放或重新分析，无法从回收站恢复。是否删除？',
+            QtWidgets.QMessageBox.StandardButton.Yes|QtWidgets.QMessageBox.StandardButton.No,QtWidgets.QMessageBox.StandardButton.No)
+        if answer!=QtWidgets.QMessageBox.StandardButton.Yes:return
+        error=self.cleanup_error()  # Re-check after the confirmation's nested event loop.
+        if error:self.status.setText('未删除：'+error);return
+        process=QtCore.QProcess(self);self._cleanup_process=process
+        process.setProcessChannelMode(QtCore.QProcess.ProcessChannelMode.MergedChannels)
+        process.setProgram(sys.executable)
+        process.setArguments([str(Path(__file__).resolve().parents[1]/'cleanup_calibration_recording.py'),str(target),'--started-mono-ns',str(token)])
+        process.finished.connect(self._cleanup_finished)
+        process.errorOccurred.connect(self._cleanup_error)
+        for button in (self.delete_recording,self.start,self.analyze,self.replay,self.camera_replay):button.setEnabled(False)
+        self.status.setText('正在后台删除本次原始录制；实时标定保持不变。')
+        process.start()
+
+    def _cleanup_error(self,error):
+        if error==QtCore.QProcess.ProcessError.FailedToStart:self._cleanup_finished(1,None)
+
+    def _cleanup_finished(self,code,_status):
+        process=self._cleanup_process
+        if process is None:return
+        log=bytes(process.readAllStandardOutput()).decode('utf-8','replace')[-2000:]
+        target=self._cleanup_capture[0]
+        self._deleted_capture=target;self.start.setEnabled(True)
+        if code==0:
+            self.delete_recording.setEnabled(False);self._cleanup_capture=None
+            self.status.setText(f'已永久删除原始录制：{target}\n分析报告仍保留：{self.analysis_path}\n内存结果和实时标定未改变，合格结果仍可应用；原始回放与重新分析已禁用。')
+        else:
+            self.delete_recording.setEnabled(target.exists())
+            self.status.setText('删除失败，可能已有部分文件移除；实时标定未改变。\n'+log)
+        self._cleanup_process=None;process.deleteLater()
+
+    def closeEvent(self,event):
+        if self._cleanup_running():self.status.setText('删除正在进行，请等待完成后关闭。');event.ignore();return
+        super().closeEvent(event)
