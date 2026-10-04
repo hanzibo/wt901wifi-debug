@@ -108,6 +108,9 @@ class DepthPoseEstimator:
         color_d = distortion_coefficients(calibration["color_distortion"])
         aligned_d = distortion_coefficients(calibration["aligned_depth_distortion"])
         rgb_h, rgb_w = observation.frame_rgb.shape[:2]
+        body_xy=xy[INDICES];body_scores=scores[INDICES]
+        valid_2d=(np.isfinite(body_xy).all(axis=1)&np.isfinite(body_scores)&(body_scores>=self.min_confidence)
+                  &(body_xy[:,0]>=0)&(body_xy[:,0]<rgb_w)&(body_xy[:,1]>=0)&(body_xy[:,1]<rgb_h))
         if (calibration["color_intrinsic"]["width"], calibration["color_intrinsic"]["height"]) != (rgb_w, rgb_h):
             raise ValueError("彩色内参与活动图像尺寸不匹配")
         depth = observation.rgbd.aligned_depth_mm
@@ -187,6 +190,7 @@ class DepthPoseEstimator:
         lengths = {name: (float(np.linalg.norm(xyz[a]-xyz[b])) if valid[a] and valid[b] else None)
                    for name, (a, b) in BONES.items()}
         details = {**(diagnostics or {}), "raw_bone_lengths_m": raw_lengths,
+                   "valid_2d": valid_2d.tolist(),
                    "depth_source": "aligned sensor depth; predicted Z ignored",
                    "pixel_mapping": "RGB undistort -> aligned depth project",
                    "gates": {"min_2d_score": self.min_confidence, "radius_px": self.radius,

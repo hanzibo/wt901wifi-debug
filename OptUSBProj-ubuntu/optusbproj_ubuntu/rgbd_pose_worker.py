@@ -1,31 +1,15 @@
 """Bounded latest-frame RTMW 2D inference in the GUI environment."""
-from pathlib import Path
 from threading import Condition
 import time
 
-import numpy as np
 from PySide6 import QtCore
 
 from .rgbd_pose import DepthPoseEstimator
+from .pose_2d import Pose2DConfig,load_backend,infer_rtmw
 
 
-def load_detector():
-    import onnxruntime as ort
-    from rtmlib import Wholebody3d
-    if hasattr(ort, "preload_dlls"):
-        ort.preload_dlls(directory="")
-    cache = Path.home()/".cache/rtmlib/hub/checkpoints"
-    det = cache/"yolox_m_8xb8-300e_humanart-c2c7a14a.onnx"
-    pose = cache/"rtmw3d-x_8xb64_cocktail14-384x288-b0a0eab7_20240626.onnx"
-    if not det.is_file() or not pose.is_file():
-        raise RuntimeError("缺少已下载的 RTMW3D/YOLOX ONNX 模型，请先运行原 rtmw3d_probe.py 下载；本窗口不会自动下载")
-    if "CUDAExecutionProvider" not in ort.get_available_providers():
-        raise RuntimeError("未发现 CUDA 执行后端；不静默回退到 CPU")
-    model = Wholebody3d(det=str(det), pose=str(pose), backend="onnxruntime", device="cuda")
-    for component in (model.det_model, model.pose_model):
-        if "CUDAExecutionProvider" not in component.session.get_providers():
-            raise RuntimeError("RTMW 模型未使用 CUDA；请检查 ONNX Runtime 运行库")
-    return model
+def load_detector(config=None):
+    return load_backend(config or Pose2DConfig())
 
 
 def infer_observation(detector, estimator, observation):
@@ -33,17 +17,10 @@ def infer_observation(detector, estimator, observation):
     import cv2
     started = time.perf_counter()
     bgr = cv2.cvtColor(observation.frame_rgb, cv2.COLOR_RGB2BGR)
-    boxes = detector.det_model(bgr)
-    xy = np.full((133, 2), np.nan)
-    scores = np.zeros(133)
-    diagnostics = {"people_detected": len(boxes), "inference_backend": "RTMW3D 2D outputs / CUDA"}
-    if len(boxes) == 1:
-        # rtmlib has inverse-affine transformed these to original RGB pixels.
-        _predicted_xyz, scores_batch, _simcc, image_points = detector.pose_model(bgr, bboxes=boxes)
-        xy, scores = np.asarray(image_points[0]), np.asarray(scores_batch[0])
-    else:
+    xy,scores,diagnostics=(detector.infer(bgr) if hasattr(detector,'infer') else infer_rtmw(detector,bgr))
+    if 'reject_reason' in diagnostics:
         estimator.reset()
-        diagnostics["reject_reason"] = "未检测到人" if len(boxes) == 0 else "多人画面：暂不自动选择身份"
+    if hasattr(detector,'metadata'):diagnostics['vision_config']=detector.metadata
     return estimator.estimate(observation, xy, scores,
                               inference_ms=(time.perf_counter()-started)*1000,
                               diagnostics=diagnostics)
@@ -53,12 +30,13 @@ class RGBDPoseWorker(QtCore.QThread):
     error = QtCore.Signal(str)
     status = QtCore.Signal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, config=None, vision_epoch=None):
         super().__init__(parent)
         self._condition = Condition()
         self._input = self._result = None
         self._running = True
         self.input_skipped = self.result_skipped = 0
+        self.config=config or Pose2DConfig();self.vision_epoch=vision_epoch
 
     def submit(self, observation):
         with self._condition:
@@ -82,8 +60,8 @@ class RGBDPoseWorker(QtCore.QThread):
 
     def run(self):
         try:
-            self.status.emit("正在加载本地 RTMW 模型…RGB-D 原始采集仍继续")
-            detector = load_detector()
+            self.status.emit(f"正在加载本地 {self.config.backend} 模型…RGB-D 原始采集仍继续")
+            detector = load_detector(self.config)
             estimator = DepthPoseEstimator()
             self.status.emit("模型就绪；只取二维关键点，三维距离来自相机")
             while True:
@@ -94,9 +72,18 @@ class RGBDPoseWorker(QtCore.QThread):
                         break
                     observation, self._input = self._input, None
                 estimate = infer_observation(detector, estimator, observation)
+                estimate.diagnostics['vision_epoch']=self.vision_epoch
                 with self._condition:
                     if self._result is not None:
                         self.result_skipped += 1
                     self._result = estimate
         except Exception as exc:
             self.error.emit(f"RGB-D 三维观测失败：{exc}")
+        finally:
+            # Drop sessions before the GUI starts the replacement worker.
+            if 'detector' in locals():del detector
+            import gc,sys
+            gc.collect()
+            if self.config.backend=='yolo26' and 'torch' in sys.modules:
+                torch=sys.modules['torch']
+                if torch.cuda.is_available():torch.cuda.empty_cache()

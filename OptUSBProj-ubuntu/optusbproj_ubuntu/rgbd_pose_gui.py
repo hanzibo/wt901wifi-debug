@@ -107,8 +107,8 @@ class RGBDPoseDialog(QtWidgets.QDialog):
         layout.addWidget(self.status)
         self.canvas = MetricSkeletonWidget()
         layout.addWidget(self.canvas, 1)
-        self.table = QtWidgets.QTableWidget(8, 7)
-        self.table.setHorizontalHeaderLabels(("部位", "二维分数", "X/Y/Z（米）", "深度支持", "跨度mm", "状态", "深度像素"))
+        self.table = QtWidgets.QTableWidget(8, 8)
+        self.table.setHorizontalHeaderLabels(("部位", "二维分数", "二维可用", "X/Y/Z（米）", "深度支持", "跨度mm", "三维状态", "深度像素"))
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         self.table.setMinimumHeight(265)
@@ -123,18 +123,19 @@ class RGBDPoseDialog(QtWidgets.QDialog):
     def update_estimate(self, estimate):
         self.canvas.estimate = estimate
         self.canvas.update()
-        self.status.setText(f"有效 {int(estimate.valid.sum())}/8 点 · 推理 {estimate.inference_ms:.1f} ms · "
+        valid_2d=estimate.diagnostics.get('valid_2d')
+        self.status.setText(estimate.diagnostics.get('inference_backend','历史观测')+f" · 三维有效 {int(estimate.valid.sum())}/8 点 · 推理 {estimate.inference_ms:.1f} ms · "
                             + estimate.diagnostics.get("reject_reason", "真实深度；不使用网络预测Z"))
         for i in range(8):
             p = estimate.points_camera_m[i]
             xyz = "/".join(f"{v:+.3f}" for v in p) if estimate.valid[i] else "—"
             pixel = estimate.depth_pixels[i]
-            values = (LABELS[i], f"{estimate.confidence[INDICES[i]]:.2f}", xyz,
+            values = (LABELS[i], f"{estimate.confidence[INDICES[i]]:.2f}", ('是' if valid_2d[i] else '否') if valid_2d is not None else '历史未记录', xyz,
                       f"{estimate.support[i]:.0%}", f"{estimate.spread_mm[i]:.1f}" if np.isfinite(estimate.spread_mm[i]) else "—",
                       estimate.reasons[i], "/".join(f"{v:.1f}" for v in pixel) if np.isfinite(pixel).all() else "—")
             for j, value in enumerate(values):
                 item = QtWidgets.QTableWidgetItem(value)
-                if j == 5:
+                if j == 6:
                     item.setForeground(QtGui.QColor("#39b96b" if estimate.valid[i] else "#d58b26"))
                 self.table.setItem(i, j, item)
         labels = {"left_upper_arm": "左上臂", "left_forearm": "左前臂", "right_upper_arm": "右上臂", "right_forearm": "右前臂", "shoulder_width": "肩宽"}
