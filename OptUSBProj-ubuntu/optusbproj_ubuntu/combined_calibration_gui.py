@@ -21,7 +21,11 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
         self.report=None;self._preview_opened=False;self.applied=False
         self._cleanup_process=None;self._cleanup_capture=None;self._deleted_capture=None
         self._camera_preview_processes=[]
-        self.validation.setValue(20)
+        self.delay.setValue(5)
+        self.preparation.setValue(4)
+        self.hold.setValue(4)
+        self.neutral.setValue(5)
+        self.validation.setValue(10)
         layout=self.layout()
         layout.itemAt(0).widget().setText('一套动作、一次录制，两路分别拟合和验收。原IMU穿戴保留正前举/侧举；相机改用斜前举/侧举，避开正面遮挡。可选旧视觉穿戴算法仍要求正前举可见。重复动作只验收，不参与拟合；不自动应用或启动机器人。')
         row=QtWidgets.QHBoxLayout();row.addWidget(QtWidgets.QLabel('穿戴算法'))

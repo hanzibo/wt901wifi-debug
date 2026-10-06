@@ -108,7 +108,8 @@ class CombinedTests(unittest.TestCase):
             w=FusionWindow(Source(),Path(tmp)/'settings.json',{}, {},camera_source='orbbec');w.poll_timer.stop()
             try:
                 w._show_combined_calibration();d=w._combined_calibration_dialog
-                self.assertEqual(d.method.currentData(),'imu');self.assertEqual(d.validation.value(),20)
+                self.assertEqual(d.method.currentData(),'imu')
+                self.assertEqual((d.delay.value(),d.preparation.value(),d.hold.value(),d.neutral.value(),d.validation.value()),(5,4,4,5,10))
                 owner,report=self.joint();d.report=report;d.devices={p:r['device_id'] for p,r in report['wearing']['parts'].items()}
                 d.analysis_path=Path(tmp)
                 report['wearing']['parts']['left_forearm']['accepted']=False;report['wearing']['parts']['left_forearm']['status']='需重录'
