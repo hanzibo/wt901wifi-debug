@@ -44,13 +44,18 @@ class GripperPreview:
         self.targets = self.positions.copy()
         self.received = {'7': -1e9, '57': -1e9}
         self.sequences = {}
+        self.owners = {}
         self.updated = None
 
     def accept(self, raw, peer, now):
         seq, joint, angle = parse_gripper(raw, now_ns=round(now*1e9))
         if seq <= self.sequences.get(peer, 0):
             return False
+        # Do not let a phone and IMU popup fight over the same gripper.
+        if self.owners.get(joint, peer) != peer and 0 <= now-self.received[joint] <= .3:
+            return False
         self.sequences[peer] = seq
+        self.owners[joint] = peer
         self.targets[joint] = angle
         self.received[joint] = now
         return True

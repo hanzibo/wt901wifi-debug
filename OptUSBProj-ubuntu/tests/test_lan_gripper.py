@@ -81,6 +81,14 @@ class HTTPTests(unittest.TestCase):
 
 
 class GripperBridgeTests(unittest.TestCase):
+    def test_fresh_joint_has_single_input_owner(self):
+        bridge=GripperPreview()
+        phone=('127.0.0.1',9000);imu=('127.0.0.1',9001)
+        self.assertTrue(bridge.accept(self.frame(),phone,1.))
+        self.assertFalse(bridge.accept(self.frame(seq=2,stamp=1.1),imu,1.1))
+        self.assertTrue(bridge.accept(self.frame(joint='7',seq=2,stamp=1.1),imu,1.1))
+        self.assertTrue(bridge.accept(self.frame(seq=3,stamp=1.4),imu,1.4))
+
     def frame(self, joint='57', seq=1, position=1., stamp=1.):
         return json.dumps(dict(version=1, type='gripper', joint=joint, seq=seq,
                                position=position, sent_mono_ns=round(stamp*1e9))).encode()
