@@ -263,11 +263,14 @@ def _read_jsonl(path):
         return [json.loads(line) for line in stream if line.strip()]
 
 
-def analyze_wearing(session: Path, *, prior_weight=None):
+def analyze_wearing(session: Path, *, prior_weight=None, context=None):
     """Read a guided session. Never mutate originals, device state or maps."""
     session = session.resolve()
-    manifest = json.loads((session / 'manifest.json').read_text())
-    guide = json.loads((session / 'camera_guide.json').read_text())
+    from .analysis_context import AnalysisContext
+    context = context or AnalysisContext(session)
+    context.check_session(session)
+    manifest = context.manifest
+    guide = context.guide
     from .calibration_options import capture_prior_weight
     prior_weight = capture_prior_weight(guide, prior_weight)
     if manifest.get('error') or not manifest.get('camera_epoch'):
@@ -277,13 +280,11 @@ def analyze_wearing(session: Path, *, prior_weight=None):
     cutoff = int(manifest.get('retained_until_mono_ns') or (2**63 - 1))
     if windows['neutral_return'][1] > cutoff:
         raise ValueError("有效录制范围未覆盖回中立复测")
-    vision = [r for r in _read_jsonl(session / 'vision.jsonl')
+    vision = [r for r in context.vision
               if r['captured_mono_ns'] <= cutoff]
-    runtime = [r for r in _read_jsonl(session / 'runtime_pose.jsonl')
+    runtime = [r for r in context.runtime
                if r['host_recv_mono_ns'] <= cutoff]
-    with (session / 'imu.csv').open(newline='', encoding='utf-8') as stream:
-        packets = {(int(r['host_recv_mono_ns']), r['device_id']): r
-                   for r in csv.DictReader(stream)}
+    packets = context.imu_index
     neutral_vision = [r for r in vision if in_window(r['captured_mono_ns'], windows['neutral'])]
     k, body_quality = body_frame(neutral_vision)
     up_c = k.T @ np.array([0., 0., 1.])
@@ -316,7 +317,7 @@ def analyze_wearing(session: Path, *, prior_weight=None):
                 raise ValueError("设备分配与引导录制不一致")
             if manifest.get('algorithm_modes_at_start', {}).get(part) != GYRO_TILT:
                 raise ValueError("首版请使用陀螺＋加计录制，避免在线纠偏参与安装拟合")
-            series, up_w, _, bootstrap = load_live_series(session, device, windows['neutral'])
+            series, up_w, _, bootstrap = load_live_series(session, device, windows['neutral'], context=context)
             device_rows = [r for r in runtime if r['device_id'] == device]
             epoch = device_rows[0]['epoch']
             holds, sample_rows = {}, {}

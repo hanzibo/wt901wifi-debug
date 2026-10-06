@@ -241,10 +241,21 @@ def visual_direction(row, part, expected_length=None):
     return unit(d), "视觉可用"
 
 
-def load_live_series(path,device_id,neutral_ns):
-    import json
-    with (path/'runtime_pose.jsonl').open() as stream:
-        rows=[json.loads(line) for line in stream]
+def load_live_series(path,device_id,neutral_ns, *, context=None):
+    from copy import deepcopy
+    from .analysis_context import AnalysisContext, MemoizedOrientationSeries
+    context = context or AnalysisContext(path)
+    context.check_session(path)
+    key = (device_id, tuple(neutral_ns))
+    if key not in context.live_series:
+        series, up, samples, bootstrap = _load_live_series(path,device_id,neutral_ns,context)
+        context.live_series[key] = MemoizedOrientationSeries(series), up, samples, bootstrap
+    series, up, samples, bootstrap = context.live_series[key]
+    return series, up.copy(), deepcopy(samples), deepcopy(bootstrap)
+
+
+def _load_live_series(path,device_id,neutral_ns,context):
+    rows=context.runtime_for(device_id)
     rows=[r for r in rows if r['device_id']==device_id and 'gyro_tilt' in r['orientation_by_mode']]
     if len(rows)<50:raise ValueError('实时姿态记录不足，请重新进行相机引导标定')
     if len({r['epoch'] for r in rows})!=1:raise ValueError('积分参考系在录制中改变，请重录')
@@ -253,8 +264,7 @@ def load_live_series(path,device_id,neutral_ns):
     prefix=[r for r in rows if neutral_ns[0]<=r['host_recv_mono_ns']<=neutral_ns[1]]
     ups=[r['up_world'] for r in prefix if r['up_world'] is not None]
     bootstrap={'method':'live integrator gravity reference'}
-    guide_path=path/'camera_guide.json'
-    locked=json.loads(guide_path.read_text()).get('gravity_reference',{}).get(device_id) if guide_path.exists() else None
+    locked=context.guide.get('gravity_reference',{}).get(device_id)
     if locked is not None:
         if locked['epoch']!=rows[0]['epoch']:raise ValueError('锁定重力参考与实时积分参考系不一致，请重录')
         up=unit(locked['up_world'])
@@ -266,8 +276,7 @@ def load_live_series(path,device_id,neutral_ns):
         bootstrap=dict(locked,method='guided locked live gravity reference')
     elif ups:up=unit(ups[-1])
     else:
-        with (path/'imu.csv').open() as stream:
-            acc={(int(r['host_recv_mono_ns']),r['device_id']):[float(r['acc_'+a]) for a in 'xyz'] for r in csv.DictReader(stream)}
+        acc={key:[float(r['acc_'+a]) for a in 'xyz'] for key,r in context.imu_index.items()}
         vectors=[]
         for r in prefix:
             a=np.array(acc[(r['host_recv_mono_ns'],device_id)])

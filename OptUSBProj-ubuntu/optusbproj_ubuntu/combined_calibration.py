@@ -1,7 +1,6 @@
 """One capture, separate mounting/heading fits; never use held-out poses for fitting."""
 from copy import deepcopy
 from dataclasses import asdict
-import csv
 import json
 from pathlib import Path
 import time
@@ -15,16 +14,19 @@ from .pose import GYRO_TILT
 from .calibration_options import capture_prior_weight
 from .rgbd_fusion import ARM_SEGMENTS, angle_deg, gravity_alignment, load_live_series, visual_direction
 from .visual_wearing import PASS, REVIEW, analyze_wearing, apply_wearing_report
+from .analysis_context import AnalysisContext
 
 FORMAT = 'wt901-combined-arm-camera-calibration-v1'
 PHASES = {'neutral': 'neutral', 'forward': 'forward', 'lateral': 'lateral',
           'check_forward': 'forward_repeat', 'check_neutral': 'neutral_return'}
 
 
-def load_capture(session):
+def load_capture(session, *, context=None):
     session = Path(session)
-    manifest = json.loads((session/'manifest.json').read_text())
-    guide = json.loads((session/'camera_guide.json').read_text())
+    context = context or AnalysisContext(session)
+    context.check_session(session)
+    manifest = context.manifest
+    guide = context.guide
     if manifest.get('error') or guide.get('status') != 'complete':raise ValueError('录制未完整结束，不能联合标定')
     parts = guide.get('participants', list(guide.get('devices', {})))
     if not parts or len(set(parts)) != len(parts) or not set(parts).issubset(ARM_SEGMENTS):raise ValueError('参与部位无效')
@@ -44,14 +46,13 @@ def load_capture(session):
     return manifest, guide, parts, windows
 
 
-def imu_wearing(session, *, prior_weight=None):
+def imu_wearing(session, *, prior_weight=None, context=None):
     """Reuse original guided fitter with gravity-aligned FIT poses and RAW neutral streams."""
-    session = Path(session);manifest, guide, parts, windows = load_capture(session)
+    session = Path(session);context = context or AnalysisContext(session)
+    manifest, guide, parts, windows = load_capture(session, context=context)
     prior_weight = capture_prior_weight(guide, prior_weight)
-    raw = {}
-    with (session/'imu.csv').open() as stream:
-        for row in csv.DictReader(stream):raw[(int(row['host_recv_mono_ns']), row['device_id'])] = row
-    with (session/'runtime_pose.jsonl').open() as stream:runtime = [json.loads(line) for line in stream]
+    raw = context.imu_index
+    runtime = context.runtime
     report = {'format': 'wt901-combined-imu-wearing-v1', 'session': str(session.resolve()),
               'camera_epoch': manifest['camera_epoch'], 'vision_epoch': manifest.get('vision_epoch'),
               'vision_config': manifest.get('vision_config'), 'prior_weight': prior_weight, 'parts': {}}
@@ -59,9 +60,9 @@ def imu_wearing(session, *, prior_weight=None):
         device = guide['devices'][part]
         try:
             neutral_ns = windows['neutral']
-            _, up, rows, _ = load_live_series(session, device, neutral_ns)
+            _, up, rows, _ = load_live_series(session, device, neutral_ns, context=context)
             aligned = gravity_alignment(up, [0, 0, 1]);samples = {step: [] for step in PHASES}
-            context = {step: [] for step in PHASES}
+            reference_samples = {step: [] for step in PHASES}
             torso = manifest['assignments_at_start'].get('torso')
             for step, phase in PHASES.items():
                 start, end = windows[phase]
@@ -78,15 +79,15 @@ def imu_wearing(session, *, prior_weight=None):
                         sample['orientation_mode'] = GYRO_TILT
                         sample['orientation_matrix'] = (aligned@np.asarray(row['orientation_by_mode'][GYRO_TILT])).tolist()
                         samples[step].append(sample)
-                    else:context[step].append(sample)
+                    else:reference_samples[step].append(sample)
             result = fit_guided_arm(part, device, samples, tuple(manifest['axis_mappings_at_start'][part]), prior_weight=prior_weight)
             entry = asdict(result)
             paired = {m: n.tolist() for m,n in neutral_matrices_by_mode(samples['neutral']).items()}
             if GYRO_TILT not in paired:raise ValueError('缺少原始陀螺中立基准')
             entry.update(neutral_matrix=paired[GYRO_TILT], neutral_matrices_by_mode=paired,
                          reference_epoch=rows[0]['epoch'], up_world=up.tolist())
-            if torso and all(context.values()):
-                motions = reference_motion_deg(context);entry['torso_motion_deg'] = motions
+            if torso and all(reference_samples.values()):
+                motions = reference_motion_deg(reference_samples);entry['torso_motion_deg'] = motions
                 if max(motions.values()) > 12:entry['status'] = '需重录';entry['warnings'].append('躯干转动超过12°')
                 elif max(motions.values()) >= 5:entry['warnings'].append('提示：躯干移动超过建议5°')
             if part.endswith('forearm') and result.fit_error_deg['lateral'] >= 15:
@@ -98,19 +99,41 @@ def imu_wearing(session, *, prior_weight=None):
     return report
 
 
-def validate_camera(session, report):
+def validate_camera(session, report, *, context=None):
+    context = context or AnalysisContext(session)
+    context.check_session(session)
+    key = json.dumps(report, sort_keys=True, allow_nan=False)
+    if key in context.camera_validation:
+        cached = deepcopy(context.camera_validation[key])
+        report.clear();report.update(cached)
+        return report
+    result = _validate_camera(session, report, context)
+    context.camera_validation[key] = deepcopy(result)
+    # Preserve the legacy second-pass report semantics without recomputing
+    # accepted parts. That pass clears metrics of rejected parts only when
+    # at least one part is still accepted; when all fail it returns early.
+    next_result = deepcopy(result)
+    if any(d.get('accepted') for d in next_result['parts'].values()):
+        for data in next_result['parts'].values():
+            if not data.get('accepted'):data['independent_validation'] = {}
+    next_key = json.dumps(result, sort_keys=True, allow_nan=False)
+    context.camera_validation[next_key] = next_result
+    return result
+
+
+def _validate_camera(session, report, context):
     """Independent repeat/return observation tests, not GT and not folded into the fit."""
     if not any(d.get('accepted') for d in report['parts'].values()):return report
-    session = Path(session);_, guide, parts, windows = load_capture(session)
+    session = Path(session);_, guide, parts, windows = load_capture(session, context=context)
     _, check_phases = camera_phases(guide)
-    with (session/'vision.jsonl').open() as stream:vision = [json.loads(line) for line in stream]
+    vision = context.vision
     for part in parts:
         data = report['parts'].get(part)
         if data is None:continue
         data['independent_validation'] = {};failures = []
         if not data.get('accepted'):continue
         try:
-            series, _, _, _ = load_live_series(session, data['device_id'], windows['neutral'])
+            series, _, _, _ = load_live_series(session, data['device_id'], windows['neutral'], context=context)
             q = proper(data['Q_camera_from_imu_world']);bone = np.asarray(data['bone_axis_sensor'])
             for phase in check_phases:
                 errors = []
@@ -129,16 +152,18 @@ def validate_camera(session, report):
     return report
 
 
-def build_joint_report(session, camera_report, method='imu', *, prior_weight=None):
+def build_joint_report(session, camera_report, method='imu', *, prior_weight=None, context=None):
+    context = context or AnalysisContext(session)
+    context.check_session(session)
     if method not in ('imu','visual'):raise ValueError('未知穿戴标定方法')
-    try:wearing = imu_wearing(session, prior_weight=prior_weight) if method == 'imu' else analyze_wearing(Path(session), prior_weight=prior_weight)
+    try:wearing = imu_wearing(session, prior_weight=prior_weight, context=context) if method == 'imu' else analyze_wearing(Path(session), prior_weight=prior_weight, context=context)
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        manifest,guide,parts,_ = load_capture(session)
+        manifest,guide,parts,_ = load_capture(session, context=context)
         wearing = {'camera_epoch':manifest['camera_epoch'],'vision_epoch':manifest.get('vision_epoch'),
                    'vision_config':manifest.get('vision_config'),'parts':{
                        p:{'device_id':guide['devices'][p],'accepted':False,'status':'需重录','warnings':[str(exc)]} for p in parts}}
     camera = deepcopy(camera_report)
-    try:camera = validate_camera(session, camera)
+    try:camera = validate_camera(session, camera, context=context)
     except (OSError,ValueError,KeyError,TypeError) as exc:
         for data in camera['parts'].values():data.update(accepted=False,reason='相机独立复测失败：'+str(exc))
     for data in wearing['parts'].values():
