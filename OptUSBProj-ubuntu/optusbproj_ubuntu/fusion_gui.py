@@ -71,6 +71,7 @@ class FusionWindow(BodyWindow):
         self._fusion_events_file = None
         self._live_camera_epoch = None
         self.last_pose_estimate = None
+        self.palm_visual_dialog = None
         self._bridge_skipped_start = 0
         self.rgbd_timer = QtCore.QTimer(self)
         self.rgbd_timer.setInterval(20)
@@ -191,6 +192,10 @@ class FusionWindow(BodyWindow):
         self.pose_model_button=QtWidgets.QPushButton('YOLO权重…')
         self.pose_model_button.setToolTip(str(yolo_model));model_row.addWidget(self.pose_model_button)
         group_layout.addLayout(model_row)
+        self.palm_visual_button=QtWidgets.QPushButton('左手视觉 C0…（与手动估计对比）')
+        self.palm_visual_button.setEnabled(camera_source=='orbbec' and not self.replay_mode)
+        self.palm_visual_button.clicked.connect(self._show_palm_visual)
+        group_layout.addWidget(self.palm_visual_button)
         self.pose_backend_combo.currentIndexChanged.connect(self._change_pose_config)
         self.pose_imgsz_combo.currentIndexChanged.connect(self._change_pose_config)
         self.pose_model_button.clicked.connect(self._choose_pose_model)
@@ -504,6 +509,7 @@ class FusionWindow(BodyWindow):
 
     def _change_camera_source(self):
         self.camera_source = self.camera_source_combo.currentData()
+        self.palm_visual_button.setEnabled(not self.replay_mode and self.camera_source=='orbbec')
         self.visual_wearing_button.setEnabled(not self.replay_mode and self.camera_source == 'orbbec')
         self.reuse_calibration_button.setEnabled(not self.replay_mode and self.camera_source == 'orbbec')
         self.combined_calibration_button.setEnabled(not self.replay_mode and self.camera_source == 'orbbec')
@@ -536,6 +542,8 @@ class FusionWindow(BodyWindow):
             worker.start()
 
     def _pose_change_error(self):
+        if self.palm_visual_dialog is not None and self.palm_visual_dialog.active:return '请先结束左手视觉C0采集'
+        if self.engine.natural_hand_previews or (self.natural_hand_dialog is not None and self.natural_hand_dialog.active):return '请先结束自然掌面采样/临时预览'
         if self.replay_mode:return '回放显示录制时的模型结果，不能切换推理后端'
         if self.session is not None or self._record_start_deadline is not None:return '录制或预约期间不能切换二维模型'
         for dialog in (self.camera_calibration_dialog,self._heading_calibration_dialog,self._visual_wearing_dialog):
@@ -617,6 +625,12 @@ class FusionWindow(BodyWindow):
         if self.rgbd_pose_enabled.isChecked() and self.camera_worker is not None:
             self._set_rgbd_pose(True)
 
+    def _show_palm_visual(self):
+        if self.replay_mode:return
+        from .palm_visual_gui import PalmVisualDialog
+        if self.palm_visual_dialog is None:self.palm_visual_dialog=PalmVisualDialog(self)
+        self.palm_visual_dialog.show();self.palm_visual_dialog.raise_()
+
     def _show_pose_details(self):
         if self.pose_dialog is None:
             self.pose_dialog = RGBDPoseDialog(self)
@@ -643,6 +657,7 @@ class FusionWindow(BodyWindow):
 
     def _on_pose_estimate(self, estimate):
         self.last_pose_estimate = estimate
+        if self.palm_visual_dialog is not None:self.palm_visual_dialog.on_body(estimate)
         if self.visual_wearing_candidates:
             self._render_dirty = True
         if not self.replay_mode:
@@ -667,6 +682,10 @@ class FusionWindow(BodyWindow):
             self.pose_status.setText("推理结果过期，未显示为当前观测；原始采集继续")
         elif not self.depth_preview.isChecked() and estimate.frame_rgb is not None:
             rgb = draw_pose_rgb(estimate)
+            palm=self.palm_visual_dialog
+            if palm is not None and palm.active and palm.latest is not None and abs(palm.latest['captured_mono_ns']-estimate.captured_mono_ns)<=150_000_000:
+                from .palm_worker import draw_palm_diagnostics
+                rgb=draw_palm_diagnostics(rgb,palm.latest)
             h, w = rgb.shape[:2]
             self._display_image(QtGui.QImage(rgb.data, w, h, rgb.strides[0], QtGui.QImage.Format.Format_RGB888).copy())
         if self.pose_dialog is not None:
@@ -692,6 +711,7 @@ class FusionWindow(BodyWindow):
         if observation is None:
             return
         self.last_rgbd_observation = observation
+        if self.palm_visual_dialog is not None:self.palm_visual_dialog.submit(observation)
         self._on_observation(observation)
         if self.rgbd_pose_enabled.isChecked() and self.pose_worker is not None:
             self.pose_worker.submit(observation)
@@ -1038,6 +1058,10 @@ class FusionWindow(BodyWindow):
         self.camera_calibration_dialog.activateWindow()
 
     def _start_session(self) -> bool:
+        if self.palm_visual_dialog is not None and self.palm_visual_dialog.active:
+            self.record_schedule_status.setText('请先完成左手视觉C0采集，再开始联合录制');return False
+        if self.engine.natural_hand_previews or (self.natural_hand_dialog is not None and self.natural_hand_dialog.active):
+            self.record_schedule_status.setText('请先应用或取消自然掌面预览，并结束采样，再录制');return False
         if self.camera_source == "orbbec" and (
                 self.last_rgbd_observation is None or self.camera_worker is None
                 or time.monotonic_ns() - self.last_rgbd_observation.captured_mono_ns > 1_000_000_000):
@@ -1055,6 +1079,9 @@ class FusionWindow(BodyWindow):
             return False
         self.session_button.setText("结束联合录制")
         self.session.continuous_basis_at_start={key:value.tolist() for key,value in self.engine.continuous_basis.items()}
+        from copy import deepcopy
+        self.session.natural_hand_references_at_start=deepcopy(self.engine.natural_hand_references)
+        self.session.calibration_references_at_start=deepcopy(self.engine.calibration_references)
         self.session.camera_epoch=getattr(self.camera_worker,'capture_epoch',None)
         self.session.vision_config=self.vision_metadata;self.session.vision_epoch=self.vision_epoch
         self.session.heading_max_offset_deg=self.live_fusion.max_offset_deg
@@ -1163,6 +1190,9 @@ class FusionWindow(BodyWindow):
                 f"（丢 {session.dropped_frames} 帧）：{session.path}", 10000)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        if self.palm_visual_dialog is not None:
+            if not self.palm_visual_dialog.shutdown():event.ignore();return
+            self.palm_visual_dialog.close()
         if self._combined_calibration_dialog is not None and self._combined_calibration_dialog._cleanup_running():
             self.statusBar().showMessage('原始录制正在删除，请等待完成后关闭程序。')
             event.ignore();return

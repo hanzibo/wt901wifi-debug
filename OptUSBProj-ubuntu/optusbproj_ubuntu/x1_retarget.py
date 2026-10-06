@@ -179,7 +179,7 @@ def _packet_rows(path: Path):
 
 
 def _human_points(engine: PoseEngine, side: str = "right") -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    transforms = engine.transforms()
+    transforms = engine.transforms(include_natural=False)
     return tuple(transforms[PART_BY_KEY[key]][:3, 3].copy() for key in (
         f"{side}_upper_arm", f"{side}_forearm", f"{side}_hand"))
 

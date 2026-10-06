@@ -9,6 +9,7 @@ from __future__ import annotations
 import time
 import math
 import uuid
+from copy import deepcopy
 
 import numpy as np
 
@@ -19,6 +20,7 @@ from wt901_viz.yaw_guard import PacketClock
 
 from .axis_mapping import DEFAULT_AXIS_MAPPING, mapping_matrix, normalized_mapping
 from .skeleton import PARTS, PART_BY_KEY, SENSOR_KEYS, transform
+from .natural_hand import validate_reference, rotation as natural_rotation, proper
 
 
 VENDOR_RPY = "vendor_rpy"
@@ -35,6 +37,10 @@ class PoseEngine:
         self.assignments: dict[str, str] = {key: "" for key in SENSOR_KEYS}
         self.axis_mappings = {key: DEFAULT_AXIS_MAPPING for key in SENSOR_KEYS}
         self.continuous_basis: dict[str, np.ndarray] = {}
+        # Immutable (B, N) pairs, distinct from ordinary display zero frames.
+        self.calibration_references = {}
+        self.natural_hand_references = {}
+        self.natural_hand_previews = {}
         self.neutral: dict[str, np.ndarray] = {}
         self.current: dict[str, np.ndarray] = {}
         self.algorithm_modes = {key: VENDOR_RPY for key in SENSOR_KEYS}
@@ -90,6 +96,9 @@ class PoseEngine:
         if (device_id and key in self.continuous_basis and
                 mode not in self.mode_neutral.get(device_id, {})):
             raise ValueError("当前穿戴标定没有此算法的同步中立位；请在该算法下重新标定")
+        if self.algorithm_modes[key]!=mode:
+            self.natural_hand_previews.pop(key,None)
+            if key in self.natural_hand_references:self.natural_hand_references[key]['enabled']=False
         self.algorithm_modes[key] = mode
         if device_id:
             self._sync_active(device_id)
@@ -129,6 +138,9 @@ class PoseEngine:
         return alignment @ current
 
     def invalidate_neutral(self, device_id: str) -> None:
+        for key,assigned in self.assignments.items():
+            if assigned==device_id:
+                self.clear_natural_hand(key);self.calibration_references.pop(key,None)
         self.epochs[device_id] = uuid.uuid4().hex
         self.fusion_ready.discard(device_id)
         self.fusion_corrections.pop(device_id,None)
@@ -155,6 +167,8 @@ class PoseEngine:
         if key not in self.axis_mappings:
             raise KeyError(f"未知身体部位：{key}")
         self.axis_mappings[key] = normalized_mapping(mapping)
+        self.clear_natural_hand(key)
+        self.calibration_references.pop(key,None)
         self.continuous_basis.pop(key, None)
 
     def set_continuous_basis(self, key: str, matrix: np.ndarray) -> None:
@@ -167,6 +181,8 @@ class PoseEngine:
                 not np.isclose(np.linalg.det(basis), 1.0, atol=1e-3)):
             raise ValueError("连续轴映射必须是右手正交旋转矩阵")
         self.continuous_basis[key] = basis.copy()
+        self.clear_natural_hand(key)
+        self.calibration_references.pop(key,None)
 
     def apply_calibration(self, key: str, device_id: str, basis: np.ndarray,
                           neutral: np.ndarray,
@@ -195,10 +211,66 @@ class PoseEngine:
         if GYRO_TILT in validated and GYRO_RGBD not in validated:
             validated[GYRO_RGBD] = self.fusion_corrections.get(device_id,np.eye(3)) @ validated[GYRO_TILT]
         self.mode_neutral[device_id] = validated
+        self.calibration_references[key] = dict(device_id=device_id,epoch=self.epochs.get(device_id),
+            basis=self.continuous_basis[key].tolist(),source='wearing_calibration',
+            neutral_by_mode={m:n.tolist() for m,n in validated.items()})
         self._sync_active(device_id)
 
     def clear_calibration(self, key: str) -> None:
         self.continuous_basis.pop(key, None)
+        self.clear_natural_hand(key)
+        self.calibration_references.pop(key,None)
+
+    def clear_natural_hand(self,key):
+        self.natural_hand_references.pop(key,None);self.natural_hand_previews.pop(key,None)
+
+    def make_natural_hand_reference(self,key,anchor,neutral_pose):
+        if key!='left_hand':raise ValueError('首版仅支持左手')
+        device=self.assignments[key];mode=self.algorithm_modes[key]
+        if not device or mode not in (VENDOR_RPY,GYRO_TILT):raise ValueError('左手需分配设备并选择厂商RPY或陀螺＋加计')
+        standard=self.calibration_references.get(key)
+        if standard is None:raise ValueError('缺少独立标准朝向基准：请应用左手穿戴标定；手动映射请先采集标准朝向，不能用普通归零代替')
+        if standard['device_id']!=device or standard['epoch']!=self.epochs.get(device):raise ValueError('标准标定参考已失效，请重新建立')
+        if mode not in standard['neutral_by_mode']:raise ValueError('标准标定缺少当前算法的中立姿态，请重新标定或在当前算法采集手动标准基准')
+        r0=proper(standard['neutral_by_mode'][mode])
+        b=self.continuous_basis.get(key,mapping_matrix(self.axis_mappings[key]))
+        if not np.allclose(b,standard['basis'],atol=1e-6):raise ValueError('标准基准与当前映射不匹配')
+        anchor=proper(anchor)
+        # Always use the immutable calibration N, NEVER the last display zero.
+        rebased=b @ r0.T @ anchor
+        return validate_reference(dict(format='natural-palm-reference-v1',part=key,device_id=device,
+            epoch=self.epochs[device],mode=mode,anchor=anchor.tolist(),basis=rebased.tolist(),
+            mapping_basis=b.tolist(),standard_neutral=r0.tolist(),standard_source=standard['source'],
+            neutral_pose=proper(neutral_pose).tolist(),enabled=True,source='manual-long-axis-offset'))
+
+    def capture_manual_standard_hand(self,key,neutral):
+        if key!='left_hand':raise ValueError('首版仅支持左手')
+        if key in self.continuous_basis:raise ValueError('已采用穿戴标定，请重新应用原标定结果，不能单独替换与B配对的N')
+        device=self.assignments[key];mode=self.algorithm_modes[key]
+        if not device or not self.epochs.get(device) or mode not in (VENDOR_RPY,GYRO_TILT):raise ValueError('缺少设备或有效算法')
+        n=proper(neutral);self.clear_natural_hand(key)
+        self.calibration_references[key]=dict(device_id=device,epoch=self.epochs[device],
+            basis=mapping_matrix(self.axis_mappings[key]).tolist(),source='explicit_manual_standard',
+            neutral_by_mode={mode:n.tolist()})
+
+    def natural_hand_error(self,data):
+        key=data['part'];device=data['device_id']
+        if self.assignments.get(key)!=device:return '设备分配已变化'
+        if self.epochs.get(device)!=data['epoch']:return '积分参考已变化，请重新采样'
+        if self.algorithm_modes[key]!=data['mode']:return '姿态算法已变化；请切回采样算法或重新采样'
+        b=self.continuous_basis.get(key,mapping_matrix(self.axis_mappings[key]))
+        if not np.allclose(b,data['mapping_basis'],atol=1e-6):return '穿戴映射已变化'
+        standard=self.calibration_references.get(key)
+        if standard is not None and 'standard_neutral' in data:
+            n=standard['neutral_by_mode'].get(data['mode'])
+            if n is None or not np.allclose(n,data['standard_neutral'],atol=1e-6):return '标准朝向基准已变化，请重采自然参考'
+        return None
+
+    def set_natural_hand_reference(self,data,*,preview=False):
+        data=validate_reference(data);error=self.natural_hand_error(data)
+        if error:raise ValueError(error)
+        target=self.natural_hand_previews if preview else self.natural_hand_references
+        target[data['part']]=data
 
     def assign(self, key: str, device_id: str) -> None:
         if key not in self.assignments:
@@ -210,6 +282,8 @@ class PoseEngine:
         self.assignments[key] = device_id
         if old_id != device_id:
             self.continuous_basis.pop(key, None)
+            self.clear_natural_hand(key)
+            self.calibration_references.pop(key,None)
         if old_id != device_id and device_id:
             # Reassignment starts from the next sensor pose, not its old slot's frame.
             self.invalidate_neutral(device_id)
@@ -257,7 +331,11 @@ class PoseEngine:
                 "orientation_by_mode":{k:v.tolist() for k,v in self.mode_current.get(device_id,{}).items()},
                 "neutral_by_mode":{k:v.tolist() for k,v in self.mode_neutral.get(device_id,{}).items()},
                 "up_world":None if estimator is None or estimator.neutral_up is None else estimator.neutral_up.tolist(),
-                "fusion_correction":self.fusion_corrections.get(device_id,np.eye(3)).tolist()}
+                "fusion_correction":self.fusion_corrections.get(device_id,np.eye(3)).tolist(),
+                "natural_hand_references":{key:validate_reference(data) for key,data in self.natural_hand_references.items()
+                                           if data['device_id']==device_id},
+                "calibration_references":{key:deepcopy(data)
+                                          for key,data in self.calibration_references.items() if data['device_id']==device_id}}
 
     def restore_runtime(self,row):
         device=row['device_id']
@@ -266,6 +344,25 @@ class PoseEngine:
         self.epochs[device]=row['epoch']
         if row.get('fusion_ready'):self.fusion_ready.add(device)
         self.fusion_corrections[device]=np.asarray(row['fusion_correction'],float)
+        if 'calibration_references' in row:
+            from copy import deepcopy
+            for key,assigned in self.assignments.items():
+                if assigned==device:self.calibration_references.pop(key,None)
+            for key,data in row['calibration_references'].items():
+                if key not in self.assignments or self.assignments[key]!=device or data['device_id']!=device or data['epoch']!=row['epoch']:raise ValueError('回放标准参考绑定不一致')
+                b=proper(data['basis']);neutrals={m:proper(n).tolist() for m,n in data['neutral_by_mode'].items()}
+                if any(m not in ORIENTATION_MODES for m in neutrals):raise ValueError('回放标准参考算法无效')
+                current_basis=self.continuous_basis.get(key,mapping_matrix(self.axis_mappings[key]))
+                if np.allclose(b,current_basis,atol=1e-6):self.calibration_references[key]=deepcopy(dict(data,basis=b.tolist(),neutral_by_mode=neutrals))
+        if 'natural_hand_references' in row:
+            for key,assigned in self.assignments.items():
+                if assigned==device:self.clear_natural_hand(key)
+            for key,data in row['natural_hand_references'].items():
+                if data.get('device_id')!=device or data.get('part')!=key:raise ValueError('回放自然参考设备不一致')
+                data=validate_reference(data)
+                # A calibration-comparison replay intentionally uses another B.
+                # Do not attach the old display reference to that new mapping.
+                if self.natural_hand_error(data) is None:self.set_natural_hand_reference(data)
         self._sync_active(device)
 
     def zero(self, key: str | None = None) -> None:
@@ -275,6 +372,9 @@ class PoseEngine:
             if selected_key not in self.assignments:
                 raise KeyError(f"未知身体部位：{selected_key}")
             device_id = self.assignments[selected_key]
+            self.natural_hand_previews.pop(selected_key,None)
+            if selected_key in self.natural_hand_references:
+                self.natural_hand_references[selected_key]['enabled']=False
             if device_id in self.current:
                 # Preserve callers that update ``current`` directly (replay/tests).
                 active = self._active_mode(device_id)
@@ -290,7 +390,7 @@ class PoseEngine:
         moment = time.monotonic() if now is None else now
         return moment - self.received_at[device_id] <= max_age
 
-    def transforms(self) -> tuple[np.ndarray, ...]:
+    def transforms(self, *, include_natural: bool = True) -> tuple[np.ndarray, ...]:
         """Return model transforms in PARTS order, preserving unassigned subtrees."""
         absolute_rotations: list[np.ndarray] = []
         world_transforms: list[np.ndarray] = []
@@ -307,6 +407,9 @@ class PoseEngine:
                 if basis is None:
                     basis = mapping_matrix(self.axis_mappings[part.key])
                 absolute_rotation = basis @ delta_local @ basis.T
+                natural=self.natural_hand_previews.get(part.key,self.natural_hand_references.get(part.key))
+                if include_natural and natural and natural['enabled'] and self.natural_hand_error(natural) is None:
+                    absolute_rotation=natural_rotation(natural,self.current[device_id])
             else:
                 # Missing/unassigned parts follow their parent, including the head.
                 absolute_rotation = parent_rotation.copy()

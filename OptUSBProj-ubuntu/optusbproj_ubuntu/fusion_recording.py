@@ -86,6 +86,8 @@ class FusionSessionRecorder:
         self._runtime_pending = {}
         self.runtime_file = (self.path/'runtime_pose.jsonl').open('w',encoding='utf-8')
         self.continuous_basis_at_start = {}
+        self.natural_hand_references_at_start = {}
+        self.calibration_references_at_start = {}
         self.camera_epoch=None
         self.vision_config=None;self.vision_epoch=None
         self.heading_max_offset_deg=30.
@@ -261,6 +263,8 @@ class FusionSessionRecorder:
             "axis_mappings_at_start": self.axis_mappings,
             "algorithm_modes_at_start": self.algorithm_modes,
             "continuous_basis_at_start":self.continuous_basis_at_start,
+            "natural_hand_references_at_start":self.natural_hand_references_at_start,
+            "calibration_references_at_start":self.calibration_references_at_start,
             "runtime_pose_records":self.runtime_count,
             "camera_epoch":self.camera_epoch,
             "vision_config":self.vision_config,"vision_epoch":self.vision_epoch,

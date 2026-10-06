@@ -179,7 +179,7 @@ def apply_joint(owner, report, wearing_parts, camera_parts, *, review_acknowledg
     trial = deepcopy(owner.engine);install_wearing(trial)
     trial_fusion = LiveRGBDFusion(trial);trial_fusion.max_offset_deg = owner.live_fusion.max_offset_deg
     if camera_parts:trial_fusion.install(camera_selected)
-    fields = ('continuous_basis','mode_neutral','current','neutral','mode_current','fusion_corrections','fusion_ready')
+    fields = ('continuous_basis','calibration_references','natural_hand_references','natural_hand_previews','mode_neutral','current','neutral','mode_current','fusion_corrections','fusion_ready')
     backup = {k:deepcopy(getattr(owner.engine,k)) for k in fields}
     fusion_backup = {k:deepcopy(getattr(owner.live_fusion,k)) for k in ('bindings','states','last_stamp','events')}
     camera_epoch = owner._live_camera_epoch

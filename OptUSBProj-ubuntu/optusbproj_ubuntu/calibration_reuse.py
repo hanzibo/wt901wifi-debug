@@ -386,7 +386,7 @@ def apply_recovery(owner, report, parts):
     service.install(selected)  # Epoch/gravity/SO(3) checks before any real changes.
     for part, data in selected['parts'].items():
         trial.apply_calibration(part, data['device_id'], proper(data['basis_matrix']), proper(data['neutral_matrix']), data['neutral_matrices_by_mode'])
-    fields = ('continuous_basis', 'mode_neutral', 'current', 'neutral', 'mode_current', 'fusion_corrections', 'fusion_ready')
+    fields = ('continuous_basis', 'calibration_references', 'natural_hand_references', 'natural_hand_previews', 'mode_neutral', 'current', 'neutral', 'mode_current', 'fusion_corrections', 'fusion_ready')
     backup = {name: deepcopy(getattr(owner.engine, name)) for name in fields}
     fusion_fields = ('bindings', 'states', 'last_stamp', 'events')
     fusion_backup = {name: deepcopy(getattr(owner.live_fusion, name)) for name in fusion_fields}

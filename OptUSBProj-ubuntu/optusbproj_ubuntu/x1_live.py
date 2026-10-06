@@ -199,7 +199,7 @@ class LiveRetargeter:
 
     def absolute_hand_target(self, side: str, wrist: np.ndarray) -> np.ndarray:
         """Fixed neutral-frame conversion, never based on the IK's own forearm."""
-        hand = self.engine.transforms()[PART_BY_KEY[f"{side}_hand"]][:3, :3]
+        hand = self.engine.transforms(include_natural=False)[PART_BY_KEY[f"{side}_hand"]][:3, :3]
         C = self.pose_axes[side]
         target = np.eye(4)
         target[:3, :3] = C @ hand @ C.T @ self.robot_hand_zero[side]
@@ -208,7 +208,7 @@ class LiveRetargeter:
 
     def hand_relative_rotation(self, side: str) -> np.ndarray:
         """Hand orientation relative to the calibrated forearm model frame."""
-        transforms = self.engine.transforms()
+        transforms = self.engine.transforms(include_natural=False)
         forearm = transforms[PART_BY_KEY[f"{side}_forearm"]][:3, :3]
         hand = transforms[PART_BY_KEY[f"{side}_hand"]][:3, :3]
         return forearm.T @ hand

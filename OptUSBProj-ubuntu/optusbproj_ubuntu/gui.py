@@ -124,6 +124,7 @@ class BodyWindow(QtWidgets.QMainWindow):
         self._dialogs: list[QtWidgets.QDialog] = []
         self.settings_dialog: DeviceSettingsDialog | None = None
         self.calibration_dialog = None
+        self.natural_hand_dialog = None
         self.x1_preview_dialog = None
         self.recorder: PacketRecorder | None = None
         self.replay_mode = isinstance(source, ReplaySource) or getattr(source, "is_replay", False)
@@ -193,6 +194,9 @@ class BodyWindow(QtWidgets.QMainWindow):
         self.bilateral_calibration_button.clicked.connect(self._show_bilateral_calibration)
         self.bilateral_calibration_button.setEnabled(not self.replay_mode)
         panel_layout.addWidget(self.bilateral_calibration_button)
+        self.natural_hand_button=QtWidgets.QPushButton('左手自然掌面参考…（手动原型）')
+        self.natural_hand_button.clicked.connect(self._show_natural_hand)
+        self.natural_hand_button.setEnabled(not self.replay_mode);panel_layout.addWidget(self.natural_hand_button)
         self.x1_preview_button = QtWidgets.QPushButton("X1 双臂实时预览…（RViz）")
         self.x1_preview_button.clicked.connect(self._show_x1_preview)
         self.x1_preview_button.setEnabled(not self.replay_mode)
@@ -494,6 +498,14 @@ class BodyWindow(QtWidgets.QMainWindow):
     def _show_calibration(self) -> None:
         self._open_calibration(bilateral=False)
 
+    def _show_natural_hand(self):
+        if self.replay_mode:return
+        from .natural_hand_gui import NaturalHandDialog
+        if self.natural_hand_dialog is not None:
+            self.natural_hand_dialog.close();self.natural_hand_dialog.deleteLater()
+        self.natural_hand_dialog=NaturalHandDialog(self)
+        self.natural_hand_dialog.show();self.natural_hand_dialog.raise_()
+
     def _show_x1_preview(self) -> None:
         if self.replay_mode:
             return
@@ -605,6 +617,11 @@ class BodyWindow(QtWidgets.QMainWindow):
             battery = packet.battery_percent
             charge = f"约 {battery}%" if battery is not None else "未知"
             calibrated = " · 本次穿戴标定生效" if key in self.engine.continuous_basis else ""
+            natural=self.engine.natural_hand_previews.get(key,self.engine.natural_hand_references.get(key))
+            if natural:
+                if key in self.engine.natural_hand_previews:calibrated+=' · 自然掌面临时预览（X1不变）'
+                elif natural['enabled'] and self.engine.natural_hand_error(natural) is None:calibrated+=' · 自然掌面显示（X1仍标准化）'
+                else:calibrated+=' · 自然参考已保留，当前标准化显示'
             estimator = self.engine._tilt_filters.get(device_id)
             mode_label = ("陀螺＋加计" +
                           ("（静止学习偏置中）" if estimator is not None
@@ -733,6 +750,7 @@ class BodyWindow(QtWidgets.QMainWindow):
         self.poll_timer.stop()
         self.stats_timer.stop()
         self.zero_countdown_timer.stop()
+        if self.natural_hand_dialog is not None:self.natural_hand_dialog.close()
         if self.x1_preview_dialog is not None:
             self.x1_preview_dialog.close()
         self._stop_recording()
