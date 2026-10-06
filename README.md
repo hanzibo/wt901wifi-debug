@@ -9,7 +9,7 @@
 | 想做什么 | 入口 | 环境 |
 | --- | --- | --- |
 | 双手手腕演示、设备联网和参数设置 | `wrist_demo.py` | `wt901` |
-| 拇指／四指双 IMU 夹爪手势观察（不控制机器人） | `OptUSBProj-ubuntu/gripper_gesture_demo.py` | `OptUSBProj-yolo`；见[操作说明](OptUSBProj-ubuntu/docs/GRIPPER_GESTURE_DEMO.md) |
+| 左右手四 IMU 夹爪离散开合（仅 RViz，可在人体GUI中配置） | GUI“左右手 IMU 夹爪配置…”／`OptUSBProj-ubuntu/gripper_gesture_demo.py` | `OptUSBProj-yolo`；见[操作说明](OptUSBProj-ubuntu/docs/GRIPPER_GESTURE_DEMO.md) |
 | 手机局域网滑杆控制 X1 左／右夹爪（仅 RViz） | `OptUSBProj-ubuntu/lan_gripper_demo.py` | Python 标准库＋现有 ROS 桥；见[操作说明](OptUSBProj-ubuntu/docs/LAN_GRIPPER_DEMO.md) |
 | 全身 IMU 人体模型 | `OptUSBProj-ubuntu/run.py` | `OptUSBProj` |
 | 单目相机姿态原型 | `OptUSBProj-ubuntu/camera_run.py` | 见 [相机环境说明](OptUSBProj-ubuntu/docs/CAMERA_SETUP.md) |
