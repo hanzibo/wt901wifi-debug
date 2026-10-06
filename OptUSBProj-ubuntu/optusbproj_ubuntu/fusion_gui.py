@@ -22,7 +22,7 @@ from .fusion_recording import FusionSessionRecorder
 from .fusion_replay import FusionSessionReplay
 from .gui import BodyWindow, MODEL_DIR, _axis_triad
 from .pose import PoseEngine,GYRO_RGBD,GYRO_TILT
-from .live_rgbd_fusion import LiveRGBDFusion
+from .live_rgbd_fusion import LiveRGBDFusion, ARM_SEGMENTS
 from .skeleton import PARTS
 
 
@@ -79,6 +79,10 @@ class FusionWindow(BodyWindow):
         self.candidate_engine: PoseEngine | None = None
         self.candidate_actors = []
         self.candidate_axis_actors = []
+        self.live_compare_actors = []
+        self.live_compare_axis_actors = []
+        self._live_compare_enabled = False
+        self._single_camera = None
         self.visual_wearing_candidates = {c['part']: c for c in calibration_candidates or []
                                           if c.get('method') == 'visual_bone_v1'}
         self.visual_direction_actors = []
@@ -258,6 +262,12 @@ class FusionWindow(BodyWindow):
         group_layout.addWidget(self.reuse_calibration_button)
         self.freeze_fusion=QtWidgets.QCheckBox('冻结视觉纠偏（保留修正，继续IMU传播）')
         group_layout.addWidget(self.freeze_fusion)
+        self.live_compare_checkbox = QtWidgets.QCheckBox('双人体实时对比：陀螺＋加计 vs 陀螺＋加计＋RGB-D')
+        self.live_compare_checkbox.setEnabled(not self.replay_mode)
+        self.live_compare_checkbox.setToolTip('仅改变显示；四个臂段使用同一数据、同一穿戴映射、各自中立参考。'
+            '要持续纠偏，请先应用相机标定并将对应部位选为RGB-D融合模式。回放请使用原对比窗口。')
+        self.live_compare_checkbox.toggled.connect(self._toggle_live_comparison)
+        group_layout.addWidget(self.live_compare_checkbox)
         self.live_fusion_status=QtWidgets.QLabel('实时纠偏未标定；不影响当前算法')
         self.live_fusion_status.setWordWrap(True);group_layout.addWidget(self.live_fusion_status)
         invalidate=QtWidgets.QPushButton('相机/穿戴变化：停用本次相机标定')
@@ -332,6 +342,8 @@ class FusionWindow(BodyWindow):
         control_scroll.setWidget(panel)
         main_layout.addWidget(control_scroll, 2)
         self.control_scroll = control_scroll
+        if not self.replay_mode:
+            self._install_live_comparison_header()
         if isinstance(source, FusionSessionReplay):
             import json
             manifest=json.loads((source.path/'manifest.json').read_text())
@@ -397,7 +409,103 @@ class FusionWindow(BodyWindow):
         self._render_pose()
         self._front_view()
 
+    def _install_live_comparison_header(self):
+        layout = self.centralWidget().layout()
+        layout.takeAt(0)
+        container = QtWidgets.QWidget()
+        column = QtWidgets.QVBoxLayout(container)
+        column.setContentsMargins(0, 0, 0, 0)
+        self.live_compare_header = QtWidgets.QWidget()
+        header = QtWidgets.QHBoxLayout(self.live_compare_header)
+        header.setContentsMargins(0, 0, 0, 0)
+        self.live_compare_labels = []
+        for color in ('#76D7FF', '#FFBD72'):
+            label = QtWidgets.QLabel()
+            label.setWordWrap(True)
+            label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            label.setStyleSheet(f'background:#242936;color:{color};padding:6px;font-weight:bold;')
+            header.addWidget(label, 1)
+            self.live_compare_labels.append(label)
+        column.addWidget(self.live_compare_header)
+        self.live_compare_header.hide()
+        column.addWidget(self.plotter.interactor, 1)
+        layout.insertWidget(0, container, 3)
+
+    def _toggle_live_comparison(self, enabled):
+        # Replay candidate comparison is a different feature, never mix them.
+        if self.replay_mode:
+            return
+        if enabled and not self.live_compare_actors:
+            triad = _axis_triad(.105)
+            for part, original in zip(PARTS, self.actors):
+                self.live_compare_actors.append(self.plotter.add_mesh(
+                    original.mapper.dataset, color=part.color, smooth_shading=False,
+                    show_edges=False, render=False))
+                self.live_compare_axis_actors.append(self.plotter.add_mesh(
+                    triad, scalars='axis_rgb', rgb=True, lighting=False,
+                    show_scalar_bar=False, pickable=False, render=False))
+        if enabled:
+            self._single_camera = self.plotter.camera.copy()
+        self._live_compare_enabled = enabled
+        self.live_compare_header.setVisible(enabled)
+        for actor in self.live_compare_actors:
+            actor.SetVisibility(enabled)
+        for actor in self.live_compare_axis_actors:
+            actor.SetVisibility(enabled and self.axes_checkbox.isChecked())
+        if enabled:
+            self._front_view()
+        elif self._single_camera is not None:
+            self.plotter.camera = self._single_camera
+        self._render_pose()
+
+    def _update_live_comparison_status(self):
+        if not self._live_compare_enabled:
+            return
+        names = {'left_upper_arm':'左上臂', 'left_forearm':'左前臂',
+                 'right_upper_arm':'右上臂', 'right_forearm':'右前臂'}
+        raw, fused = [], []
+        for part in ARM_SEGMENTS:
+            device = self.engine.assignments.get(part)
+            if not device:
+                raw.append(names[part]+'未绑定'); fused.append(names[part]+'未绑定')
+                continue
+            if not self.engine.is_live(device):
+                raw.append(names[part]+'数据过期'); fused.append(names[part]+'数据过期')
+            if self.engine.current_for(device, GYRO_TILT) is None or self.engine.neutral_for(device, GYRO_TILT) is None:
+                raw.append(names[part]+'姿态未就绪')
+            elif not self.engine._tilt_filters[device].bias_ready:
+                raw.append(names[part]+'静止学习未完成')
+            if self.engine.current_for(device, GYRO_RGBD) is None or self.engine.neutral_for(device, GYRO_RGBD) is None:
+                fused.append(names[part]+'姿态未就绪')
+            elif device not in self.engine.fusion_ready:
+                fused.append(names[part]+'未标定/已停用（保留缓存）')
+            elif self.engine.algorithm_modes[part] != GYRO_RGBD:
+                fused.append(names[part]+'未选融合模式，纠偏待机')
+            else:
+                state = self.live_fusion.states.get(part, {})
+                fused.append(names[part]+f" {state.get('offset_deg', 0):+.1f}° · "+state.get('reason', '等待视觉'))
+        if self.freeze_fusion.isChecked() or not self.rgbd_pose_enabled.isChecked():
+            fused.insert(0, '视觉冻结/关闭：保留已有修正')
+        elif self.last_pose_estimate is None or time.monotonic_ns()-self.last_pose_estimate.captured_mono_ns > 500_000_000:
+            fused.insert(0, '视觉未就绪/过期：保留已有修正')
+        self.live_compare_labels[0].setText('左 · 陀螺＋加计（不使用视觉修正）\n'+('；'.join(raw) or '四臂段实时传播'))
+        self.live_compare_labels[1].setText('右 · 陀螺＋加计＋RGB-D（非GT）\n'+'；'.join(fused))
+
     def _render_pose(self) -> None:
+        if getattr(self, '_live_compare_enabled', False):
+            for actors, axes, mode, y in (
+                    (self.actors, self.axis_actors, GYRO_TILT, -1.),
+                    (self.live_compare_actors, self.live_compare_axis_actors, GYRO_RGBD, 1.)):
+                offset = np.eye(4); offset[1, 3] = y
+                matrices = self.engine.transforms(mode_overrides={p:mode for p in ARM_SEGMENTS})
+                for actor, axis, matrix in zip(actors, axes, matrices):
+                    actor.user_matrix = offset @ matrix
+                    axis.user_matrix = offset @ matrix
+            self._update_live_comparison_status()
+            self.plotter.render()
+            self._render_dirty = False
+            self._last_render = time.monotonic()
+            return
         if getattr(self, "candidate_engine", None) is None:
             super()._render_pose()
             return
@@ -420,7 +528,11 @@ class FusionWindow(BodyWindow):
         self._last_render = time.monotonic()
 
     def _front_view(self):
-        if getattr(self, 'visual_wearing_candidates', None) and self.candidate_engine is not None:
+        if getattr(self, '_live_compare_enabled', False):
+            self.plotter.camera_position = [(4., 0., .15), (0., 0., .15), (0., 0., 1.)]
+            self.plotter.reset_camera(bounds=(-1., 1., -2.2, 2.2, -1., 1.3))
+            self.plotter.camera.zoom(1.45)
+        elif getattr(self, 'visual_wearing_candidates', None) and self.candidate_engine is not None:
             # Reserve the full bilateral T-pose envelope, not only the small
             # neutral-pose bounds at startup. R restores this fixed view.
             self.plotter.camera_position = [(4., 0., .15), (0., 0., .15), (0., 0., 1.)]
@@ -468,6 +580,8 @@ class FusionWindow(BodyWindow):
         super()._toggle_axes(visible)
         for actor in getattr(self, "candidate_axis_actors", ()):
             actor.SetVisibility(visible)
+        for actor in getattr(self, 'live_compare_axis_actors', ()):
+            actor.SetVisibility(visible and self._live_compare_enabled)
         self._render_dirty = True
 
     def _zero(self, key: str) -> None:
@@ -738,6 +852,7 @@ class FusionWindow(BodyWindow):
         self._display_image(frame)
 
     def _update_live_fusion_status(self):
+        self._update_live_comparison_status()
         text=[]
         for part,state in self.live_fusion.states.items():
             reason=state['reason']

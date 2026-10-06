@@ -390,8 +390,17 @@ class PoseEngine:
         moment = time.monotonic() if now is None else now
         return moment - self.received_at[device_id] <= max_age
 
-    def transforms(self, *, include_natural: bool = True) -> tuple[np.ndarray, ...]:
-        """Return model transforms in PARTS order, preserving unassigned subtrees."""
+    def transforms(self, *, include_natural: bool = True,
+                   mode_overrides: dict[str, str] | None = None) -> tuple[np.ndarray, ...]:
+        """Read-only render view; overrides never change the active control mode.
+
+        Each view uses its own paired neutral/current cache. Missing overridden
+        samples follow the parent, just like unassigned parts (not active data).
+        """
+        overrides = mode_overrides or {}
+        for key, mode in overrides.items():
+            if key not in self.assignments or mode not in ORIENTATION_MODES:
+                raise ValueError(f"无效显示姿态来源：{key}/{mode}")
         absolute_rotations: list[np.ndarray] = []
         world_transforms: list[np.ndarray] = []
         identity = np.eye(3)
@@ -399,17 +408,20 @@ class PoseEngine:
             parent_index = part.parent
             parent_rotation = identity if parent_index is None else absolute_rotations[parent_index]
             device_id = self.assignments.get(part.key, "")
-            if device_id and device_id in self.current and device_id in self.neutral:
+            mode = overrides.get(part.key)
+            current = self.current_for(device_id, mode) if mode else self.current.get(device_id)
+            neutral = self.neutral_for(device_id, mode) if mode else self.neutral.get(device_id)
+            if device_id and current is not None and neutral is not None:
                 # Express the change in the sensor's *neutral local* frame.
                 # A chosen column maps each neutral sensor axis to the model.
-                delta_local = self.neutral[device_id].T @ self.current[device_id]
+                delta_local = neutral.T @ current
                 basis = self.continuous_basis.get(part.key)
                 if basis is None:
                     basis = mapping_matrix(self.axis_mappings[part.key])
                 absolute_rotation = basis @ delta_local @ basis.T
                 natural=self.natural_hand_previews.get(part.key,self.natural_hand_references.get(part.key))
                 if include_natural and natural and natural['enabled'] and self.natural_hand_error(natural) is None:
-                    absolute_rotation=natural_rotation(natural,self.current[device_id])
+                    absolute_rotation=natural_rotation(natural,current)
             else:
                 # Missing/unassigned parts follow their parent, including the head.
                 absolute_rotation = parent_rotation.copy()
