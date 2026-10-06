@@ -1,16 +1,91 @@
-# WT901WIFI 项目
+# WT901WIFI：人体姿态、RGB-D 纠偏与 X1 随动预览
 
-本仓库有两条当前可运行的路线：根目录的 [双手手腕控制台](wrist_demo.py)，以及 [OptUSBProj Ubuntu 版](OptUSBProj-ubuntu/README.md)的 15 部件人体模型、相机/IMU 采集与穿戴标定。两者共用 [`wt901/`](wt901/) 通信协议模块；实时模式均使用 UDP 1399，**不要同时启动**。旧版 Windows 项目 `OptUSBProj/` 是本机未跟踪的参考资料，不参与 Ubuntu 程序运行。
+本仓库在 Ubuntu 上实现 WT901WIFI 多设备采集、人体姿态映射、穿戴标定、RGB-D 辅助航向纠偏，以及 X1 机器人双臂的 **RViz 运动学预览**。当前主路线位于 [OptUSBProj Ubuntu 版](OptUSBProj-ubuntu/README.md)；根目录的 [双手手腕控制台](wrist_demo.py) 保留为独立调试入口。说明更新于 2026-10-06。
 
-想理解从设备 R/P/Y、GUI 归零、轴映射到模型姿态的数学关系，可阅读 [SO(3) 与李代数说明](docs/SO3_IMU_MODEL.md)。
-右上臂、右前臂的连续轴映射矩阵如何通过动作标定，以及它们怎样形成肘部相对旋转，见 [人体手臂连续轴映射说明](docs/CONTINUOUS_ARM_CALIBRATION.md)。
+主要数据链路为：WT901 原始数据 → 姿态估计 → 穿戴轴映射与中立参考 → STL 人体模型 → 肘腕目标及 IK → X1 `/joint_states`。Gemini 336L 的彩色图像经二维关键点检测后，结合真实配准深度得到骨段方向，为四个臂段提供低频航向纠偏；高频传播仍由 IMU 完成。
+
+两个 GUI 共用 [`wt901/`](wt901/) 通信模块，实时模式均监听 UDP 1399，**不要同时启动**。相机也不能被 OrbbecViewer 或另一个采集程序同时占用。旧版 Windows 项目 `OptUSBProj/` 是本机未跟踪的参考资料，不参与 Ubuntu 程序运行。
 
 | 想做什么 | 入口 | 环境 |
 | --- | --- | --- |
 | 双手手腕演示、设备联网和参数设置 | `wrist_demo.py` | `wt901` |
 | 全身 IMU 人体模型 | `OptUSBProj-ubuntu/run.py` | `OptUSBProj` |
 | 单目相机姿态原型 | `OptUSBProj-ubuntu/camera_run.py` | 见 [相机环境说明](OptUSBProj-ubuntu/docs/CAMERA_SETUP.md) |
-| 相机＋IMU 录制、回放与标定 | `OptUSBProj-ubuntu/fusion_run.py` | 见 [融合环境说明](OptUSBProj-ubuntu/docs/FUSION_SETUP.md) |
+| Gemini RGB-D＋IMU、双臂一体标定与纠偏 | `OptUSBProj-ubuntu/fusion_run.py --camera-source orbbec` | 推荐已配置的 `OptUSBProj-yolo`；SDK 独立环境见下文 |
+| X1 双臂／手掌 RViz 随动 | 人体 GUI 内的“X1 双臂实时预览…” | ROS 接收端使用 `x1_ros2_py` |
+
+## 当前能力与边界
+
+- 15 个 STL 人体部件可独立分配设备、归零和设置轴映射；主要穿戴实测集中于双臂及手部，并非所有部位都已完成实机验收。
+- 人体 GUI 保留厂商 R/P/Y，可逐部位选择电脑端“陀螺＋加计”；后者按设备片内时间积分，学习陀螺零偏，并用重力纠正倾斜。两者都无法仅靠六轴 IMU 消除长期航向漂移。
+- Gemini RGB-D GUI 支持 RTMW / YOLO26 二维姿态后端和本地 YOLO 权重选择。三维点使用相机真实深度，而不是模型预测深度；表面深度不等于解剖关节中心。
+- 双臂一体标定用一套动作分别计算穿戴映射和相机标定，四部位独立验收、选择应用。相机采用斜前举等可见动作，降低正面视角前平举遮挡的影响；原 IMU 穿戴拟合仍使用标准前举／侧举。
+- 左右上臂、前臂可启用“陀螺＋加计＋RGB-D”航向纠偏。用户已在多次长于 5 分钟的运行中观察到纠偏有效，但这不是有 GT 的精度测量，也不保证遮挡、长轴扭转或任意动作下均可观测。
+- 默认关闭的“双人体实时对比”并列显示 IMU-only 与 RGB-D 融合姿态，仅影响显示，不改变实际算法或 X1 输出。相机结果应用后仍须明确启用对应部位融合，否则纠偏待机。
+- X1 支持双臂位置随动、可选双手朝向、统一／分段长度比例，以及数值最小二乘／PoE 雅可比两种 IK 后端。完整末端位姿优先模式保留用于对比，可能产生较大关节转动。
+- 手部自然掌面参考、视觉估计 C0、历史标定快速恢复、视觉辅助穿戴标定及不限累计纠偏角等仍属实验功能。手腕尚无与四臂段同等的长期 RGB-D 航向纠偏。
+
+**X1 链路只发布 RViz 预览关节状态，不是实体机器人控制方案。** 当前未完成真机安全限位、碰撞约束、执行器闭环或急停。GUI 的速度／角度限制不能当作真机安全保证。
+
+## 主路线快速启动
+
+以下命令复用本机已配置环境，不会自动安装依赖或下载模型。首次部署见 [RGB-D 采集](OptUSBProj-ubuntu/docs/RGBD_STAGE_A.md)、[融合环境](OptUSBProj-ubuntu/docs/FUSION_SETUP.md) 和 [YOLO 后端](OptUSBProj-ubuntu/docs/YOLO_RGBD_BACKEND.md)。相机 SDK 在独立 `orbbec336l` 环境中，由采集子进程调用；二维视觉模型依赖在 GUI 环境中。
+
+从仓库根目录运行 RGB-D 主界面：
+
+```bash
+cd /home/hzb/Work/WT901
+conda run --no-capture-output -n OptUSBProj-yolo python -u OptUSBProj-ubuntu/fusion_run.py \
+  --camera-source orbbec --rgbd-fps 10 --rgbd-warmup 2 \
+  --rgbd-pose --pose-backend yolo26 --pose-imgsz 640
+```
+
+默认 YOLO 权重为本地 `no-improtent/yolo-models/yolo26m-pose.pt`；可用 `--yolo-model /path/to/yolo26l-pose.pt` 或 GUI 的“YOLO权重…”选择其他姿态权重。RTMW 后端可用 `--pose-backend rtmw`。更换后端、权重或输入尺寸后应重新完成相机标定，不能直接复用旧视觉会话结果。
+
+也可使用本机桌面“WT901-RGBD-YOLO对比”启动项，或：
+
+```bash
+bash OptUSBProj-ubuntu/launch_rgbd_yolo.sh
+```
+
+纯 IMU 人体模型无需相机：
+
+```bash
+conda run --no-capture-output -n OptUSBProj python -u OptUSBProj-ubuntu/run.py
+```
+
+桌面文件和部分模型默认路径针对本机；迁移电脑时应修改路径并重新检查依赖。不要通过同时开启多个 GUI 来比较算法，应使用同一 RGB-D 窗口的双人体对比功能。
+
+### 推荐操作顺序
+
+1. 开启电脑 `WT901-LAN` 2.4 GHz 热点，设备以 STA/UDP 接入；固定绑带和相机，按实际佩戴位置分配不同设备。
+2. 四个臂段选择“陀螺＋加计”，支撑双臂并等待静止零偏学习完成；相机画面只保留目标使用者，确认肩肘腕和深度有效。
+3. 打开“双臂一体标定 · 穿戴＋相机（一次动作）”，按倒计时提示动作。首次和回到中立位均保持同样的放松姿态；不要首次展背、结束时才放松。
+4. 检查每个部位的穿戴／相机独立结果和回放，明确应用所选合格结果。随后可一键启用本轮已应用且仍有效部位的 RGB-D 融合，未通过部位保留原模式并显示原因。
+5. 先验收人体模型，再在 X1 弹窗启动 RViz 模型及随动。GUI 可启动 ROS 接收端，无需额外终端；同一时刻只允许一个 `/joint_states` 发布者。
+6. 要重新录制标定时，先停止 X1 随动，点击一体窗口“一键切回双臂陀螺＋加计”，再开始录制。该按钮不归零、不重置积分器，也不删除已应用标定。
+
+相机／绑带移动、设备参数或参考系变化会使历史结果不再可靠。不要为了强行通过而放宽质量门槛；融合失效提示、独立复测和配对中立参考都是流程的一部分。
+
+## 文档导航
+
+| 主题 | 文档 |
+| --- | --- |
+| GUI 入口与功能 | [Ubuntu 版说明](OptUSBProj-ubuntu/README.md) |
+| 一次动作完成穿戴＋相机标定 | [一体标定流程及诊断](OptUSBProj-ubuntu/docs/COMBINED_ARM_CAMERA_CALIBRATION.md) |
+| 实时航向纠偏及失效规则 | [RGB-D 实时融合](OptUSBProj-ubuntu/docs/RGBD_LIVE_FUSION.md) |
+| 后端选择与同录像比较 | [RTMW / YOLO26](OptUSBProj-ubuntu/docs/YOLO_RGBD_BACKEND.md) |
+| 标准穿戴与视觉辅助穿戴 | [穿戴标定](OptUSBProj-ubuntu/docs/WEARING_CALIBRATION.md)、[视觉辅助](OptUSBProj-ubuntu/docs/VISUAL_ASSISTED_WEARING.md) |
+| 设备姿态、归零和运动换基 | [SO(3) 与李代数](docs/SO3_IMU_MODEL.md) |
+| 连续映射 B、弱先验与拟合验收 | [连续穿戴标定数学](docs/CONTINUOUS_ARM_CALIBRATION.md) |
+| 陀螺积分、重力反馈 | [重力纠倾斜推导](docs/GYRO_GRAVITY_TILT_MATH.md) |
+| 相机 Q、骨轴及航向纠偏 | [相机标定与融合数学](docs/RGBD_CAMERA_CALIBRATION_FUSION_MATH.md) |
+| 人体 → 机器人目标、优化与 FK | [重定向数学](docs/HUMAN_TO_X1_RETARGETING_MATH.md)、[URDF / PoE 等价关系](docs/URDF_POE_EQUIVALENCE.md) |
+| X1 启动、诊断及 IK 对比 | [双臂实时预览](urdf-model/docs/IMU双臂实时预览.md)、[IK 后端](OptUSBProj-ubuntu/docs/X1_IK_BACKENDS.md) |
+| 自然掌面与历史复用 | [自然掌面数学](docs/NATURAL_PALM_C0_MATH.md)、[快速恢复](OptUSBProj-ubuntu/docs/CALIBRATION_REUSE.md) |
+| 项目总览 | [总览 HTML](docs/PROJECT_PIPELINE_OVERVIEW.html)、[图像讲解源文件及复现](docs/project-explainer/README.md) |
+
+子文档中的阶段 A/B 或早期重构说明描述对应阶段边界；当前整套系统的能力以实际入口代码和本文概览为准。
 
 ## 双手手腕姿态控制台
 
@@ -24,6 +99,7 @@
 - 分别显示两只手相对各自中立位的 X/Y/Z 转角，以及固定前臂、随动手掌的 3D 模型。
 - 在界面中查看设备数据、电压与估算电量；读取和设置 6/9 轴算法、带宽、回传频率、陀螺仪/加速度计量程及安装方向。
 - 提供磁场、加速度计校准，以及设备参考角和界面中立位归零操作。
+- 每只手可切换厂商 RPY、俯仰保护、全程陀螺 SO(3)、陀螺＋加计纠倾斜四种电脑端姿态来源，便于对比；保护区范围可设置，但不保证消除保护区外的航向漂移。
 - 通过“设备分配”将热点中在线的 WT 设备绑定到手部；通过“热点设备”查看设备 ID 与网络端点，并可将选中设备从 STA/UDP 切回 AP/UDP。
 - 通过“接入新设备”向导，把处于 AP 模式的新设备配置为连接电脑热点的 STA/UDP 模式。
 
@@ -111,6 +187,9 @@ conda run --no-capture-output -n wt901 python -u so3_rotvec_demo.py --device-id 
 | [wrist_demo.py](wrist_demo.py) | 双手手腕姿态 GUI 主程序 |
 | [wt901/](wt901/) | WT 数据包解析、网络接收与设备寄存器通信 |
 | [wt901_viz/](wt901_viz/) | 3D 显示、联网向导及独立姿态查看器；详见其 [README](wt901_viz/README.md) |
+| [OptUSBProj-ubuntu/](OptUSBProj-ubuntu/) | 人体 GUI、RGB-D 采集／回放、穿戴与相机标定、实时融合；业务代码在 `optusbproj_ubuntu/` |
+| [urdf-model/](urdf-model/) | X1 URDF、ROS 2 可视化、FK/IK、离线回放和实时预览工具 |
+| [docs/](docs/) | 数学推导、项目总览与图像讲解源文件 |
 | [multi9.py](multi9.py)、[print9.py](print9.py) | 命令行接收、检查传感器数据 |
 | [magcal.py](magcal.py)、[configure.py](configure.py)、[setsta.py](setsta.py) | 命令行校准、配置与 STA 接入工具 |
 | [pose9.py](pose9.py) | 基于 IMU 的位置估计实验；积分漂移明显，不适合当作可靠定位结果 |
@@ -119,11 +198,23 @@ conda run --no-capture-output -n wt901 python -u so3_rotvec_demo.py --device-id 
 
 本地归档目录 `no-improtent/` 已被 `.gitignore` 排除，不会随仓库提交；其中的原版资料或示例 SDK 不是运行主程序所必需的。
 
+人体 GUI 的 `OptUSBProj-ubuntu/recordings/`、`calibrations/` 和 `local_config.json` 也只保留本地；模型下载权重、ROS `build/install/log` 和生成的私人讲解素材不入库。记录可能含人脸、房间环境、设备标识和动作数据，分享前应检查并匿名化。
+
 ## 测试
 
 ```bash
 conda run --no-capture-output -n wt901 python -m unittest discover -s tests -v
 ```
+
+人体／RGB-D 功能的测试是另一套测试，使用已配置依赖的环境：
+
+```bash
+cd /home/hzb/Work/WT901/OptUSBProj-ubuntu
+QT_QPA_PLATFORM=offscreen PYTHONPATH=/home/hzb/Work/WT901:/home/hzb/Work/WT901/OptUSBProj-ubuntu \
+  conda run --no-capture-output -n OptUSBProj-yolo python -m unittest discover -s tests
+```
+
+2026-10-06 合并至 `main` 后，上述人体／RGB-D 测试共 322 项通过。这是该版本的验收记录，不是未来测试数量或传感器精度保证；无头 GUI 测试中的 OpenGL 提示也不能替代真实桌面渲染检查。
 
 自动化测试不代替真实设备验证。首次运行时，请先确认设备在线、电脑监听端口未被其他程序占用，并在界面检查接收到的设备 ID 与预期一致。
 
