@@ -15,7 +15,7 @@ from PySide6 import QtWidgets
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from optusbproj_ubuntu.combined_calibration import apply_joint, build_joint_report, imu_wearing, load_capture
 from optusbproj_ubuntu.fusion_gui import FusionWindow
-from optusbproj_ubuntu.pose import GYRO_TILT
+from optusbproj_ubuntu.pose import GYRO_TILT, GYRO_RGBD
 from test_calibration_reuse import system, CAMERA, VISION
 from test_pose_backend_gui import Source
 from test_visual_wearing import fixture
@@ -116,6 +116,43 @@ class CombinedTests(unittest.TestCase):
                 d.show_results();self.assertFalse(d.wear_checks['left_forearm'].isEnabled())
                 self.assertTrue(d.camera_checks['left_forearm'].isEnabled());self.assertFalse(w.engine.continuous_basis)
                 self.assertEqual(len(d.capture_steps()),11)
+                self.assertFalse(d.enable_rgbd.isEnabled())
+            finally:w.close()
+
+    def test_oneclick_rgbd_preflight_atomicity_and_safety(self):
+        with TemporaryDirectory() as tmp,patch.object(FusionWindow,'start_camera'):
+            w=FusionWindow(Source(),Path(tmp)/'settings.json',{}, {},camera_source='orbbec');w.poll_timer.stop()
+            try:
+                w._show_combined_calibration();d=w._combined_calibration_dialog
+                engine,fusion,_=system();w.engine=engine;w.live_fusion=fusion
+                d.enable_bilateral_rgbd()
+                self.assertTrue(all(engine.algorithm_modes[p]==GYRO_TILT for p in fusion.bindings))
+                _,report=self.joint();d.report=report;d.devices={p:r['device_id'] for p,r in report['wearing']['parts'].items()}
+                d.analysis_path=Path(tmp)
+                d.show_results()
+                with patch('PySide6.QtWidgets.QMessageBox.question',return_value=QtWidgets.QMessageBox.StandardButton.Yes),patch('optusbproj_ubuntu.combined_calibration_gui.apply_joint',side_effect=ValueError('invalid')):
+                    d.apply_live()
+                self.assertFalse(d.enable_rgbd.isEnabled())
+                with patch('PySide6.QtWidgets.QMessageBox.question',return_value=QtWidgets.QMessageBox.StandardButton.Yes),patch('optusbproj_ubuntu.combined_calibration_gui.apply_joint'):
+                    d.apply_live()
+                self.assertTrue(d.enable_rgbd.isEnabled())
+                last=engine.assignments['right_forearm'];engine.fusion_ready.discard(last)
+                d.enable_bilateral_rgbd()
+                self.assertTrue(all(engine.algorithm_modes[p]==GYRO_TILT for p in fusion.bindings))
+                self.assertIn('右前臂',d.status.text())
+                engine.fusion_ready.add(last)
+                with patch('optusbproj_ubuntu.combined_calibration_gui.save_config',side_effect=OSError('disk')):
+                    d.enable_bilateral_rgbd()
+                self.assertTrue(all(engine.algorithm_modes[p]==GYRO_TILT for p in fusion.bindings))
+                w.x1_preview_dialog=SimpleNamespace(sender=object())
+                d.enable_bilateral_rgbd()
+                self.assertTrue(all(engine.algorithm_modes[p]==GYRO_TILT for p in fusion.bindings))
+                w.x1_preview_dialog=None
+                d.enable_bilateral_rgbd()
+                for p in fusion.bindings:
+                    self.assertEqual(engine.algorithm_modes[p],GYRO_RGBD)
+                    self.assertEqual(w.algorithm_combos[p].currentData(),GYRO_RGBD)
+                self.assertIsNone(w.x1_preview_dialog)
             finally:w.close()
 
     def test_oblique_protocol_front_occlusion_and_held_out_checks(self):

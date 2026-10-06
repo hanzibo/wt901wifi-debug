@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import sys
 import uuid
+from copy import deepcopy
 
 from PySide6 import QtCore,QtWidgets
 
@@ -12,6 +13,9 @@ from .camera_protocol import OBLIQUE_PROTOCOL, add_oblique_steps
 from .recording_cleanup import validate_capture
 from .visual_wearing import needs_review
 from .visual_wearing_gui import wearing_steps
+from .guided_calibration import ARM_PARTS
+from .pose import GYRO_RGBD
+from .settings import save_config
 
 
 class CombinedCalibrationDialog(CameraCalibrationDialog):
@@ -45,6 +49,11 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
         self.replay.setText('穿戴双模型回放 · 现有 vs 本轮候选')
         self.replay.clicked.disconnect();self.replay.clicked.connect(self.open_wearing_preview)
         self.apply.setText('应用勾选合格结果（不自动启用融合或机器人）')
+        self.enable_rgbd=QtWidgets.QPushButton('一键切换双臂为陀螺＋加计＋RGB-D')
+        self.enable_rgbd.setEnabled(False)
+        self.enable_rgbd.setToolTip('应用成功后可点击；四个部位全部通过现有切换检查后才一起切换，不启动X1。')
+        self.enable_rgbd.clicked.connect(self.enable_bilateral_rgbd)
+        layout.insertWidget(layout.indexOf(self.apply)+1,self.enable_rgbd)
         self.table=QtWidgets.QTableWidget(0,5)
         self.table.setHorizontalHeaderLabels(['部位','穿戴结果','应用穿戴','相机结果','应用相机'])
         self.table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Stretch)
@@ -76,6 +85,7 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
         error=self.owner._pose_change_error()
         if error:self.status.setText(error);return
         self.capture_method=self.method.currentData();self.report=None;self.applied=False;self._preview_opened=False
+        self.enable_rgbd.setEnabled(False)
         self._cleanup_capture=None;self._deleted_capture=None;self.delete_recording.setEnabled(False)
         self.table.setRowCount(0);self.review.setChecked(False);self.camera_replay.setEnabled(False)
         super().begin()
@@ -83,6 +93,7 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
     def set_controls(self,running):
         super().set_controls(running)
         if hasattr(self,'method'):self.method.setEnabled(not running)
+        if hasattr(self,'enable_rgbd'):self.enable_rgbd.setEnabled(self.applied and not running)
 
     def analyze_recording(self):
         if self._cleanup_running() or self._deleted_capture is not None:return
@@ -91,6 +102,7 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
         self.analysis_method=self.method.currentData()
         self.prior_capture_label.setText(f'本次计算 λ={self.prior_weight_spin.value():.3f}（结果报告记录实际使用值）')
         self._preview_opened=False;self.review.setChecked(False);self.applied=False
+        self.enable_rgbd.setEnabled(False)
         self.analysis_path=self.recording_path.parent/'analysis_combined'/(self.recording_path.name+'-'+uuid.uuid4().hex[:6])
         if self.process is not None:self.process.deleteLater()
         self.process=QtCore.QProcess(self);self.process.setProcessChannelMode(QtCore.QProcess.ProcessChannelMode.MergedChannels)
@@ -153,7 +165,34 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
         try:apply_joint(self.owner,self.report,wear,camera,review_acknowledged=self.review.isChecked())
         except (ValueError,KeyError) as exc:self.status.setText('未应用：'+str(exc));return
         self.applied=True;self.apply.setEnabled(False)
-        self.status.setText('已应用所选合格结果。请先观察人体模型，再手动选择已应用相机部位的RGB-D融合算法；没有自动启动机器人。')
+        self.enable_rgbd.setEnabled(True)
+        self.status.setText('已应用所选合格结果。可点击一键切换双臂RGB-D融合；请先观察人体模型，没有自动启动机器人。')
+
+    def enable_bilateral_rgbd(self):
+        if not self.applied:return
+        owner=self.owner
+        error=owner._pose_change_error()
+        if self.active or self.state=='analyzing' or self._cleanup_running():error='请先结束采集、分析或删除操作'
+        if owner.recorder is not None:error='请先结束录制'
+        if error:
+            self.status.setText('未切换：'+error);return
+        try:
+            # Preflight all four on a copy: never leave a half-switched arm.
+            trial=deepcopy(owner.engine)
+            for part in ARM_PARTS:
+                try:trial.set_algorithm_mode(part,GYRO_RGBD)
+                except ValueError as exc:raise ValueError(f'{PART_LABELS[part]}：{exc}') from exc
+                if owner.algorithm_combos[part].findData(GYRO_RGBD)<0:raise ValueError(f'{PART_LABELS[part]}：界面缺少RGB-D模式')
+            save_config(owner.settings_path,trial.assignments,trial.axis_mappings,trial.algorithm_modes)
+        except (ValueError,OSError,KeyError) as exc:
+            self.status.setText('双臂未切换，原模式保持不变：'+str(exc));return
+        for field in ('algorithm_modes','current','neutral','natural_hand_previews','natural_hand_references'):
+            setattr(owner.engine,field,getattr(trial,field))
+        for part in ARM_PARTS:
+            combo=owner.algorithm_combos[part];combo.blockSignals(True)
+            combo.setCurrentIndex(combo.findData(GYRO_RGBD));combo.blockSignals(False)
+        owner._render_dirty=True
+        self.status.setText('左右上臂／前臂已全部切换为陀螺＋加计＋RGB-D。请先观察人体随动；未启动X1。')
 
     def _authorize_cleanup(self):
         # Freeze the exact computed session identity, not a later mutable path.
