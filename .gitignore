@@ -19,6 +19,11 @@ __pycache__/
 .firecrawl/
 .agents/
 .codex/
+.archify/
+# Generated explainer output and private recording-derived images stay local.
+/docs/project-explainer/index.html
+/docs/project-explainer/assets/
+/docs/project-explainer/qa/
 # CoppeliaSim 临时会话状态（不是真实场景文件）。
 /:memory:.ses
 
