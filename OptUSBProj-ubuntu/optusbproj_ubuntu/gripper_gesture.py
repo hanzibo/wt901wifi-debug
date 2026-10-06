@@ -1,6 +1,7 @@
 """Read-only two-IMU gesture projection, not a robot or anatomical estimator."""
 from collections import deque
 from dataclasses import dataclass
+import math
 
 import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
@@ -67,6 +68,36 @@ class GestureResult:
     angle_deg: float
     residual_deg: float
     closure: float | None
+
+
+class DiscreteClosure:
+    """Two-threshold hysteresis with a continuous dwell; no guessed initial state."""
+    def __init__(self, open_threshold=.3, closed_threshold=.7, dwell=.15):
+        if not 0 <= open_threshold < closed_threshold <= 1 or not math.isfinite(dwell) or dwell < 0:
+            raise ValueError('打开阈值必须小于闭合阈值，范围0–100%；确认时间不能为负')
+        self.open_threshold = open_threshold
+        self.closed_threshold = closed_threshold
+        self.dwell = dwell
+        self.state = None
+        self.pending = None
+        self.since = None
+
+    def pause(self):
+        self.pending = self.since = None
+
+    def update(self, value, stamp):
+        if not math.isfinite(value) or not 0 <= value <= 1 or not math.isfinite(stamp):
+            raise ValueError('无效离散开合输入')
+        target = False if value <= self.open_threshold else True if value >= self.closed_threshold else None
+        if target is None or target == self.state:
+            self.pause()
+        else:
+            if target != self.pending or self.since is None or stamp < self.since:
+                self.pending, self.since = target, stamp
+            if stamp-self.since >= self.dwell:
+                self.state = target
+                self.pause()
+        return self.state
 
 
 class GestureCalibration:

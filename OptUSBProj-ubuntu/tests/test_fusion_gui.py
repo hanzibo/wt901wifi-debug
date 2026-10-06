@@ -30,6 +30,45 @@ class FusionGuiTests(TestCase):
     def setUpClass(cls):
         cls.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
+    def test_gripper_popup_reuses_host_packets_and_reopens(self):
+        class FakeSource:
+            def seen_devices(self,max_age=3):return {}
+            def close(self):pass
+        with TemporaryDirectory() as directory, patch.object(FusionWindow,'start_camera'):
+            w=FusionWindow(FakeSource(),Path(directory)/'settings.json',{}, {})
+            w.poll_timer.stop()
+            try:
+                w.gripper_gesture_button.click()
+                dialog=w.gripper_gesture_dialog;dialog.timer.stop()
+                packet=SimpleNamespace(device_id='TEST')
+                w._feed_gripper_packet(123,packet)
+                self.assertEqual(dialog.source.poll_timed(),[(123,packet)])
+                dialog.close();self.assertFalse(dialog.isVisible())
+                w.gripper_gesture_button.click()
+                self.assertIs(w.gripper_gesture_dialog,dialog)
+                self.assertTrue(dialog.isVisible())
+                dialog.timer.start(20)
+            finally:w.close()
+            self.assertFalse(dialog.timer.isActive())
+
+    def test_body_poll_forwards_original_receive_timestamps(self):
+        from optusbproj_ubuntu.gui import BodyWindow
+        from optusbproj_ubuntu.gripper_gesture_gui import DemoSource
+        class Source(DemoSource):
+            def seen_devices(self,max_age=3):return {}
+        with TemporaryDirectory() as directory:
+            source=Source();window=BodyWindow(source,Path(directory)/'settings.json')
+            window.poll_timer.stop()
+            try:
+                window._show_gripper_gesture()
+                dialog=window.gripper_gesture_dialog;dialog.timer.stop()
+                rows=source.poll_timed()
+                with patch.object(source,'poll_timed',return_value=rows),patch.object(window,'_render_pose'):
+                    window._poll()
+                self.assertEqual(dialog.source.poll_timed(),rows)
+                self.assertEqual(set(window.engine.packets),{'DEMO-手背','DEMO-指段'})
+            finally:window.close()
+
     def test_detached_camera_preview_returns_without_stopping_capture(self):
         class FakeSource:
             def seen_devices(self, max_age=3):

@@ -1045,6 +1045,7 @@ class FusionWindow(BodyWindow):
             received_at = time.monotonic() if self.replay_mode else received_ns / 1e9
             self._check_calibration_reconnect(packet.device_id, received_at)
             self.engine.feed(packet, received_at=received_at)
+            self._feed_gripper_packet(round(received_at*1e9), packet)
             recorded_runtime = runtime.get((received_ns, packet.device_id))
             if recorded_runtime is not None:
                 if self.candidate_engine is None:

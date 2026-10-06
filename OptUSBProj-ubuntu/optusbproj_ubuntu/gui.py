@@ -128,6 +128,7 @@ class BodyWindow(QtWidgets.QMainWindow):
         self.calibration_dialog = None
         self.natural_hand_dialog = None
         self.x1_preview_dialog = None
+        self.gripper_gesture_dialog = None
         self.recorder: PacketRecorder | None = None
         self.replay_mode = isinstance(source, ReplaySource) or getattr(source, "is_replay", False)
 
@@ -207,6 +208,10 @@ class BodyWindow(QtWidgets.QMainWindow):
         self.x1_preview_button.clicked.connect(self._show_x1_preview)
         self.x1_preview_button.setEnabled(not self.replay_mode)
         panel_layout.addWidget(self.x1_preview_button)
+        self.gripper_gesture_button = QtWidgets.QPushButton('左右手 IMU 夹爪配置…（四设备 / RViz）')
+        self.gripper_gesture_button.clicked.connect(self._show_gripper_gesture)
+        self.gripper_gesture_button.setEnabled(not self.replay_mode)
+        panel_layout.addWidget(self.gripper_gesture_button)
         self._timed_zero_deadline: float | None = None
         self.zero_countdown_timer = QtCore.QTimer(self)
         self.zero_countdown_timer.setInterval(100)
@@ -357,14 +362,17 @@ class BodyWindow(QtWidgets.QMainWindow):
 
     def _poll(self) -> None:
         try:
-            packets = self.source.poll()
+            timed_packets = (self.source.poll_timed() if hasattr(self.source, 'poll_timed') else
+                             [(time.monotonic_ns(), packet) for packet in self.source.poll()])
         except OSError as exc:
             self.poll_timer.stop()
             self.statusBar().showMessage(f"UDP 接收失败：{exc}")
             return
-        for packet in packets:
+        packets = [packet for _, packet in timed_packets]
+        for received_ns, packet in timed_packets:
             self._check_calibration_reconnect(packet.device_id, time.monotonic())
             self.engine.feed(packet)
+            self._feed_gripper_packet(received_ns, packet)
             if self.calibration_dialog is not None:
                 self.calibration_dialog.on_packet(time.monotonic_ns(), packet)
             if self.recorder is not None:
@@ -532,6 +540,23 @@ class BodyWindow(QtWidgets.QMainWindow):
             self.natural_hand_dialog.close();self.natural_hand_dialog.deleteLater()
         self.natural_hand_dialog=NaturalHandDialog(self)
         self.natural_hand_dialog.show();self.natural_hand_dialog.raise_()
+
+    def _feed_gripper_packet(self, received_ns, packet) -> None:
+        if self.gripper_gesture_dialog is not None:
+            self.gripper_gesture_dialog.feed_host_packet(received_ns, packet, self.engine)
+
+    def _show_gripper_gesture(self) -> None:
+        if self.replay_mode:
+            return
+        from .gripper_gesture_gui import BilateralGestureWindow, SharedGestureSource
+        if self.gripper_gesture_dialog is None:
+            self.gripper_gesture_dialog = BilateralGestureWindow(
+                SharedGestureSource(), Path(__file__).resolve().parents[1]/'recordings/imu_gripper', self)
+            for device, packet in self.engine.packets.items():
+                self._feed_gripper_packet(round(self.engine.received_at[device]*1e9), packet)
+        self.gripper_gesture_dialog.show()
+        self.gripper_gesture_dialog.raise_()
+        self.gripper_gesture_dialog.activateWindow()
 
     def _show_x1_preview(self) -> None:
         if self.replay_mode:
@@ -777,6 +802,9 @@ class BodyWindow(QtWidgets.QMainWindow):
         self.poll_timer.stop()
         self.stats_timer.stop()
         self.zero_countdown_timer.stop()
+        if self.gripper_gesture_dialog is not None:
+            self.gripper_gesture_dialog.shutdown()
+            self.gripper_gesture_dialog.hide()
         if self.natural_hand_dialog is not None:self.natural_hand_dialog.close()
         if self.x1_preview_dialog is not None:
             self.x1_preview_dialog.close()
