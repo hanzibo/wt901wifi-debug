@@ -46,6 +46,8 @@ class VisualWearingDialog(CameraCalibrationDialog):
         self._preview_opened = False
         self._application_done = False
         self.auto_analyze.setText('录制后计算视觉辅助穿戴映射（不自动应用）')
+        from .calibration_options import add_prior_control
+        add_prior_control(self, owner, visual=True)
         self.replay.setText('双人体回放 · 现有映射 vs 视觉辅助')
         self.apply.setText('应用所选合格穿戴映射（不启用航向纠偏）')
         layout = self.layout()
@@ -157,12 +159,19 @@ class VisualWearingDialog(CameraCalibrationDialog):
         path = Path(directory)
         try:
             guide = json.loads((path / 'camera_guide.json').read_text())
+            from .calibration_options import capture_prior_weight
+            weight = capture_prior_weight(guide)
             if guide.get('status') != 'complete' or not all((path / name).is_file() for name in
                     ('manifest.json', 'runtime_pose.jsonl', 'vision.jsonl', 'imu.csv')):
                 raise ValueError('请选择包含实际姿态和三维观测的完整引导录制目录')
         except (OSError, ValueError) as exc:
             QtWidgets.QMessageBox.warning(self, '无法加载', str(exc)); return
         self.recording_path = path
+        from .calibration_options import capture_prior_weight
+        self.prior_weight_spin.blockSignals(True)
+        self.prior_weight_spin.setValue(weight)
+        self.prior_weight_spin.blockSignals(False)
+        self.prior_weight_spin.update_prior_hint(self.prior_weight_spin.value())
         self.state = 'complete'
         self.analyze_recording()
 
@@ -195,6 +204,9 @@ class VisualWearingDialog(CameraCalibrationDialog):
     def analyze_recording(self):
         if self.state != 'complete':
             return
+        self.prior_capture_label.setText(f'本次原IMU对照 λ={self.prior_weight_spin.value():.3f}（不影响视觉主拟合）')
+        from .calibration_options import set_prior_enabled
+        set_prior_enabled(self, False)
         self.analysis_path = self.recording_path.parent / 'analysis_wearing' / (
             self.recording_path.name + '-visual-' + uuid.uuid4().hex[:6])
         if self.process is not None:
@@ -206,7 +218,8 @@ class VisualWearingDialog(CameraCalibrationDialog):
         self.process.errorOccurred.connect(self.analysis_error)
         self.process.setProgram(sys.executable)
         script = Path(__file__).resolve().parent.parent / 'visual_wearing_analyze.py'
-        self.process.setArguments(['-u', str(script), str(self.recording_path), '--output', str(self.analysis_path)])
+        self.process.setArguments(['-u', str(script), str(self.recording_path), '--output', str(self.analysis_path),
+                                   '--prior-weight', str(self.prior_weight_spin.value())])
         self.state = 'analyzing'
         self.load_recording_button.setEnabled(False)
         self.scope_combo.setEnabled(False)
@@ -224,6 +237,8 @@ class VisualWearingDialog(CameraCalibrationDialog):
         self.process.start()
 
     def analysis_finished(self, code, _status):
+        from .calibration_options import set_prior_enabled
+        set_prior_enabled(self, True)
         self.read_log(); self.state = 'complete'
         self.start.setEnabled(True); self.analyze.setEnabled(True)
         self.load_recording_button.setEnabled(True)
@@ -276,6 +291,8 @@ class VisualWearingDialog(CameraCalibrationDialog):
         self.replay.setEnabled(any('basis_matrix' in p for p in report['parts'].values()))
 
     def analysis_error(self, error):
+        from .calibration_options import set_prior_enabled
+        set_prior_enabled(self, True)
         super().analysis_error(error)
         if error == QtCore.QProcess.ProcessError.FailedToStart:
             self.load_recording_button.setEnabled(True)

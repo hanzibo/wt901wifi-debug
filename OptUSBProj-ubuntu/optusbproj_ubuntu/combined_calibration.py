@@ -12,6 +12,7 @@ from .calibration_reuse import proper
 from .camera_protocol import camera_phases
 from .guided_calibration import fit_guided_arm, neutral_matrices_by_mode, reference_motion_deg
 from .pose import GYRO_TILT
+from .calibration_options import capture_prior_weight
 from .rgbd_fusion import ARM_SEGMENTS, angle_deg, gravity_alignment, load_live_series, visual_direction
 from .visual_wearing import PASS, REVIEW, analyze_wearing, apply_wearing_report
 
@@ -43,16 +44,17 @@ def load_capture(session):
     return manifest, guide, parts, windows
 
 
-def imu_wearing(session):
+def imu_wearing(session, *, prior_weight=None):
     """Reuse original guided fitter with gravity-aligned FIT poses and RAW neutral streams."""
     session = Path(session);manifest, guide, parts, windows = load_capture(session)
+    prior_weight = capture_prior_weight(guide, prior_weight)
     raw = {}
     with (session/'imu.csv').open() as stream:
         for row in csv.DictReader(stream):raw[(int(row['host_recv_mono_ns']), row['device_id'])] = row
     with (session/'runtime_pose.jsonl').open() as stream:runtime = [json.loads(line) for line in stream]
     report = {'format': 'wt901-combined-imu-wearing-v1', 'session': str(session.resolve()),
               'camera_epoch': manifest['camera_epoch'], 'vision_epoch': manifest.get('vision_epoch'),
-              'vision_config': manifest.get('vision_config'), 'parts': {}}
+              'vision_config': manifest.get('vision_config'), 'prior_weight': prior_weight, 'parts': {}}
     for part in parts:
         device = guide['devices'][part]
         try:
@@ -77,7 +79,7 @@ def imu_wearing(session):
                         sample['orientation_matrix'] = (aligned@np.asarray(row['orientation_by_mode'][GYRO_TILT])).tolist()
                         samples[step].append(sample)
                     else:context[step].append(sample)
-            result = fit_guided_arm(part, device, samples, tuple(manifest['axis_mappings_at_start'][part]))
+            result = fit_guided_arm(part, device, samples, tuple(manifest['axis_mappings_at_start'][part]), prior_weight=prior_weight)
             entry = asdict(result)
             paired = {m: n.tolist() for m,n in neutral_matrices_by_mode(samples['neutral']).items()}
             if GYRO_TILT not in paired:raise ValueError('缺少原始陀螺中立基准')
@@ -127,9 +129,9 @@ def validate_camera(session, report):
     return report
 
 
-def build_joint_report(session, camera_report, method='imu'):
+def build_joint_report(session, camera_report, method='imu', *, prior_weight=None):
     if method not in ('imu','visual'):raise ValueError('未知穿戴标定方法')
-    try:wearing = imu_wearing(session) if method == 'imu' else analyze_wearing(Path(session))
+    try:wearing = imu_wearing(session, prior_weight=prior_weight) if method == 'imu' else analyze_wearing(Path(session), prior_weight=prior_weight)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         manifest,guide,parts,_ = load_capture(session)
         wearing = {'camera_epoch':manifest['camera_epoch'],'vision_epoch':manifest.get('vision_epoch'),

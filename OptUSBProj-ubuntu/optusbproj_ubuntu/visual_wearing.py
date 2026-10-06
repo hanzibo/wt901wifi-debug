@@ -263,11 +263,13 @@ def _read_jsonl(path):
         return [json.loads(line) for line in stream if line.strip()]
 
 
-def analyze_wearing(session: Path):
+def analyze_wearing(session: Path, *, prior_weight=None):
     """Read a guided session. Never mutate originals, device state or maps."""
     session = session.resolve()
     manifest = json.loads((session / 'manifest.json').read_text())
     guide = json.loads((session / 'camera_guide.json').read_text())
+    from .calibration_options import capture_prior_weight
+    prior_weight = capture_prior_weight(guide, prior_weight)
     if manifest.get('error') or not manifest.get('camera_epoch'):
         raise ValueError("录制不完整或缺少相机会话标识")
     origin = int(manifest['started_mono_ns'])
@@ -296,6 +298,7 @@ def analyze_wearing(session: Path):
             not set(participants).issubset(ARM_SEGMENTS)):
         raise ValueError('引导录制的参与部位无效')
     report = {'format': FORMAT, 'session': str(session),
+              'legacy_prior_weight': prior_weight,
               'camera_epoch': manifest['camera_epoch'], 'K_model_from_camera': k.tolist(),
               'vision_config':manifest.get('vision_config'),'vision_epoch':manifest.get('vision_epoch'),
               'body_frame_quality': body_quality, 'parts': {}, 'posture_assessment': posture,
@@ -412,7 +415,7 @@ def analyze_wearing(session: Path):
                 legacy_samples[old] = [dict(row, orientation_matrix=(alignment @ np.array(row['orientation_matrix'])).tolist())
                                        for row in sample_rows[new]]
             try:
-                legacy = asdict(fit_guided_arm(part, device, legacy_samples, mapping))
+                legacy = asdict(fit_guided_arm(part, device, legacy_samples, mapping, prior_weight=prior_weight))
             except ValueError as exc:
                 legacy = {'status': '无法拟合', 'warnings': [str(exc)]}
             assumed_bone = (alignment @ r0).T @ DOWN

@@ -118,7 +118,7 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
         layout = QtWidgets.QVBoxLayout(self)
         intro = QtWidgets.QLabel(
             "每次重新穿戴后标定一次；整轮动作中绑带不能相对身体部位滑动。"
-            "先从你的手动轴映射出发，仅用静止姿势求精细修正。"
+            "用静止动作求连续轴映射；手动映射先验权重可调，λ=0时不参与拟合。"
             "标定只读取设备，不发送归零或参数写入指令。")
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -151,6 +151,9 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
         self.hold_seconds.setSuffix(" 秒")
         form.addRow("每步静止采样", self.hold_seconds)
         layout.addLayout(form)
+        from .calibration_options import add_prior_control
+        add_prior_control(self, host)
+        self.capture_prior_weight = self.prior_weight_spin.value()
         self.steps_label = QtWidgets.QLabel(
             "动作：中立 → 前举 → 侧举 → 再次前举验证 → 回到中立验证。"
             "每一步都先倒计时准备，然后自动采样；听到提示音后切换姿势。")
@@ -293,6 +296,7 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
             self.progress.setText("请先结束现有录制，再开始穿戴标定")
             return
         self.samples = {step: [] for step in self.steps}
+        self.capture_prior_weight = self.prior_weight_spin.value()
         self.context_samples = {step: {} for step in self.steps}
         self.events = []
         self.result = None
@@ -315,6 +319,8 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
             return
         self.index = 0
         self.phase = "prepare"
+        from .calibration_options import freeze_prior_control
+        freeze_prior_control(self)
         self.deadline = time.monotonic() + (
             self.first_prepare_seconds.value() if self.part in HAND_PARTS
             else self.prepare_seconds.value())
@@ -389,6 +395,8 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
 
     def _finish(self) -> None:
         self.phase = "done"
+        from .calibration_options import set_prior_enabled
+        set_prior_enabled(self, True)
         self.timer.stop()
         self.part_combo.setEnabled(True)
         self.read_button.setEnabled(True)
@@ -401,9 +409,9 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
             recorder.close()
             self._save_events(recorder.path, "recorded")
             mapping = self.host.engine.axis_mappings[self.part]
-            result = (fit_guided_torso(self.device_id, self.samples, mapping)
+            result = (fit_guided_torso(self.device_id, self.samples, mapping, prior_weight=self.capture_prior_weight)
                       if self.part == "torso" else
-                      fit_guided_arm(self.part, self.device_id, self.samples, mapping))
+                      fit_guided_arm(self.part, self.device_id, self.samples, mapping, prior_weight=self.capture_prior_weight))
             reference_key = "pelvis" if self.part == "torso" else "torso"
             reference_id = self.host.engine.assignments.get(reference_key, "")
             if reference_id and reference_id != self.device_id:
@@ -470,6 +478,7 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
     def _save_events(self, session_path: Path, status: str) -> None:
         payload = {"format": "wt901-guided-steps-v1", "status": status,
                    "part": self.part, "device_id": self.device_id,
+                   "wearing_prior_weight": self.capture_prior_weight,
                    "installation_direction": self.orientation,
                    "fusion_algorithm": self.algorithm,
                    "manual_mapping": list(self.host.engine.axis_mappings[self.part]),
@@ -556,6 +565,8 @@ class GuidedCalibrationDialog(QtWidgets.QDialog):
         self.details.setText("设备参数或设备端归零已改变；旧标定不能再次应用，请重新录制。")
 
     def abort(self, reason: str = "已取消本轮标定") -> None:
+        from .calibration_options import set_prior_enabled
+        set_prior_enabled(self, True)
         self.timer.stop()
         self.phase = "idle"
         self.part_combo.setEnabled(True)
@@ -701,6 +712,7 @@ class BilateralCalibrationDialog(GuidedCalibrationDialog):
                 (f"安装方向不是垂直或算法未知：{labels(wrong)}。" if wrong else ""))
             return
         self._participants = online
+        self.capture_prior_weight = self.prior_weight_spin.value()
         self.samples_by_part = {key: {step: [] for step in STEPS} for key in online}
         self.context_samples = {step: {} for step in STEPS}
         self.events = []
@@ -730,6 +742,8 @@ class BilateralCalibrationDialog(GuidedCalibrationDialog):
             return
         self.index = 0
         self.phase = "prepare"
+        from .calibration_options import freeze_prior_control
+        freeze_prior_control(self)
         self.deadline = time.monotonic() + self.prepare_seconds.value()
         self.read_button.setEnabled(False)
         self.start_button.setEnabled(False)
@@ -798,6 +812,7 @@ class BilateralCalibrationDialog(GuidedCalibrationDialog):
 
     def _save_events(self, session_path: Path, status: str) -> None:
         payload = {"format": "wt901-guided-bilateral-steps-v1", "status": status,
+                   "wearing_prior_weight": self.capture_prior_weight,
                    "participants": self._participants, "events": self.events,
                    "installation": {key: self.device_checks.get(device_id)
                                     for key, device_id in self._participants.items()}}
@@ -806,6 +821,8 @@ class BilateralCalibrationDialog(GuidedCalibrationDialog):
 
     def _finish(self) -> None:
         self.phase = "done"
+        from .calibration_options import set_prior_enabled
+        set_prior_enabled(self, True)
         self.timer.stop()
         self.read_button.setEnabled(True)
         self.start_button.setEnabled(True)
@@ -820,7 +837,7 @@ class BilateralCalibrationDialog(GuidedCalibrationDialog):
                 try:
                     result = fit_guided_arm(
                         key, device_id, self.samples_by_part[key],
-                        self.host.engine.axis_mappings[key])
+                        self.host.engine.axis_mappings[key], prior_weight=self.capture_prior_weight)
                     torso_id = self.host.engine.assignments.get("torso", "")
                     reference_failed = False
                     if torso_id and torso_id != device_id:

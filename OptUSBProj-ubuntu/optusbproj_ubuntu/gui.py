@@ -21,7 +21,7 @@ from .axis_mapping import DEFAULT_AXIS_MAPPING, mapping_matrix
 from .device_settings import DeviceSettingsDialog
 from .pose import GYRO_TILT, VENDOR_RPY, GYRO_RGBD, MODE_LABELS, PoseEngine
 from .recording import PacketRecorder, ReplaySource
-from .settings import save_config
+from .settings import save_config, load_prior_weight
 from .skeleton import PARTS, SENSOR_KEYS
 
 
@@ -109,6 +109,8 @@ class BodyWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.source = source
         self.settings_path = settings_path
+        self.wearing_prior_weight = load_prior_weight(settings_path)
+        self._prior_spins = []
         self.engine = PoseEngine(assignments, axis_mappings, algorithm_modes)
         self.actors = []
         self.axis_actors = []
@@ -194,6 +196,10 @@ class BodyWindow(QtWidgets.QMainWindow):
         self.bilateral_calibration_button.clicked.connect(self._show_bilateral_calibration)
         self.bilateral_calibration_button.setEnabled(not self.replay_mode)
         panel_layout.addWidget(self.bilateral_calibration_button)
+        self.wearing_options_button = QtWidgets.QPushButton('穿戴标定参数…（弱先验 λ）')
+        self.wearing_options_button.clicked.connect(self._show_wearing_options)
+        self.wearing_options_button.setEnabled(not self.replay_mode)
+        panel_layout.addWidget(self.wearing_options_button)
         self.natural_hand_button=QtWidgets.QPushButton('左手自然掌面参考…（手动原型）')
         self.natural_hand_button.clicked.connect(self._show_natural_hand)
         self.natural_hand_button.setEnabled(not self.replay_mode);panel_layout.addWidget(self.natural_hand_button)
@@ -497,6 +503,27 @@ class BodyWindow(QtWidgets.QMainWindow):
 
     def _show_calibration(self) -> None:
         self._open_calibration(bilateral=False)
+
+    def set_wearing_prior_weight(self, value):
+        from .calibration_options import validate_prior_weight
+        value = validate_prior_weight(value)
+        save_config(self.settings_path, self.engine.assignments, self.engine.axis_mappings,
+                    self.engine.algorithm_modes, prior_weight=value)
+        self.wearing_prior_weight = value
+        for spin in self._prior_spins:
+            if not spin.isEnabled():continue
+            spin.blockSignals(True); spin.setValue(value); spin.blockSignals(False)
+            spin.update_prior_hint(value)
+
+    def _show_wearing_options(self):
+        from .calibration_options import add_prior_control
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle('穿戴标定参数')
+        layout = QtWidgets.QVBoxLayout(dialog)
+        layout.addWidget(QtWidgets.QLabel('所有穿戴窗口共用；本轮开始后参数冻结，不修改已经应用的映射。'))
+        add_prior_control(dialog, self)
+        close = QtWidgets.QPushButton('关闭'); close.clicked.connect(dialog.accept)
+        layout.addWidget(close); dialog.exec(); dialog.deleteLater()
 
     def _show_natural_hand(self):
         if self.replay_mode:return

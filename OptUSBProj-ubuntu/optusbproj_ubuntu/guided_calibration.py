@@ -15,6 +15,7 @@ from scipy.spatial.transform import Rotation
 from wt901_viz.orientation import rotation_matrix
 
 from .axis_mapping import mapping_matrix
+from .calibration_options import DEFAULT_PRIOR_WEIGHT, validate_prior_weight
 
 
 STEPS = ("neutral", "forward", "lateral", "check_forward", "check_neutral")
@@ -37,6 +38,7 @@ class GuidedResult:
     sample_counts: dict[str, int]
     status: str
     warnings: list[str]
+    prior_weight: float = DEFAULT_PRIOR_WEIGHT
 
 
 def _angle(a: np.ndarray, b: np.ndarray) -> float:
@@ -83,7 +85,7 @@ def _unreliable_arrivals(rows: list[dict]) -> bool:
 
 
 def fit_guided_arm(part: str, device_id: str, samples: dict[str, list[dict]],
-                   manual_mapping: tuple[str, str, str]) -> GuidedResult:
+                   manual_mapping: tuple[str, str, str], *, prior_weight=DEFAULT_PRIOR_WEIGHT) -> GuidedResult:
     """Fit arm bone direction from five labelled static holds.
 
     Gravity fixes model vertical. Two raised-arm directions identify heading;
@@ -98,7 +100,7 @@ def fit_guided_arm(part: str, device_id: str, samples: dict[str, list[dict]],
     missing = set(STEPS) - set(samples)
     if missing:
         raise ValueError(f"缺少动作窗口：{', '.join(sorted(missing))}")
-    b0 = mapping_matrix(manual_mapping)
+    prior_weight = validate_prior_weight(prior_weight)
     holds = {step: _hold(samples[step]) for step in STEPS}
     r0, rf, rs, rfc, rnc = (holds[step][0] for step in STEPS)
     down = np.array([0.0, 0.0, -1.0])
@@ -108,17 +110,20 @@ def fit_guided_arm(part: str, device_id: str, samples: dict[str, list[dict]],
     targets = [np.array([1.0, 0.0, 0.0]), np.array([0.0, side, 0.0])]
     # The signed map is a *weak* heading prior; large, consistent observations
     # are allowed to correct mounting offsets without being pulled back to 90°.
-    prior_world = b0 @ r0.T
-    prior_heading = np.arctan2(prior_world[1, 0], prior_world[0, 0])
     cosine = sum(float(np.dot(a[:2], b[:2])) for a, b in zip(observed, targets))
     sine = sum(float(np.dot(np.cross([0.0, 0.0, 1.0], a)[:2], b[:2]))
                for a, b in zip(observed, targets))
     evidence = float(np.hypot(cosine, sine))
     if evidence < 0.3:
         raise ValueError("前举/侧举没有提供足够的水平指向信息")
-    prior_weight = 0.15
-    heading = np.arctan2(sine + prior_weight * np.sin(prior_heading),
-                         cosine + prior_weight * np.cos(prior_heading))
+    if prior_weight > 0:
+        prior_world = mapping_matrix(manual_mapping) @ r0.T
+        prior_heading = np.arctan2(prior_world[1, 0], prior_world[0, 0])
+        sine += prior_weight * np.sin(prior_heading)
+        cosine += prior_weight * np.cos(prior_heading)
+    if np.hypot(cosine, sine) < 1e-8:
+        raise ValueError('动作证据与先验抵消，航向不可辨识；请减小λ或重新录制')
+    heading = np.arctan2(sine, cosine)
     world_to_model = Rotation.from_rotvec([0, 0, heading]).as_matrix()
     basis = world_to_model @ r0
     predicted = [world_to_model @ value for value in observed]
@@ -158,11 +163,11 @@ def fit_guided_arm(part: str, device_id: str, samples: dict[str, list[dict]],
         check_error_deg=check_errors, hold_spread_deg=spreads,
         gyro_p90_deg_s=gyros,
         sample_counts={step: len(samples[step]) for step in STEPS},
-        status="通过" if not warnings else "需重录", warnings=warnings)
+        status="通过" if not warnings else "需重录", warnings=warnings, prior_weight=prior_weight)
 
 
 def fit_guided_torso(device_id: str, samples: dict[str, list[dict]],
-                     manual_mapping: tuple[str, str, str]) -> GuidedResult:
+                     manual_mapping: tuple[str, str, str], *, prior_weight=DEFAULT_PRIOR_WEIGHT) -> GuidedResult:
     """Fit torso axes from forward flexion and a rightward side bend.
 
     Unlike the arm protocol this uses *motion axes*, not bone pointing.
@@ -171,7 +176,7 @@ def fit_guided_torso(device_id: str, samples: dict[str, list[dict]],
     missing = set(STEPS) - set(samples)
     if missing:
         raise ValueError(f"缺少动作窗口：{', '.join(sorted(missing))}")
-    b0 = mapping_matrix(manual_mapping)
+    prior_weight = validate_prior_weight(prior_weight)
     holds = {step: _hold(samples[step]) for step in STEPS}
     r0, rf, rs, rfc, rnc = (holds[step][0] for step in STEPS)
     delta_f = Rotation.from_matrix(r0.T @ rf).as_rotvec()
@@ -187,7 +192,12 @@ def fit_guided_torso(device_id: str, samples: dict[str, list[dict]],
         raise ValueError("前屈与侧屈的转轴太接近，无法确定躯干三维映射")
     # Model +Z is up; leaning forward rotates about +Y, bending right about +X.
     target = np.column_stack(((0.0, 1.0, 0.0), (1.0, 0.0, 0.0)))
-    u, _, vt = np.linalg.svd(target @ source.T + 0.15 * b0)
+    objective = target @ source.T
+    if prior_weight > 0:
+        objective += prior_weight * mapping_matrix(manual_mapping)
+    u, singular, vt = np.linalg.svd(objective)
+    if singular[1] < 1e-8:
+        raise ValueError('躯干动作与先验合成后不可辨识；请减小λ或重新录制')
     correction = np.diag([1.0, 1.0, float(np.linalg.det(u @ vt))])
     basis = u @ correction @ vt
     fit_errors = {name: _angle(basis @ source[:, index], target[:, index])
@@ -217,7 +227,7 @@ def fit_guided_torso(device_id: str, samples: dict[str, list[dict]],
         check_error_deg=checks, hold_spread_deg=spreads,
         gyro_p90_deg_s=gyros,
         sample_counts={step: len(samples[step]) for step in STEPS},
-        status="通过" if not warnings else "需重录", warnings=warnings)
+        status="通过" if not warnings else "需重录", warnings=warnings, prior_weight=prior_weight)
 
 
 def fit_guided_left_wrist(device_id: str, samples: dict[str, list[dict]],

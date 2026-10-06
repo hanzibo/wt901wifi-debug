@@ -140,6 +140,9 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
         return None
 
     def set_controls(self,running):
+        if hasattr(self, 'prior_weight_spin'):
+            from .calibration_options import set_prior_enabled
+            set_prior_enabled(self, not running)
         for spin in self.spins:spin.setEnabled(not running)
         self.auto_analyze.setEnabled(not running)
         self.scope_combo.setEnabled(not running)
@@ -158,6 +161,9 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
         self.capture_vision_epoch=getattr(self.owner,'vision_epoch',None)
         self.capture_vision_config=getattr(self.owner,'vision_metadata',None)
         self.capture_heading_limit=getattr(getattr(self.owner,'live_fusion',None),'max_offset_deg',30.)
+        if hasattr(self, 'prior_weight_spin'):
+            from .calibration_options import freeze_prior_control
+            freeze_prior_control(self)
         self.gravity_reference={}
         self.steps=self.capture_steps()
         self.events=[];self.recording_path=None;self.analysis_path=None;self.started_ns=None;self.index=0
@@ -262,6 +268,7 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
                  'settings':{'delay_s':self.delay.value(),'preparation_s':self.preparation.value(),'hold_s':self.hold.value(),'neutral_s':self.neutral.value(),'validation_s':self.validation.value()},
                  'note':'actual host monotonic phase times; prepare phases not static samples; no live mapping writes'}
         payload.update(self.guide_extra())
+        if hasattr(self, 'capture_prior_weight'):payload['wearing_prior_weight']=self.capture_prior_weight
         try:
             (self.recording_path/'camera_guide.json').write_text(json.dumps(payload,ensure_ascii=False,indent=2))
         except OSError as exc:

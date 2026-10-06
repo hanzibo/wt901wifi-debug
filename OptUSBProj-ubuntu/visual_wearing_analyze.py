@@ -7,17 +7,19 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from optusbproj_ubuntu.visual_wearing import analyze_wearing
+from optusbproj_ubuntu.calibration_options import validate_prior_weight
 
 
 def main():
     parser = argparse.ArgumentParser(description='双臂/单臂视觉辅助穿戴标定（只读原录制）')
     parser.add_argument('session', type=Path)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--prior-weight', type=validate_prior_weight, default=None, help='原IMU对照的弱先验权重；不影响视觉主拟合')
     args = parser.parse_args()
     if args.output.exists() or args.session.resolve() in args.output.resolve().parents:
         parser.error('输出目录必须尚不存在，且在原录制目录之外')
     try:
-        report = analyze_wearing(args.session)
+        report = analyze_wearing(args.session, prior_weight=args.prior_weight)
         args.output.mkdir(parents=True, exist_ok=False)
         (args.output / 'report.json').write_text(json.dumps(report, ensure_ascii=False, allow_nan=False, indent=2)+'\n')
         for part, result in report['parts'].items():

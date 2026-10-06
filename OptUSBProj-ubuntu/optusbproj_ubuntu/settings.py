@@ -8,6 +8,12 @@ from pathlib import Path
 from .axis_mapping import normalized_mapping
 from .skeleton import SENSOR_KEYS
 from .pose import ORIENTATION_MODES, VENDOR_RPY
+from .calibration_options import DEFAULT_PRIOR_WEIGHT, validate_prior_weight
+
+
+def load_prior_weight(path):
+    if not path.exists(): return DEFAULT_PRIOR_WEIGHT
+    return validate_prior_weight(json.loads(path.read_text(encoding='utf-8')).get('wearing_prior_weight', DEFAULT_PRIOR_WEIGHT))
 
 
 def load_config(path: Path) -> tuple[dict[str, str], dict[str, tuple[str, str, str]]]:
@@ -54,7 +60,7 @@ def load_algorithm_modes(path: Path) -> dict[str, str]:
 
 def save_config(path: Path, assignments: dict[str, str],
                 axis_mappings: dict[str, tuple[str, str, str]],
-                algorithm_modes: dict[str, str] | None = None) -> None:
+                algorithm_modes: dict[str, str] | None = None, *, prior_weight=None) -> None:
     used = [value for value in assignments.values() if value]
     if len(used) != len(set(used)):
         raise ValueError("同一设备不能分配给多个部位")
@@ -66,6 +72,7 @@ def save_config(path: Path, assignments: dict[str, str],
         raise ValueError("姿态算法配置无效")
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"version": 3,
+               "wearing_prior_weight": load_prior_weight(path) if prior_weight is None else validate_prior_weight(prior_weight),
                "assignments": {key: assignments.get(key, "") for key in SENSOR_KEYS},
                "axis_mappings": mappings,
                "algorithm_modes": {key: ('gyro_tilt' if modes.get(key)=='gyro_rgbd' else modes.get(key, VENDOR_RPY))

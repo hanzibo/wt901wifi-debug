@@ -26,6 +26,8 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
         self.hold.setValue(4)
         self.neutral.setValue(5)
         self.validation.setValue(10)
+        from .calibration_options import add_prior_control
+        add_prior_control(self, owner)
         layout=self.layout()
         layout.itemAt(0).widget().setText('一套动作、一次录制，两路分别拟合和验收。原IMU穿戴保留正前举/侧举；相机改用斜前举/侧举，避开正面遮挡。可选旧视觉穿戴算法仍要求正前举可见。重复动作只验收，不参与拟合；不自动应用或启动机器人。')
         row=QtWidgets.QHBoxLayout();row.addWidget(QtWidgets.QLabel('穿戴算法'))
@@ -87,6 +89,7 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
         if self.state!='complete':return
         self.delete_recording.setEnabled(False);self._cleanup_capture=None
         self.analysis_method=self.method.currentData()
+        self.prior_capture_label.setText(f'本次计算 λ={self.prior_weight_spin.value():.3f}（结果报告记录实际使用值）')
         self._preview_opened=False;self.review.setChecked(False);self.applied=False
         self.analysis_path=self.recording_path.parent/'analysis_combined'/(self.recording_path.name+'-'+uuid.uuid4().hex[:6])
         if self.process is not None:self.process.deleteLater()
@@ -95,7 +98,8 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
         self.process.errorOccurred.connect(self.analysis_error)
         self.process.setProgram(sys.executable)
         self.process.setArguments(['-u',str(Path(__file__).resolve().parents[1]/'combined_calibration_analyze.py'),
-            str(self.recording_path),'--output',str(self.analysis_path),'--wearing-method',self.analysis_method])
+            str(self.recording_path),'--output',str(self.analysis_path),'--wearing-method',self.analysis_method,
+            '--prior-weight', str(self.prior_weight_spin.value())])
         self.state='analyzing';self.report=None;self.log='';self.table.setRowCount(0)
         self.set_controls(True);self.cancel.setEnabled(False)
         for button in (self.analyze,self.replay,self.apply,self.camera_replay):button.setEnabled(False)

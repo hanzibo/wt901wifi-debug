@@ -9,12 +9,14 @@ import sys
 sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
 from optusbproj_ubuntu.combined_calibration import build_joint_report, load_capture
 from optusbproj_ubuntu.camera_protocol import camera_phases
+from optusbproj_ubuntu.calibration_options import validate_prior_weight
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('session',type=Path);parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--wearing-method',choices=('imu','visual'),default='imu')
+    parser.add_argument('--prior-weight', type=validate_prior_weight, default=None, help='覆盖录制时穿戴弱先验权重；0关闭，旧记录默认0.15')
     args = parser.parse_args()
     if args.output.exists() or args.output.resolve().is_relative_to(args.session.resolve()):parser.error('输出必须在原录制外且尚不存在')
     try:
@@ -39,7 +41,7 @@ def main():
                       'vision_config':manifest.get('vision_config'),'source_session':str(args.session.resolve()),
                       'parts':{p:{'accepted':False,'device_id':guide['devices'][p],
                                  'reason':'相机分析失败，见进程日志；穿戴分析仍独立执行'} for p in parts}}
-        report = build_joint_report(args.session,camera,args.wearing_method)
+        report = build_joint_report(args.session,camera,args.wearing_method, prior_weight=args.prior_weight)
         (args.output/'report.json').write_text(json.dumps(report,ensure_ascii=False,allow_nan=False,indent=2))
         (args.output/'wearing.json').write_text(json.dumps(report['wearing'],ensure_ascii=False,allow_nan=False,indent=2))
         (args.output/'camera'/'report.json').write_text(json.dumps(report['camera'],ensure_ascii=False,allow_nan=False,indent=2))
