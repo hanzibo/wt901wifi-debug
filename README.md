@@ -9,6 +9,8 @@
 | 想做什么 | 入口 | 环境 |
 | --- | --- | --- |
 | 双手手腕演示、设备联网和参数设置 | `wrist_demo.py` | `wt901` |
+| 拇指／四指双 IMU 夹爪手势观察（不控制机器人） | `OptUSBProj-ubuntu/gripper_gesture_demo.py` | `OptUSBProj-yolo`；见[操作说明](OptUSBProj-ubuntu/docs/GRIPPER_GESTURE_DEMO.md) |
+| 手机局域网滑杆控制 X1 左／右夹爪（仅 RViz） | `OptUSBProj-ubuntu/lan_gripper_demo.py` | Python 标准库＋现有 ROS 桥；见[操作说明](OptUSBProj-ubuntu/docs/LAN_GRIPPER_DEMO.md) |
 | 全身 IMU 人体模型 | `OptUSBProj-ubuntu/run.py` | `OptUSBProj` |
 | 单目相机姿态原型 | `OptUSBProj-ubuntu/camera_run.py` | 见 [相机环境说明](OptUSBProj-ubuntu/docs/CAMERA_SETUP.md) |
 | Gemini RGB-D＋IMU、双臂一体标定与纠偏 | `OptUSBProj-ubuntu/fusion_run.py --camera-source orbbec` | 推荐已配置的 `OptUSBProj-yolo`；SDK 独立环境见下文 |
@@ -199,6 +201,16 @@ conda run --no-capture-output -n wt901 python -u so3_rotvec_demo.py --device-id 
 本地归档目录 `no-improtent/` 已被 `.gitignore` 排除，不会随仓库提交；其中的原版资料或示例 SDK 不是运行主程序所必需的。
 
 人体 GUI 的 `OptUSBProj-ubuntu/recordings/`、`calibrations/` 和 `local_config.json` 也只保留本地；模型下载权重、ROS `build/install/log` 和生成的私人讲解素材不入库。记录可能含人脸、房间环境、设备标识和动作数据，分享前应检查并匿名化。
+
+## 手机局域网夹爪输入
+
+手机局域网夹爪标量输入（无需 App、不占用 IMU 端口）：
+
+```bash
+python3 OptUSBProj-ubuntu/lan_gripper_demo.py
+```
+
+手机和电脑分别打开终端输出的控制／观测链接。可选择左／右夹爪并勾选发送至 RViz，由现有 ROS 桥统一合并双臂和夹爪状态；不发送电机指令。详见 [使用说明](OptUSBProj-ubuntu/docs/LAN_GRIPPER_DEMO.md)。
 
 ## 测试
 

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>X1 夹爪 · 手机输入实验</title>
+<style>
+body{margin:0;background:#101925;color:#edf4ff;font:18px system-ui,sans-serif}main{max-width:650px;margin:auto;padding:20px 18px}h1{font-size:24px}p{color:#afc1d6;line-height:1.6}.card{background:#1a2a3b;padding:18px;border-radius:20px;margin:16px 0;display:grid;grid-template-columns:minmax(0,1fr) 72px;gap:10px;align-items:center}.visual{min-width:0}#value{font-size:48px;font-weight:bold}input{accent-color:#46d4b0}button{font:inherit;border:0;border-radius:12px;padding:16px;background:#46d4b0;color:#10251e;cursor:pointer;margin:8px 4px 8px 0}#stop{background:#ff9a94}#status{min-height:52px}svg{width:100%;height:140px}small{color:#a5b8ce}select{font:inherit;background:#243b50;color:#edf4ff;border:1px solid #617990;border-radius:8px;padding:8px}.grip-row{display:flex;align-items:center;justify-content:space-between;gap:12px}.thumb-control{display:flex;flex-direction:column;align-items:center;gap:8px;font-size:15px;color:#c4d6e9}#slider{writing-mode:vertical-lr;direction:rtl;width:64px;height:clamp(140px,24svh,190px);margin:0;touch-action:none;cursor:pointer}#slider::-webkit-slider-thumb{min-width:30px;min-height:30px}#slider::-moz-range-thumb{width:30px;height:30px;border:0}.left-grip .card{grid-template-columns:72px minmax(0,1fr)}.left-grip .thumb-control{grid-column:1;grid-row:1}.left-grip .visual{grid-column:2;grid-row:1}body.monitor .grip-row{display:none}body.monitor .card{grid-template-columns:minmax(0,1fr) 72px}
+</style><main><h1>X1 夹爪 · 局域网输入</h1><p>0% 表示打开，100% 表示闭合。勾选后可发送至本机 ROS 桥，用于 RViz 预览；不控制真实机器人。</p>
+<div class="grip-row"><label for="grip">手机握持布局</label><select id="grip"><option value="right">右手握持 · 滑杆靠右</option><option value="left">左手握持 · 滑杆靠左</option></select></div>
+<div class="card"><div class="visual"><div id="value">0%</div><svg viewBox="0 0 300 140" aria-label="开合量示意"><path d="M100 20H200" stroke="#8298b1" stroke-width="12"/><path id="left" stroke="#46d4b0" stroke-width="16" fill="none"/><path id="right" stroke="#46d4b0" stroke-width="16" fill="none"/></svg></div><div class="thumb-control"><span>闭合 100%</span><input id="slider" type="range" min="0" max="100" step="1" value="0" aria-label="目标闭合百分比：向上闭合，向下打开" aria-orientation="vertical"><span>打开 0%</span></div></div>
+<div id="options"><label><input id="preview" type="checkbox" style="width:auto;height:auto">发送至 RViz（不控制真机）</label><p><label>目标夹爪 <select id="joint"><option value="57">右夹爪 · 57</option><option value="7">左夹爪 · 7</option></select></label></p><label><input id="reverse" type="checkbox" style="width:auto;height:auto">反向映射（实验）</label></div>
+<button id="enable">启用本手机控制</button><button id="stop">停用 / 冻结</button><p id="status">连接中…</p><p id="ros">ROS 接收：尚无回报</p><small>切换到后台、锁屏或断网超过 0.7 秒后冻结。恢复后需重新启用。电脑观测页也可停用控制；此按钮不是真机急停。</small></main>
+<script>
+const query=new URLSearchParams(location.search), token=query.get('token'), monitor=query.has('monitor');
+const slider=document.getElementById('slider'), status=document.getElementById('status'), enable=document.getElementById('enable');
+const joint=document.getElementById('joint'), preview=document.getElementById('preview'), reverse=document.getElementById('reverse');
+const grip=document.getElementById('grip');
+function applyGrip(){document.body.classList.toggle('left-grip',!monitor&&grip.value==='left');}
+try{grip.value=localStorage.getItem('x1-gripper-grip')==='left'?'left':'right';}catch(e){}
+applyGrip();
+grip.onchange=()=>{if(active)stop();applyGrip();try{localStorage.setItem('x1-gripper-grip',grip.value);}catch(e){}};
+let active=false, seq=0, busy=false;
+const client=Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join('');
+function render(s){let c=s.closure;document.getElementById('value').textContent=(c*100).toFixed(1)+'%';let x=75+65*c;document.getElementById('left').setAttribute('d',`M100 25V65L${x} 100V125`);document.getElementById('right').setAttribute('d',`M200 25V65L${300-x} 100V125`);status.textContent=(s.enabled?'控制已启用':'已停用 / 断线冻结')+` · 目标 ${(s.target*100).toFixed(0)}% · `+(s.preview?`发送至 RViz 关节 ${s.joint}（不代表接收成功）`:'仅网页观测');if(active&&!s.enabled){active=false;enable.textContent='重新启用本手机控制';}if(monitor){slider.value=s.target*100;joint.value=s.joint;preview.checked=s.preview;reverse.checked=s.reverse;}}
+const renderBase=render;render=function(s){renderBase(s);const f=s.ros_feedback, age=s.ros_feedback_age_s;const item=f&&f.joints[s.joint];document.getElementById('ros').textContent=!item?'ROS 接收：尚无回报，请启动或更新 ROS 桥':`ROS ${age>.5?'回报已过期':'已确认接收'} · 目标 ${item.target.toFixed(3)} rad · 发布角度 ${item.position.toFixed(3)} rad · 订阅者 ${f.subscribers} · 发布计数 ${f.published_count}（不代表已绘制）`;};
+async function request(path,data){let r=await fetch(path+'?token='+encodeURIComponent(token),data?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data),signal:AbortSignal.timeout(1500)}:{signal:AbortSignal.timeout(1500)});if(!r.ok)throw Error('请求被拒绝，请检查是否另一部手机正在控制');return r.json();}
+async function tick(){if(busy)return;busy=true;try{let s=active?await request('/command',{version:1,client,seq:++seq,enabled:true,closure:Number(slider.value)/100,joint:joint.value,preview:preview.checked,reverse:reverse.checked}):await request('/state');render(s);}catch(e){active=false;status.textContent='连接中断或控制被拒绝；请重新启用。';}finally{busy=false;}}
+enable.onclick=()=>{active=true;tick();};
+function stop(){active=false;request('/stop',{}).then(render).catch(()=>{status.textContent='停用请求未送达，将由超时冻结';});}
+document.getElementById('stop').onclick=stop;
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&active)stop();});
+window.addEventListener('pagehide',()=>{if(active)navigator.sendBeacon('/stop?token='+encodeURIComponent(token),JSON.stringify({}));});
+for(const setting of [joint,preview,reverse])setting.onchange=()=>{if(active)stop();};
+if(monitor){document.body.classList.add('monitor');enable.hidden=true;slider.disabled=true;joint.disabled=true;preview.disabled=true;reverse.disabled=true;document.querySelector('h1').textContent='X1 夹爪 · 电脑观测';}
+setInterval(tick,80);tick();
+</script></html>

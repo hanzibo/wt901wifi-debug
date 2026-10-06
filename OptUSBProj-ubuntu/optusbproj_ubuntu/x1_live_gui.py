@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import json
 import math
 import os
 import shlex
@@ -40,6 +41,10 @@ class X1PreviewDialog(QtWidgets.QDialog):
         self.rviz_process: QtCore.QProcess | None = None
         self.rviz_output = ""
         self.started_at = 0.0
+        self.gripper_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.gripper_socket.bind(('127.0.0.1', 0))
+        self.gripper_socket.setblocking(False)
+        self.gripper_feedback_at = 0.
         outer = QtWidgets.QVBoxLayout(self)
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
@@ -80,6 +85,18 @@ class X1PreviewDialog(QtWidgets.QDialog):
         self.rviz_status = QtWidgets.QLabel("RViz 模型：未由本窗口启动")
         self.rviz_status.setWordWrap(True)
         layout.addWidget(self.rviz_status)
+        self.gripper_ros_button = QtWidgets.QPushButton("启动 ROS 接收（手机夹爪可单独预览）")
+        self.gripper_ros_button.clicked.connect(self._start_gripper_receiver)
+        layout.addWidget(self.gripper_ros_button)
+        gripper_note = QtWidgets.QLabel(
+            "手机网页勾选“发送至 RViz”，选择左 7 / 右 57。夹爪与双臂由同一 ROS 桥合并；"
+            "也可不启动双臂随动，仅测试夹爪。手机断线或停用后保持末次角度。"
+            "请勿同时运行关节滑杆发布器。若复用的是旧 ROS 桥，请先退出并重启。")
+        gripper_note.setWordWrap(True)
+        layout.addWidget(gripper_note)
+        self.gripper_status_label = QtWidgets.QLabel("手机夹爪：尚无 ROS 回报（不是经人体 GUI 转发）")
+        self.gripper_status_label.setWordWrap(True)
+        layout.addWidget(self.gripper_status_label)
         self.follow_left_hand = QtWidgets.QCheckBox("左手掌朝向跟随")
         self.follow_right_hand = QtWidgets.QCheckBox("右手掌朝向跟随")
         self.hand_toggles = {"left": self.follow_left_hand,
@@ -170,6 +187,37 @@ class X1PreviewDialog(QtWidgets.QDialog):
         self.timer.stop()
         self.stop()
         self.stop_rviz()
+        self.gripper_socket.close()
+
+    def _poll_gripper_status(self) -> None:
+        try:
+            query = dict(version=1, type='gripper_status_query', sent_mono_ns=time.monotonic_ns())
+            self.gripper_socket.sendto(json.dumps(query).encode(), ('127.0.0.1', 13991))
+            while True:
+                try:
+                    raw, peer = self.gripper_socket.recvfrom(4096)
+                except BlockingIOError:
+                    break
+                data = json.loads(raw)
+                if peer != ('127.0.0.1', 13991) or data.get('type') != 'gripper_status':
+                    continue
+                self.gripper_feedback_at = time.monotonic()
+                rows = []
+                for joint, label in (('7', '左'), ('57', '右')):
+                    state = data['joints'][joint]
+                    age = state['age_s']
+                    freshness = ('未收到手机数据' if age is None else
+                                 f'跟随 · 延迟 {age*1000:.0f} ms' if age <= .3 else
+                                 f'冻结 · 已断流 {age:.1f} s')
+                    rows.append(f"{label}夹爪 {joint}：接收目标 {state['target']:.3f} rad · "
+                                f"发布角度 {state['position']:.3f} rad · {freshness}")
+                rows.append(f"ROS 发布计数 {data['published_count']} · /joint_states 订阅者 "
+                            f"{data['subscribers']}（不代表 RViz 已绘制）")
+                self.gripper_status_label.setText('\n'.join(rows))
+            if time.monotonic()-self.gripper_feedback_at > 1.:
+                self.gripper_status_label.setText("手机夹爪：无 ROS 回报；接收进程未运行或版本较旧，请停止后重新启动")
+        except (OSError, ValueError, KeyError, TypeError):
+            self.gripper_status_label.setText("手机夹爪：ROS 状态读取失败")
 
     def _preconditions(self) -> list[str]:
         reasons = readiness(self.host.engine,
@@ -262,7 +310,18 @@ class X1PreviewDialog(QtWidgets.QDialog):
         self._refresh_readiness()
         self._update_host_button()
 
+    def _start_gripper_receiver(self) -> None:
+        try:
+            self._start_ros_receiver()
+            self.ros_status.setText("ROS 接收已启动或复用；手机夹爪监听本机 UDP 13991")
+            self.stop_button.setEnabled(True)
+        except (OSError, ValueError) as exc:
+            self.ros_status.setText(f"夹爪 ROS 启动失败：{exc}")
+
     def _start_ros_receiver(self) -> None:
+        if (self.ros_process is not None and
+                self.ros_process.state() != QtCore.QProcess.ProcessState.NotRunning):
+            return
         # A separately started listener belongs to the user, not this dialog.
         probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
@@ -438,6 +497,7 @@ class X1PreviewDialog(QtWidgets.QDialog):
         process.deleteLater()
 
     def _tick(self) -> None:
+        self._poll_gripper_status()
         if self.retargeter is None or self.sender is None:
             self._refresh_readiness()
             return
