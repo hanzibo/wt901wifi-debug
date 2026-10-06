@@ -23,15 +23,21 @@ class GuiUdpSource:
         self._buffers: dict[tuple[str, int], bytearray] = {}
         self._devices: dict[str, tuple[str, float]] = {}
         self._endpoints: dict[str, tuple[str, int, float]] = {}
+        self._latest_packets: dict[str, AttitudePacket] = {}
         self._replies: deque[tuple[str, tuple[int, int, int, int]]] = deque()
 
     def poll(self) -> list[AttitudePacket]:
-        packets: list[AttitudePacket] = []
+        return [packet for _, packet in self.poll_timed()]
+
+    def poll_timed(self) -> list[tuple[int, AttitudePacket]]:
+        """Return packets with the host monotonic timestamp at UDP receipt."""
+        packets: list[tuple[int, AttitudePacket]] = []
         for _ in range(512):
             try:
                 data, addr = self.sock.recvfrom(4096)
             except BlockingIOError:
                 break
+            received_ns = time.monotonic_ns()
             if len(data) == 11 and data[:2] == b"\x55\x5f" and sum(data[:10]) & 0xff == data[10]:
                 for device_id, (ip, seen) in self._devices.items():
                     if ip == addr[0] and time.monotonic() - seen < 3.0:
@@ -46,7 +52,8 @@ class GuiUdpSource:
                 seen = time.monotonic()
                 self._devices[packet.device_id] = (addr[0], seen)
                 self._endpoints[packet.device_id] = (addr[0], addr[1], seen)
-                packets.append(packet)
+                self._latest_packets[packet.device_id] = packet
+                packets.append((received_ns, packet))
         return packets
 
     def take_replies(self) -> list[tuple[str, tuple[int, int, int, int]]]:
@@ -65,6 +72,13 @@ class GuiUdpSource:
         now = time.monotonic()
         return {device_id: endpoint for device_id, endpoint in self._endpoints.items()
                 if now - endpoint[2] <= max_age}
+
+    def latest_packet(self, device_id: str, max_age: float = 3.0) -> AttitudePacket | None:
+        """Return a fresh packet without consuming the GUI's data stream."""
+        endpoint = self._endpoints.get(device_id)
+        if endpoint is None or time.monotonic() - endpoint[2] > max_age:
+            return None
+        return self._latest_packets.get(device_id)
 
     def device_ip(self, device_id: str, max_age: float | None = 3.0) -> str:
         ip, seen = self._devices.get(device_id, ("", 0.0))

@@ -1,4 +1,18 @@
-# WT901WIFI 双手手腕姿态控制台
+# WT901WIFI 项目
+
+本仓库有两条当前可运行的路线：根目录的 [双手手腕控制台](wrist_demo.py)，以及 [OptUSBProj Ubuntu 版](OptUSBProj-ubuntu/README.md)的 15 部件人体模型、相机/IMU 采集与穿戴标定。两者共用 [`wt901/`](wt901/) 通信协议模块；实时模式均使用 UDP 1399，**不要同时启动**。旧版 Windows 项目 `OptUSBProj/` 是本机未跟踪的参考资料，不参与 Ubuntu 程序运行。
+
+想理解从设备 R/P/Y、GUI 归零、轴映射到模型姿态的数学关系，可阅读 [SO(3) 与李代数说明](docs/SO3_IMU_MODEL.md)。
+右上臂、右前臂的连续轴映射矩阵如何通过动作标定，以及它们怎样形成肘部相对旋转，见 [人体手臂连续轴映射说明](docs/CONTINUOUS_ARM_CALIBRATION.md)。
+
+| 想做什么 | 入口 | 环境 |
+| --- | --- | --- |
+| 双手手腕演示、设备联网和参数设置 | `wrist_demo.py` | `wt901` |
+| 全身 IMU 人体模型 | `OptUSBProj-ubuntu/run.py` | `OptUSBProj` |
+| 单目相机姿态原型 | `OptUSBProj-ubuntu/camera_run.py` | 见 [相机环境说明](OptUSBProj-ubuntu/docs/CAMERA_SETUP.md) |
+| 相机＋IMU 录制、回放与标定 | `OptUSBProj-ubuntu/fusion_run.py` | 见 [融合环境说明](OptUSBProj-ubuntu/docs/FUSION_SETUP.md) |
+
+## 双手手腕姿态控制台
 
 基于 WT901WIFI 惯性测量单元（IMU）的双手手腕转角演示程序。电脑通过 Wi-Fi 接收设备数据，以各只手的当前姿态建立中立位，在 3D 界面中显示相对转角和随动手掌。项目还提供设备接入、分配、参数设置与校准入口，适合验证手腕动作映射到人形模型的可行性。
 
@@ -46,6 +60,16 @@ python wrist_demo.py --left-id WT5500011381 --right-id WT5500011408 --listen-por
 ```
 
 运行 `python wrist_demo.py --help` 可查看全部启动参数。程序也支持 `--net tcp` 接收姿态数据，但**设备发现、接入和寄存器控制功能按 UDP 工作**；使用完整控制台功能请保持默认 UDP 模式。一个监听端口即可接收多台设备，无需为每台设备单独启动程序。
+
+手腕模型默认显示随手掌转动的局部坐标轴：红 X、绿 Y、蓝 Z；顶部复选框可隐藏。左右手各自的“轴映射”按钮可指定设备正 X/Y/Z 轴对应模型的哪根轴，程序会拒绝重复轴或镜像坐标系。映射只影响当前 GUI 的模型和角度显示，不改设备寄存器；重启后恢复默认映射。
+
+想观察从 GUI 零位到当前姿态的 (SO(3)) 旋转向量，可单独运行 [旋转向量实验窗口](so3_rotvec_demo.py)：
+
+```bash
+conda run --no-capture-output -n wt901 python -u so3_rotvec_demo.py --device-id WT5500011361
+```
+
+收到数据后点击“以当前姿态作为模型零位”，再旋转设备。黄箭头是模型坐标下的旋转向量（方向为旋转轴，长度为转角，单位弧度），青线是端点轨迹；右侧同时显示转角、旋转轴及旋转矩阵。默认采用单位轴映射，也可用 `--mapping +X,-Z,+Y` 指定合法映射。该窗口只监听 UDP 1399，不写设备寄存器；**不要与手腕控制台或人体模型程序同时运行**。图中显示旋转对数的主值，转角跨过 180° 时可能出现分支跳变，而物理姿态并未跳变。
 
 仓库中的 [桌面启动器](WT901-手腕控制台.desktop) 和 [启动脚本](launch_wt901.sh) 是本机便捷入口，目前写有原作者电脑上的项目路径和 Conda 路径。换电脑后须先修改这些路径；上面的终端启动命令不依赖这些固定路径。
 

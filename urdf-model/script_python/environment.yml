@@ -1,0 +1,13 @@
+name: x1_ros2_py
+channels:
+  - conda-forge
+dependencies:
+  - python=3.14
+  - pip
+  - tk
+  - pyside6
+  - pyyaml=6.0.3
+  - catkin_pkg=1.1.1
+  - empy=4.2.1
+  - lark
+  - typing_extensions

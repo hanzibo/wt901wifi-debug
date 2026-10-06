@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=WT901-RGBD联合采集
+Name[en_US]=WT901 RGB-D Capture
+Comment=启动 Gemini 336L RGB-D 与 WT901 联合采集和回放界面
+Exec=/home/hzb/Work/WT901/OptUSBProj-ubuntu/launch_rgbd.sh
+Path=/home/hzb/Work/WT901
+Icon=/home/hzb/Work/WT901/OptUSBProj-ubuntu/assets/wt901-upper-body.svg
+Terminal=false
+Categories=Science;
+Keywords=WT901;IMU;RGBD;Orbbec;Gemini;Capture;
+StartupNotify=true

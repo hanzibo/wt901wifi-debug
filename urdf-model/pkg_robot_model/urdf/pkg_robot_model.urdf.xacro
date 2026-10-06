@@ -1,0 +1,1581 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="pkg_robot_model">
+
+  <xacro:arg name="use_sim" default="true" />
+
+  <link name="world"/>
+  <joint name="fixed_base" type="fixed">
+    <parent link="world"/>
+    <child link="base_link_0"/>
+    <origin xyz="0 0 0.05" rpy="0 0 0"/> 
+  </joint>
+
+  <link
+    name="base_link_0">
+    <inertial>
+      <origin
+        xyz="0.00141765149358512 -1.96082916842366E-06 0.217608830062732"
+        rpy="0 0 0" />
+      <mass
+        value="0.938331552681975" />
+      <inertia
+        ixx="0.00422749400540776"
+        ixy="2.23655888025461E-07"
+        ixz="2.84472327474012E-05"
+        iyy="0.00332849938405236"
+        iyz="4.05990940126089E-08"
+        izz="0.00307387768845531" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/base_link_0.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/base_link_0.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <link
+    name="head_101">
+    <inertial>
+      <origin
+        xyz="0.000801011518323777 0.000149697183051665 0.0450261374123072"
+        rpy="0 0 0" />
+      <mass
+        value="0.044450218923269" />
+      <inertia
+        ixx="7.96247134061428E-06"
+        ixy="3.42750726491015E-10"
+        ixz="-5.02362067166723E-08"
+        iyy="8.11690279713338E-06"
+        iyz="-5.44192291033308E-09"
+        izz="7.25242564347539E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/head_101.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.298039215686275 0.298039215686275 0.298039215686275 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/head_101.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="101"
+    type="continuous">
+    <origin
+      xyz="0 0 0.566134325856229"
+      rpy="0 0 1.5707963267949" />
+    <parent
+      link="base_link_0" />
+    <child
+      link="head_101" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="0"
+      effort="0"
+      velocity="0" />
+    <dynamics
+      damping="0.1"
+      friction="1" />
+    <safety_controller
+      soft_upper_limit="3.14"
+      soft_lower_limit="-3.14"
+      k_position="1"
+      k_velocity="0" />
+  </joint>
+  <link
+    name="head_102">
+    <inertial>
+      <origin
+        xyz="0.0182286485833683 -0.0456530098633412 -0.0170737991528935"
+        rpy="0 0 0" />
+      <mass
+        value="0.215705782038991" />
+      <inertia
+        ixx="0.000515464675439757"
+        ixy="-5.7345629565846E-05"
+        ixz="-8.65855578140041E-08"
+        iyy="0.000353709823414566"
+        iyz="-6.70440830782346E-08"
+        izz="0.000403447743861996" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/head_102.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 0.3" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/head_102.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="102"
+    type="continuous">
+    <origin
+      xyz="0.0180499999646821 0 0.0764439288771096"
+      rpy="-1.5707963267949 0 -1.57073409423468" />
+    <parent
+      link="head_101" />
+    <child
+      link="head_102" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="0"
+      upper="0"
+      effort="0"
+      velocity="0" />
+    <dynamics
+      damping="0.1"
+      friction="1" />
+    <safety_controller
+      soft_upper_limit="3.14"
+      soft_lower_limit="-3.14"
+      k_position="1"
+      k_velocity="0" />
+  </joint>
+  <link
+    name="camera_head_A1">
+    <inertial>
+      <origin
+        xyz="0.00011060815428543 8.11711808879068E-13 0.00635284151178889"
+        rpy="0 0 0" />
+      <mass
+        value="0.00794697285818674" />
+      <inertia
+        ixx="6.26830617601831E-06"
+        ixy="-1.31787609688484E-13"
+        ixz="2.98117768886353E-09"
+        iyy="4.3305704407567E-07"
+        iyz="-9.61194071305142E-17"
+        izz="6.19900245109296E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/camera_head_A1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/camera_head_A1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  
+  <joint
+    name="head_A1"
+    type="fixed">
+    <origin
+      xyz="0.0372800018736784 -0.0560749999994781 -0.0170500000000003"
+      rpy="1.570796327 0 0" />
+    <parent
+      link="head_102" />
+    <child
+      link="camera_head_A1" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+
+  <link
+    name="camera_head_A2">
+    <inertial>
+      <origin
+        xyz="0.000459671308999335 0.000851069116207359 -0.0105349526957084"
+        rpy="0 0 0" />
+      <mass
+        value="0.00599221398366759" />
+      <inertia
+        ixx="6.19513674269176E-07"
+        ixy="-2.51971483181754E-08"
+        ixz="4.12204571582019E-08"
+        iyy="6.06973321687977E-07"
+        iyz="7.63178217500695E-08"
+        izz="3.08952075111692E-07" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/camera_head_A2.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/camera_head_A2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="head_A2"
+    type="fixed">
+    <origin
+      xyz="0.0656426813060928 0.00189427763838745 -0.0170499999999994"
+      rpy="1.57079632679524 1.57070831666532 2.35619449019267" />
+    <parent
+      link="head_102" />
+    <child
+      link="camera_head_A2" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+  <link
+    name="camera_head_B1">
+    <inertial>
+      <origin
+        xyz="-0.00085110609953265 0.000459596534967702 -0.0105349558659972"
+        rpy="0 0 0" />
+      <mass
+        value="0.0059922122876429" />
+      <inertia
+        ixx="6.06968650813984E-07"
+        ixy="2.51960538023926E-08"
+        ixz="-7.63216453633222E-08"
+        iyy="6.1951786663113E-07"
+        iyz="4.1213731512199E-08"
+        izz="3.08952048939043E-07" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/camera_head_B1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/camera_head_B1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="head_B1"
+    type="fixed">
+    <origin
+      xyz="-0.0456499981263056 -0.0486060710969249 -0.0170500000000018"
+      rpy="1.5707963267949 0 -1.5707963267949" />
+    <parent
+      link="head_102" />
+    <child
+      link="camera_head_B1" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+
+  <link
+    name="R51">
+    <inertial>
+      <origin
+        xyz="-0.000214135858885189 0.000123698847764043 0.0213854928726546"
+        rpy="0 0 0" />
+      <mass
+        value="0.0312122452314472" />
+      <inertia
+        ixx="5.41516657745151E-06"
+        ixy="3.52835975460584E-10"
+        ixz="5.77053127053373E-09"
+        iyy="5.28994848344407E-06"
+        iyz="-1.67710081216987E-08"
+        izz="4.64530189672221E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/R51.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/R51.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="51"
+    type="continuous">
+    <origin
+      xyz="0 -0.0790406171338019 0.517029235393855"
+      rpy="1.5707963267949 -1.5707963267949 0" />
+    <parent
+      link="base_link_0" />
+    <child
+      link="R51" />
+    <axis
+      xyz="0 0 1" />
+    <dynamics
+      damping="0.1"
+      friction="1" />
+    <safety_controller
+      soft_upper_limit="3.14"
+      soft_lower_limit="-3.14"
+      k_position="1"
+      k_velocity="0" />
+  </joint>
+  <link
+    name="R52">
+    <inertial>
+      <origin
+        xyz="-0.000233367930581815 0.0464927139277024 -0.0215216949193344"
+        rpy="0 0 0" />
+      <mass
+        value="0.079351949641" />
+      <inertia
+        ixx="5.07772224073006E-05"
+        ixy="-1.13122812754977E-06"
+        ixz="-2.28596671235747E-08"
+        iyy="3.23715187315262E-05"
+        iyz="2.1691293832916E-06"
+        izz="5.08364815883239E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/R52.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/R52.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="52"
+    type="continuous">
+    <origin
+      xyz="0 -0.017 0.041959"
+      rpy="1.5708 -1.5708 0" />
+    <parent
+      link="R51" />
+    <child
+      link="R52" />
+    <axis
+      xyz="0 0 1" />
+    <dynamics
+      damping="0.1"
+      friction="1" />
+    <safety_controller
+      soft_upper_limit="3.14"
+      soft_lower_limit="-3.14"
+      k_position="1"
+      k_velocity="0" />
+  </joint>
+  <link
+    name="R53">
+    <inertial>
+      <origin
+        xyz="-0.000119963447032502 -9.50409728730592E-06 0.0565988904283151"
+        rpy="0 0 0" />
+      <mass
+        value="0.069532855887939" />
+      <inertia
+        ixx="4.27727296325855E-05"
+        ixy="1.65112458461453E-09"
+        ixz="2.36533864358167E-07"
+        iyy="3.67098699433813E-05"
+        iyz="5.6718473180663E-09"
+        izz="1.59347535087201E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/R53.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/R53.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="53"
+    type="continuous">
+    <origin
+      xyz="0 0.079472 -0.016913"
+      rpy="-1.5708 0 -3.6742E-05" />
+    <parent
+      link="R52" />
+    <child
+      link="R53" />
+    <axis
+      xyz="0 0 1" />
+    <dynamics
+      damping="0.1"
+      friction="1" />
+    <safety_controller
+      soft_upper_limit="3.14"
+      soft_lower_limit="-3.14"
+      k_position="1"
+      k_velocity="0" />
+  </joint>
+  <link
+    name="R54">
+    <inertial>
+      <origin
+        xyz="0.00726403891794954 0.0453873485931559 -0.0169916657575229"
+        rpy="0 0 0" />
+      <mass
+        value="0.0657054898675531" />
+      <inertia
+        ixx="3.5743047135082E-05"
+        ixy="-2.25223707241793E-06"
+        ixz="-1.88244883567248E-08"
+        iyy="2.85236475739634E-05"
+        iyz="-1.89092200298606E-08"
+        izz="3.54724622178133E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/R54.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/R54.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="54"
+    type="continuous">
+    <origin
+      xyz="0.0170495940075351 8.67046779537791E-05 0.103096906938387"
+      rpy="1.57075958479638 0 1.57079632679489" />
+    <parent
+      link="R53" />
+    <child
+      link="R54" />
+    <axis
+      xyz="0 -3.6742E-05 1" />
+    <dynamics
+      damping="0.1"
+      friction="1" />
+    <safety_controller
+      soft_upper_limit="3.14"
+      soft_lower_limit="-3.14"
+      k_position="1"
+      k_velocity="0" />
+  </joint>
+  <link
+    name="R55">
+    <inertial>
+      <origin
+        xyz="0.000112569565069692 0.000114501684141564 0.0413081847030029"
+        rpy="0 0 0" />
+      <mass
+        value="0.0577443642673399" />
+      <inertia
+        ixx="1.68217713051815E-05"
+        ixy="4.53553905325558E-10"
+        ixz="-6.49385359894605E-09"
+        iyy="2.10048639618397E-05"
+        iyz="-2.95907428717452E-08"
+        izz="1.18563926617084E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/R55.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/R55.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="55"
+    type="continuous">
+    <origin
+      xyz="0 0.074405 -0.017047"
+      rpy="0 -1.5708 -1.5708" />
+    <parent
+      link="R54" />
+    <child
+      link="R55" />
+    <axis
+      xyz="0 0 1" />
+    <dynamics
+      damping="0.1"
+      friction="1" />
+    <safety_controller
+      soft_upper_limit="3.14"
+      soft_lower_limit="-3.14"
+      k_position="1"
+      k_velocity="0" />
+  </joint>
+  <link
+    name="R56">
+    <inertial>
+      <origin
+        xyz="-0.00685577673934879 0.035725836838622 -0.0289080060531731"
+        rpy="0 0 0" />
+      <mass
+        value="0.0687189267592545" />
+      <inertia
+        ixx="3.91082250280169E-05"
+        ixy="4.58505371254852E-06"
+        ixz="2.75657348374613E-06"
+        iyy="2.41014550802785E-05"
+        iyz="-2.42074283407769E-06"
+        izz="3.51239530362555E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/R56.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/R56.STL" />
+      </geometry>
+      <surface>
+          <friction>
+            <ode>
+              <mu>2.0</mu>
+              <mu2>2.0</mu2>
+            </ode>
+          </friction>
+          <contact>
+            <ode>
+              <kp>1000000.0</kp>
+              <kd>1.0</kd>
+              <min_depth>0.001</min_depth>
+            </ode>
+          </contact>
+      </surface>
+    </collision>
+  </link>
+  <joint
+    name="56"
+    type="continuous">
+    <origin
+      xyz="0 0.01705 0.077444"
+      rpy="1.5708 3.6742E-05 -3.1416" />
+    <parent
+      link="R55" />
+    <child
+      link="R56" />
+    <axis
+      xyz="0 0 1" />
+    <dynamics
+      damping="0.1"
+      friction="1" />
+    <safety_controller
+      soft_upper_limit="3.14"
+      soft_lower_limit="-3.14"
+      k_position="1"
+      k_velocity="0" />
+  </joint>
+  <link
+    name="R57">
+    <inertial>
+      <origin
+        xyz="-0.00157321911233499 0.0289359034083855 -0.0180500053634029"
+        rpy="0 0 0" />
+      <mass
+        value="0.00867895893394143" />
+      <inertia
+        ixx="6.00860790308426E-06"
+        ixy="3.92221514763387E-07"
+        ixz="-8.22808430341328E-13"
+        iyy="2.00081084209462E-06"
+        iyz="-9.53432366009719E-12"
+        izz="4.52461612804236E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/R57.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/R57.STL" />
+      </geometry>
+      <surface>
+          <friction>
+            <ode>
+              <mu>2.0</mu>
+              <mu2>2.0</mu2>
+            </ode>
+          </friction>
+          <contact>
+            <ode>
+              <kp>1000000.0</kp>
+              <kd>1.0</kd>
+              <min_depth>0.001</min_depth>
+            </ode>
+          </contact>
+      </surface>
+    </collision>
+  </link>
+  <joint
+    name="57"
+    type="revolute">
+    <origin
+      xyz="0.0124935996479524 0.0370754693305437 0.000999990034185268"
+      rpy="0 0 0" />
+    <parent
+      link="R56" />
+    <child
+      link="R57" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="0.0"
+      upper="1.0"
+      effort="50"
+      velocity="1.0" />
+    <dynamics
+      damping="0.1"
+      friction="1" />
+    <safety_controller
+      soft_upper_limit="3.14"
+      soft_lower_limit="-3.14"
+      k_position="1"
+      k_velocity="0" />
+  </joint>
+
+  <link
+    name="camera_Hand_R1">
+    <inertial>
+      <origin
+        xyz="5.00113413529069E-09 -0.000397973186382655 -0.0100723494831189"
+        rpy="0 0 0" />
+      <mass
+        value="0.00599127370958526" />
+      <inertia
+        ixx="8.96595010774009E-07"
+        ixy="3.7821554840438E-13"
+        ixz="4.02334946914611E-13"
+        iyy="8.6649789026362E-07"
+        iyz="-3.20164436420297E-08"
+        izz="3.94164788894851E-07" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/camera_Hand_R1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.298039215686275 0.298039215686275 0.298039215686275 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/camera_Hand_R1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Hand_R1"
+    type="fixed">
+    <origin
+      xyz="4.80563576571967E-05 -0.0420629714422308 0.11697530609676"
+      rpy="-2.7925268032163 -1.570796327 1.18086507071989E-05" />
+    <parent
+      link="R55" />
+    <child
+      link="camera_Hand_R1" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+  
+  <link
+    name="L1">
+    <inertial>
+      <origin
+        xyz="-0.000192642868019122 0.000180157456708213 -0.0204071780689106"
+        rpy="0 0 0" />
+      <mass
+        value="0.0347024083126201" />
+      <inertia
+        ixx="6.19721616763801E-06"
+        ixy="3.55279545681144E-10"
+        ixz="-5.77173316618116E-09"
+        iyy="5.86612497951025E-06"
+        iyz="2.02396550195964E-08"
+        izz="5.64519144431111E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/L1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/L1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="1"
+    type="continuous">
+    <origin
+      xyz="0 0.0790362279295954 0.517029235393855"
+      rpy="1.5707963267949 -1.5707963267949 0" />
+    <parent
+      link="base_link_0" />
+    <child
+      link="L1" />
+    <axis
+      xyz="0 0 1" />
+    <dynamics
+      friction="1" />
+    <safety_controller
+      soft_upper_limit="3.14"
+      soft_lower_limit="-3.14"
+      k_position="1"
+      k_velocity="1" />
+  </joint>
+  <link
+    name="L2">
+    <inertial>
+      <origin
+        xyz="0.000210564433566485 0.0461358506504139 -0.0217456373631241"
+        rpy="0 0 0" />
+      <mass
+        value="0.0872037088007755" />
+      <inertia
+        ixx="5.76364875744257E-05"
+        ixy="1.12212114231819E-06"
+        ixz="2.32882539579393E-08"
+        iyy="3.63881691853813E-05"
+        iyz="2.93767750820015E-06"
+        izz="5.51203430946247E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/L2.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/L2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="2"
+    type="continuous">
+    <origin
+      xyz="0 -0.0169999868316996 -0.0419590594325319"
+      rpy="1.5707963267949 -1.5707963267949 0" />
+    <parent
+      link="L1" />
+    <child
+      link="L2" />
+    <axis
+      xyz="0 0 -1" />
+    <dynamics
+      damping="0.1"
+      friction="1" />
+    <safety_controller
+      soft_upper_limit="3.14"
+      soft_lower_limit="-3.14"
+      k_position="1"
+      k_velocity="1" />
+  </joint>
+  <link
+    name="L3">
+    <inertial>
+      <origin
+        xyz="0.000145645975762471 -7.9074410577075E-05 0.0543955372949051"
+        rpy="0 0 0" />
+      <mass
+        value="0.0845177344918411" />
+      <inertia
+        ixx="5.45917931816826E-05"
+        ixy="-1.7051714186862E-09"
+        ixz="-3.05957221002369E-07"
+        iyy="4.6878700564455E-05"
+        iyz="5.67304149388123E-09"
+        izz="2.03211611427177E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/L3.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/L3.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="3"
+    type="continuous">
+    <origin
+      xyz="0 0.079471814959571 -0.0169999094912547"
+      rpy="-1.5707963267949 0 3.6741998521265E-05" />
+    <parent
+      link="L2" />
+    <child
+      link="L3" />
+    <axis
+      xyz="0 0 -1" />
+    <dynamics
+      damping="0.1"
+      friction="1" />
+    <safety_controller
+      soft_upper_limit="3.14"
+      soft_lower_limit="-3.14"
+      k_position="1"
+      k_velocity="1" />
+  </joint>
+  <link
+    name="L4">
+    <inertial>
+      <origin
+        xyz="-0.00670865470292906 0.04448451391237 -0.0170127116500939"
+        rpy="0 0 0" />
+      <mass
+        value="0.0795436653182316" />
+      <inertia
+        ixx="4.60723258020471E-05"
+        ixy="2.92578887692643E-06"
+        ixz="2.62398643572018E-08"
+        iyy="3.60699758039952E-05"
+        iyz="-2.47459263312781E-08"
+        izz="4.52717521427736E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/L4.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/L4.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="4"
+    type="continuous">
+    <origin
+      xyz="-0.0170502891901611 0 0.103096906938387"
+      rpy="1.57075958479638 0 -1.57079632679489" />
+    <parent
+      link="L3" />
+    <child
+      link="L4" />
+    <axis
+      xyz="0 3.67419985121779E-05 -0.999999999325013" />
+    <dynamics
+      damping="0.1"
+      friction="1" />
+    <safety_controller
+      soft_upper_limit="3.14"
+      soft_lower_limit="-3.14"
+      k_position="1"
+      k_velocity="1" />
+  </joint>
+  <link
+    name="L5">
+    <inertial>
+      <origin
+        xyz="-9.25658013185282E-05 0.000102962993435074 0.0394964660101199"
+        rpy="0 0 0" />
+      <mass
+        value="0.0691929280922426" />
+      <inertia
+        ixx="2.10253646250632E-05"
+        ixy="-6.28653046836635E-10"
+        ixz="6.55689674053424E-09"
+        iyy="2.62960432926089E-05"
+        iyz="-3.91546838069766E-08"
+        izz="1.50196771560165E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/L5.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/L5.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="5"
+    type="continuous">
+    <origin
+      xyz="0 0.0744046046225213 -0.0170472662379522"
+      rpy="0 1.57075958479775 1.57079632669987" />
+    <parent
+      link="L4" />
+    <child
+      link="L5" />
+    <axis
+      xyz="0 0 -1" />
+    <dynamics
+      damping="0.1"
+      friction="1" />
+    <safety_controller
+      soft_upper_limit="3.14"
+      soft_lower_limit="-3.14"
+      k_position="1"
+      k_velocity="1" />
+  </joint>
+  <link
+    name="L6">
+    <inertial>
+      <origin
+        xyz="0.00832756952190081 0.0348033722235037 -0.0293176557097364"
+        rpy="0 0 0" />
+      <mass
+        value="0.0813734434579186" />
+      <inertia
+        ixx="5.22787104552577E-05"
+        ixy="-6.15832884388635E-06"
+        ixz="-3.77995700179428E-06"
+        iyy="3.36126384498886E-05"
+        iyz="-3.50326087384497E-06"
+        izz="4.52948384503414E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/L6.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.498039215686275 0.498039215686275 0.498039215686275 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/L6.STL" />
+      </geometry>
+      <surface>
+          <friction>
+            <ode>
+              <mu>2.0</mu>
+              <mu2>2.0</mu2>
+            </ode>
+          </friction>
+          <contact>
+            <ode>
+              <kp>1000000.0</kp>
+              <kd>1.0</kd>
+              <min_depth>0.001</min_depth>
+            </ode>
+          </contact>
+      </surface>
+    </collision>
+  </link>
+  <joint
+    name="6"
+    type="continuous">
+    <origin
+      xyz="0 0.017050000000365 0.0774439288765981"
+      rpy="1.57079632679491 -3.6741998521265E-05 -3.14159265358979" />
+    <parent
+      link="L5" />
+    <child
+      link="L6" />
+    <axis
+      xyz="0 0 1" />
+    <dynamics
+      damping="0.1"
+      friction="1" />
+    <safety_controller
+      soft_upper_limit="3.14"
+      soft_lower_limit="-3.14"
+      k_position="1"
+      k_velocity="1" />
+  </joint>
+  <link
+    name="L7">
+    <inertial>
+      <origin
+        xyz="0.00157330967810734 0.0289366122334894 -0.0180497509383475"
+        rpy="0 0 0" />
+      <mass
+        value="0.0112822819181765" />
+      <inertia
+        ixx="7.81114701670507E-06"
+        ixy="-5.09876416911949E-07"
+        ixz="2.00384410451794E-12"
+        iyy="2.60102824368288E-06"
+        iyz="1.74750406899908E-11"
+        izz="5.88195923301209E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/L7.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.498039215686275 0.498039215686275 0.498039215686275 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/L7.STL" />
+      </geometry>
+      <surface>
+          <friction>
+            <ode>
+              <mu>2.0</mu>
+              <mu2>2.0</mu2>
+            </ode>
+          </friction>
+          <contact>
+            <ode>
+              <kp>1000000.0</kp>
+              <kd>1.0</kd>
+              <min_depth>0.001</min_depth>
+            </ode>
+          </contact>
+      </surface>
+    </collision>
+  </link>
+  <joint
+    name="7"
+    type="revolute">
+    <origin
+      xyz="-0.0124935928024225 0.0370754598649937 0.000999983705206001"
+      rpy="0 0 0" />
+    <parent
+      link="L6" />
+    <child
+      link="L7" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="0.0"
+      upper="1.0"
+      effort="50"
+      velocity="1.0" />
+    <dynamics
+      damping="0.1"
+      friction="1" />
+    <safety_controller
+      soft_upper_limit="3.14"
+      soft_lower_limit="-3.14"
+      k_position="1"
+      k_velocity="1" />
+  </joint>
+
+  <link
+    name="camera_Hand_L1">
+    <inertial>
+      <origin
+        xyz="2.66453525910038E-15 0.00039797318641413 -0.0100723494831189"
+        rpy="0 0 0" />
+      <mass
+        value="0.00778865582246085" />
+      <inertia
+        ixx="1.16557351401239E-06"
+        ixy="3.19860976650031E-20"
+        ixz="2.50618950962356E-19"
+        iyy="1.12644725733653E-06"
+        iyz="4.16213767379257E-08"
+        izz="5.12414225563308E-07" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/camera_Hand_L1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.298039215686275 0.298039215686275 0.298039215686275 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://pkg_robot_model/meshes/camera_Hand_L1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  
+  <joint
+    name="Hand_L1"
+    type="fixed">
+    <origin
+      xyz="4.80563576483739E-05 -0.04206297144223 0.11697530609676"
+      rpy="-0.349065850398865 -1.570796327 0" />
+    <parent
+      link="L5" />
+    <child
+      link="camera_Hand_L1" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+
+  <ros2_control name="XiaobeiSystem" type="system">
+    <hardware>
+      <xacro:if value="$(arg use_sim)">
+        <plugin>gazebo_ros2_control/GazeboSystem</plugin>
+      </xacro:if>
+
+      <xacro:unless value="$(arg use_sim)">
+        <plugin>xiaobei_hardware/XiaobeiHardwareInterface</plugin>
+        <param name="serial_port">/dev/ttyACM0</param>
+        <param name="baud_rate">1000000</param>
+      </xacro:unless>
+    </hardware>
+
+    <joint name="101">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="102">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <joint name="51">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="52">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="53">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="54">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="55">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="56">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="57">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <joint name="1">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="2">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="3">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="4">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="5">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="6">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="7">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+
+  </ros2_control>
+
+  <gazebo>
+    <plugin filename="libgazebo_ros2_control.so" name="gazebo_ros2_control">
+      <robot_param>robot_description</robot_param>
+      <robot_param_node>robot_state_publisher</robot_param_node>
+      <parameters>$(find pkg_robot_model)/config/my_controllers.yaml</parameters>
+    </plugin>
+  </gazebo>
+
+  <gazebo reference="base_link_0"><material>Gazebo/Grey</material></gazebo>
+  <gazebo reference="head_101"><material>Gazebo/DarkGrey</material></gazebo>
+  <gazebo reference="head_102"><material>Gazebo/GreyTransparent</material></gazebo>
+
+  <gazebo reference="R51"><material>Gazebo/Grey</material></gazebo>
+  <gazebo reference="R52"><material>Gazebo/Grey</material></gazebo>
+  <gazebo reference="R53"><material>Gazebo/Grey</material></gazebo>
+  <gazebo reference="R54"><material>Gazebo/Grey</material></gazebo>
+  <gazebo reference="R55"><material>Gazebo/Grey</material></gazebo>
+  <gazebo reference="R56"><material>Gazebo/Grey</material></gazebo>
+  <gazebo reference="R57"><material>Gazebo/Grey</material></gazebo>
+
+  <gazebo reference="L1"><material>Gazebo/Grey</material></gazebo>
+  <gazebo reference="L2"><material>Gazebo/Grey</material></gazebo>
+  <gazebo reference="L3"><material>Gazebo/Grey</material></gazebo>
+  <gazebo reference="L4"><material>Gazebo/Grey</material></gazebo>
+  <gazebo reference="L5"><material>Gazebo/Grey</material></gazebo>
+  <gazebo reference="L6"><material>Gazebo/Grey</material></gazebo>
+  <gazebo reference="L7"><material>Gazebo/Grey</material></gazebo>
+
+  <gazebo reference="camera_head_A1">
+    <material>Gazebo/Black</material>
+    <sensor name="head_camera" type="depth">
+      <visualize>true</visualize>
+      <update_rate>30.0</update_rate>
+      <camera name="head_camera">
+        <horizontal_fov>1.047198</horizontal_fov>
+        <image>
+          <width>640</width>
+          <height>480</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.05</near>
+          <far>100.0</far>
+        </clip>
+      </camera>
+      <plugin name="head_camera_controller" filename="libgazebo_ros_camera.so">
+        <frame_name>camera_head_A1</frame_name>
+        <min_depth>0.1</min_depth>
+        <max_depth>100.0</max_depth>
+      </plugin>
+    </sensor>
+  </gazebo>
+
+  <gazebo reference="camera_Hand_R1">
+    <material>Gazebo/Black</material>
+    <sensor name="right_hand_camera" type="camera">
+      <visualize>true</visualize>
+      <update_rate>30.0</update_rate>
+      <camera name="right_hand_camera">
+        <horizontal_fov>1.0</horizontal_fov>
+        <image>
+          <width>640</width>
+          <height>480</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.02</near>
+          <far>300</far>
+        </clip>
+      </camera>
+      <plugin name="right_hand_camera_controller" filename="libgazebo_ros_camera.so">
+        <frame_name>camera_Hand_R1</frame_name>
+      </plugin>
+    </sensor>
+  </gazebo>
+
+  <gazebo reference="camera_Hand_L1">
+    <material>Gazebo/Black</material>
+    <sensor name="left_hand_camera" type="camera">
+      <visualize>true</visualize>
+      <update_rate>30.0</update_rate>
+      <camera name="left_hand_camera">
+        <horizontal_fov>1.0</horizontal_fov>
+        <image>
+          <width>640</width>
+          <height>480</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.02</near>
+          <far>300</far>
+        </clip>
+      </camera>
+      <plugin name="left_hand_camera_controller" filename="libgazebo_ros_camera.so">
+        <frame_name>camera_Hand_L1</frame_name>
+      </plugin>
+    </sensor>
+  </gazebo>
+
+  <gazebo reference="camera_head_A2"><material>Gazebo/Black</material></gazebo>
+  <gazebo reference="camera_head_B1"><material>Gazebo/Black</material></gazebo>
+
+</robot>

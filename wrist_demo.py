@@ -27,6 +27,9 @@ from PySide6 import QtCore, QtGui, QtWidgets
 import pyqtgraph.opengl as gl
 
 from wt901_viz.orientation import rotation_matrix
+from wt901_viz.axis_mapping import DEFAULT_AXIS_MAPPING, mapping_matrix, normalized_mapping
+from wt901_viz.yaw_guard import GyroOnly, PacketClock, YawGuard
+from wt901_viz.so3_filter import AdaptiveTiltFilter, SO3Health, TiltEstimate, check_so3
 from wt901.registers import (
     REG_ACCRANGE, REG_AXIS6, REG_BANDWIDTH, REG_CALSW, REG_GYRORANGE,
     REG_ORIENT, REG_RATE, REG_SAVE, UNLOCK_SETTLE,
@@ -36,6 +39,13 @@ from wt901.registers import (
 def relative_rotation(reference: np.ndarray, current: np.ndarray) -> np.ndarray:
     """Current hand orientation expressed in the neutral hand frame."""
     return reference.T @ current
+
+
+def model_rotation(reference: np.ndarray, current: np.ndarray,
+                   mapping: tuple[str, str, str]) -> np.ndarray:
+    """Express a neutral-relative sensor rotation in the hand model's axes."""
+    basis = mapping_matrix(mapping)
+    return basis @ relative_rotation(reference, current) @ basis.T
 
 
 def xyz_angles(matrix: np.ndarray) -> tuple[float, float, float]:
@@ -50,6 +60,19 @@ def box_vertices(x0, x1, y0, y1, z0, z1):
     return np.array([
         [x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0],
         [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1],
+    ], dtype=np.float32)
+
+
+def wrist_axis_points(axis: int) -> np.ndarray:
+    """Arrow line segments rooted at the fixed wrist rotation pivot."""
+    direction = np.eye(3, dtype=np.float32)[axis]
+    side_direction = np.eye(3, dtype=np.float32)[(axis + 1) % 3]
+    tip = direction * 0.42
+    head = direction * 0.32
+    return np.array([
+        np.zeros(3), tip,
+        tip, head + side_direction * 0.045,
+        tip, head - side_direction * 0.045,
     ], dtype=np.float32)
 
 
@@ -74,6 +97,9 @@ HELP_PAGES = (
 <p>新设备初次处于 AP 模式时，点击顶部“接入新设备”，按照弹窗完成接入。</p>
 <p>点击顶部“热点设备”可查看当前关联到电脑热点的终端，以及已经通过 UDP 数据确认的 WT 设备 ID 和端点。</p>
 <p>点击顶部“设备分配”可把当前热点中在线的 WT 设备绑定到左手或右手；换绑后该部位会以新设备的下一包数据重建中立位。</p>
+<p>每只手旁的“轴映射”可设定设备 X/Y/Z 正轴在手掌模型中立位时指向的模型轴；
+红/绿/蓝箭头分别表示随手掌转动的模型 X/Y/Z 轴。映射仅作用于当前 GUI，
+不写入设备，重启程序后恢复默认映射。</p>
 <p><b>快捷键：</b>空格同时归零；1 只归零左手；2 只归零右手；
 R 重置视角；Esc/Q 关闭窗口。</p>
 """),
@@ -144,6 +170,25 @@ GUI 按 WT901WIFI 协议手册的分档表显示“约 xx%”，不进行线性�
 但长时间可能漂移。</p>
 <p><b>9 轴</b>还使用磁力计修正航向，可约束长期漂移；磁场干扰或校准不良可能使航向偏移。
 切换算法后，该手的 GUI 中立位会根据下一包数据重新建立。</p>
+"""),
+    ("俯仰角保护", """
+<h2>俯仰角保护区（实验功能）</h2>
+<p>每只手可独立选择显示模式。默认当 |Pitch| 达到 80° 时进入保护区，下降到 75° 时退出；
+两个角度可在对应设备页自行调整，退出阈值必须低于进入阈值，以免边界反复切换。</p>
+<p>对应设备页可选择四种姿态来源：厂商 RPY、俯仰保护、全程陀螺、陀螺＋加计纠倾斜。
+四条链路始终同时计算；切换显示模式不会重新归零，因此可在同一次动作中直接对比。</p>
+<p>保护区内不直接采用设备欧拉角 Yaw，而是以进入前的姿态为起点，用<b>三轴角速度</b>
+积分完整的旋转矩阵。退出时保留航向修正，尽量避免马上跳回偏移的 Yaw。
+全程陀螺从设备首包开始取单位姿态，仅用角速度和设备时间戳，不读取 RPY。
+第四模式在静止约 1 秒后学习三轴陀螺零偏，并在加速度可信时缓慢修正倾斜；
+它不会使用加速度修正长期航向。建议启动或换绑后先保持设备静止。
+修改保护阈值会重新建立该手四条链路的中立位；不会写设备寄存器。</p>
+<p>接近 90° 时，ZYX 欧拉角 Yaw 本身并不稳定。保护区内界面展示的“竖轴累计角”
+是角速度在世界竖轴的积分，并不等同于严格的欧拉 Yaw；模型使用完整旋转矩阵。
+长时间在保护区内会积累陀螺漂移，进入保护区前已有的错误也无法追回。
+全程陀螺更可能随时间漂移，若有漏包或长时间离线，请重新开始测试。</p>
+<p>界面显示的 SO(3) 距离是当前矩阵到最近正规旋转矩阵的 Frobenius 距离。
+数值超出 1e-8 时才以 SVD 投影；这只修正数值失正交，不会修正传感器测量偏差。</p>
 """),
     ("安装方向", """
 <h2>设备安装方向</h2>
@@ -228,6 +273,26 @@ class HandState:
     acc_combo: QtWidgets.QComboBox | None = None
     acc_apply: QtWidgets.QPushButton | None = None
     parts: list[gl.GLMeshItem] = field(default_factory=list)
+    axes: list[gl.GLLinePlotItem] = field(default_factory=list)
+    axis_mapping: tuple[str, str, str] = DEFAULT_AXIS_MAPPING
+    mapping_button: QtWidgets.QPushButton | None = None
+    mode_combo: QtWidgets.QComboBox | None = None
+    guard_enter_spin: QtWidgets.QDoubleSpinBox | None = None
+    guard_exit_spin: QtWidgets.QDoubleSpinBox | None = None
+    guard_status: QtWidgets.QLabel | None = None
+    yaw_guard: YawGuard | None = None
+    gyro_only: GyroOnly | None = None
+    tilt_filter: AdaptiveTiltFilter | None = None
+    tilt_estimate: TiltEstimate | None = None
+    packet_clock: PacketClock | None = None
+    last_device_tick_s: float | None = None
+    stream_current: dict[str, np.ndarray] = field(default_factory=dict)
+    stream_reference: dict[str, np.ndarray] = field(default_factory=dict)
+    stream_health: dict[str, SO3Health] = field(default_factory=dict)
+    so3_projection_count: int = 0
+    guarded_heading_deg: float | None = None
+    guarded_active: bool = False
+    guarded_offset_deg: float = 0.0
     reference: np.ndarray | None = None
     current: np.ndarray | None = None
     last_packet_time: float = 0.0
@@ -243,6 +308,61 @@ class HandState:
     setting: RegisterSetting | None = None
     controls: list[QtWidgets.QWidget] = field(default_factory=list)
     neutral_button: QtWidgets.QPushButton | None = None
+
+
+class AxisMappingDialog(QtWidgets.QDialog):
+    """Choose a right-handed device-axis to hand-model-axis mapping."""
+
+    CHOICES = tuple((f"{sign}{axis}", f"模型 {sign}{axis}")
+                    for axis in "XYZ" for sign in "+-")
+
+    def __init__(self, state: HandState, parent: QtWidgets.QWidget):
+        super().__init__(parent)
+        self.setWindowTitle(f"{state.name} · 设备轴映射")
+        self.setMinimumWidth(390)
+        layout = QtWidgets.QVBoxLayout(self)
+        instruction = QtWidgets.QLabel(
+            "先让手掌与模型中立姿势一致并归零，再选择设备每根正轴"
+            "在模型坐标系中指向哪里。模型轴可在主画面中查看。")
+        instruction.setWordWrap(True)
+        layout.addWidget(instruction)
+        form = QtWidgets.QFormLayout()
+        self.selectors = []
+        for axis, initial in zip("XYZ", state.axis_mapping):
+            combo = QtWidgets.QComboBox()
+            for value, label in self.CHOICES:
+                combo.addItem(label, value)
+            combo.setCurrentIndex(combo.findData(initial))
+            form.addRow(f"设备 +{axis} 轴 →", combo)
+            self.selectors.append(combo)
+        layout.addLayout(form)
+        self.message = QtWidgets.QLabel()
+        self.message.setWordWrap(True)
+        layout.addWidget(self.message)
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok |
+            QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.ok_button = buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Ok)
+        self.ok_button.setText("保存映射")
+        for combo in self.selectors:
+            combo.currentIndexChanged.connect(self._validate)
+        self._validate()
+
+    def mapping(self) -> tuple[str, str, str]:
+        return tuple(combo.currentData() for combo in self.selectors)
+
+    def _validate(self, _index: int = 0) -> None:
+        try:
+            mapping_matrix(self.mapping())
+        except ValueError as exc:
+            self.message.setText(str(exc))
+            self.ok_button.setEnabled(False)
+        else:
+            self.message.setText("映射有效：模型轴将按此关系随设备转动。")
+            self.ok_button.setEnabled(True)
 
 
 class WristWindow(QtWidgets.QMainWindow):
@@ -286,6 +406,10 @@ class WristWindow(QtWidgets.QMainWindow):
         title.setStyleSheet("font-size:18px; font-weight:600")
         top_row.addWidget(title)
         top_row.addStretch(1)
+        self.axes_checkbox = QtWidgets.QCheckBox("显示模型轴（红 X · 绿 Y · 蓝 Z）")
+        self.axes_checkbox.setChecked(True)
+        self.axes_checkbox.toggled.connect(self._toggle_axes)
+        top_row.addWidget(self.axes_checkbox)
         self.assignment_button = QtWidgets.QPushButton("设备分配")
         self.assignment_button.setToolTip("给各身体部位指定当前热点中的 WT 设备")
         self.assignment_button.clicked.connect(self.open_device_assignment)
@@ -328,6 +452,11 @@ class WristWindow(QtWidgets.QMainWindow):
                 self.hands[device_id] = state
             header = QtWidgets.QHBoxLayout()
             header.addWidget(info, 1)
+            mapping_button = QtWidgets.QPushButton("轴映射")
+            state.mapping_button = mapping_button
+            mapping_button.clicked.connect(
+                lambda _checked=False, part=state: self.show_axis_mapping(part))
+            header.addWidget(mapping_button)
             button = QtWidgets.QPushButton(f"{name}归零（{key}）")
             state.neutral_button = button
             button.clicked.connect(lambda checked=False, part=state: self.set_neutral(part.device_id))
@@ -350,6 +479,15 @@ class WristWindow(QtWidgets.QMainWindow):
                         (0.97, 0.64, 0.40, 1), True, mirror)
             add_box(state, (0.18, 0.42, 0.20, 0.39, -0.05, 0.05),
                     (0.97, 0.64, 0.40, 1), True, mirror)
+            for axis, color in enumerate(((1.0, 0.2, 0.2, 1.0),
+                                          (0.2, 1.0, 0.2, 1.0),
+                                          (0.25, 0.45, 1.0, 1.0))):
+                item = gl.GLLinePlotItem(pos=wrist_axis_points(axis), color=color,
+                                         width=3, mode="lines", antialias=True,
+                                         glOptions="additive")
+                item.setTransform(qt_matrix(np.eye(3), state.y_offset))
+                self.view.addItem(item)
+                state.axes.append(item)
 
             panel = QtWidgets.QWidget()
             panel_layout = QtWidgets.QVBoxLayout(panel)
@@ -360,6 +498,38 @@ class WristWindow(QtWidgets.QMainWindow):
                 label.setWordWrap(True)
                 label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
                 panel_layout.addWidget(label)
+            guard_group = QtWidgets.QGroupBox("姿态来源 · 四轨迹对比")
+            guard_layout = QtWidgets.QVBoxLayout(guard_group)
+            state.mode_combo = QtWidgets.QComboBox()
+            state.mode_combo.addItem("厂商 RPY（默认）", "raw")
+            state.mode_combo.addItem("俯仰角保护区", "guard")
+            state.mode_combo.addItem("全程陀螺 SO(3)", "gyro")
+            state.mode_combo.addItem("陀螺 + 加计纠倾斜", "fusion")
+            state.mode_combo.currentIndexChanged.connect(
+                lambda _index, part=state: self._render_selected_pose(part))
+            guard_layout.addWidget(state.mode_combo)
+            guard_angles = QtWidgets.QHBoxLayout()
+            state.guard_enter_spin = QtWidgets.QDoubleSpinBox()
+            state.guard_enter_spin.setRange(10.5, 89.5)
+            state.guard_enter_spin.setSingleStep(0.5)
+            state.guard_enter_spin.setSuffix("° 进入")
+            state.guard_enter_spin.setValue(80.0)
+            state.guard_exit_spin = QtWidgets.QDoubleSpinBox()
+            state.guard_exit_spin.setRange(10.0, 89.0)
+            state.guard_exit_spin.setSingleStep(0.5)
+            state.guard_exit_spin.setSuffix("° 退出")
+            state.guard_exit_spin.setValue(75.0)
+            guard_angles.addWidget(state.guard_enter_spin)
+            guard_angles.addWidget(state.guard_exit_spin)
+            guard_layout.addLayout(guard_angles)
+            state.guard_enter_spin.valueChanged.connect(
+                lambda value, part=state: self._guard_enter_changed(part, value))
+            state.guard_exit_spin.valueChanged.connect(
+                lambda value, part=state: self._guard_exit_changed(part, value))
+            state.guard_status = QtWidgets.QLabel("未启用；使用设备原始姿态")
+            state.guard_status.setWordWrap(True)
+            guard_layout.addWidget(state.guard_status)
+            panel_layout.addWidget(guard_group)
             read_button = QtWidgets.QPushButton("读取设备参数")
             read_button.clicked.connect(lambda checked=False, part=state: self.read_parameters(part.device_id))
             panel_layout.addWidget(read_button)
@@ -498,6 +668,104 @@ class WristWindow(QtWidgets.QMainWindow):
         layout.addWidget(close_button)
         dialog.exec()
 
+    def _toggle_axes(self, visible: bool) -> None:
+        for state in self.part_states.values():
+            for axis in state.axes:
+                axis.setVisible(visible)
+
+    def _set_hand_transform(self, state: HandState, rotation: np.ndarray) -> None:
+        transform = qt_matrix(rotation, state.y_offset)
+        for part in (*state.parts, *state.axes):
+            part.setTransform(transform)
+
+    def _reset_orientation_streams(self, state: HandState) -> None:
+        state.yaw_guard = None
+        state.gyro_only = None
+        state.tilt_filter = None
+        state.tilt_estimate = None
+        state.packet_clock = None
+        state.last_device_tick_s = None
+        state.stream_current.clear()
+        state.stream_reference.clear()
+        state.stream_health.clear()
+        state.so3_projection_count = 0
+        state.guarded_heading_deg = None
+        state.guarded_active = False
+        state.guarded_offset_deg = 0.0
+        state.reference = None
+        state.current = None
+        self._set_hand_transform(state, np.eye(3))
+        state.guard_status.setText("等待下一包数据为四种姿态建立共同中立时刻")
+
+    def _guard_enter_changed(self, state: HandState, value: float) -> None:
+        state.guard_exit_spin.setMaximum(value - 0.5)
+        self._reset_orientation_streams(state)
+
+    def _guard_exit_changed(self, state: HandState, value: float) -> None:
+        state.guard_enter_spin.setMinimum(value + 0.5)
+        self._reset_orientation_streams(state)
+
+    def _update_orientation_streams(self, state: HandState, packet) -> None:
+        if state.packet_clock is None:
+            state.packet_clock = PacketClock()
+            state.yaw_guard = YawGuard(state.guard_enter_spin.value(),
+                                       state.guard_exit_spin.value())
+            state.gyro_only = GyroOnly()
+            state.tilt_filter = AdaptiveTiltFilter()
+        t = state.packet_clock.elapsed(packet)
+        rate = (packet.gyro_x, packet.gyro_y, packet.gyro_z)
+        raw = rotation_matrix(packet.roll, packet.pitch, packet.yaw, "ZYX")
+        raw, raw_health = check_so3(raw)
+        result = state.yaw_guard.update(t, packet.roll, packet.pitch, packet.yaw, rate)
+        gyro = state.gyro_only.update(t, rate)
+        fused = state.tilt_filter.update(
+            t, rate, (packet.acc_x, packet.acc_y, packet.acc_z))
+        state.tilt_estimate = fused
+        state.stream_health = {
+            "raw": raw_health, "guard": state.yaw_guard.last_health,
+            "gyro": state.gyro_only.last_health, "fusion": fused.health,
+        }
+        state.so3_projection_count += sum(
+            health.projected for health in state.stream_health.values())
+        for mode, rotation in (("raw", raw), ("guard", result.rotation),
+                               ("gyro", gyro), ("fusion", fused.rotation)):
+            state.stream_current[mode] = rotation
+            if mode not in state.stream_reference:
+                state.stream_reference[mode] = rotation.copy()
+        state.guarded_heading_deg = result.heading_deg
+        state.guarded_active = result.active
+        state.guarded_offset_deg = result.yaw_offset_deg
+
+    def _render_selected_pose(self, state: HandState) -> None:
+        mode = state.mode_combo.currentData()
+        state.current = state.stream_current.get(mode)
+        state.reference = state.stream_reference.get(mode)
+        if state.current is None or state.reference is None:
+            self._set_hand_transform(state, np.eye(3))
+            return
+        rotation = model_rotation(state.reference, state.current, state.axis_mapping)
+        self._set_hand_transform(state, rotation)
+        x, y, z = xyz_angles(rotation)
+        labels = {"raw": "厂商 RPY", "guard": "俯仰保护",
+                  "gyro": "全程陀螺", "fusion": "陀螺+加计"}
+        state.info.setText(
+            f"{state.name} {state.device_id} [{labels[mode]}]："
+            f"X {x:+6.1f}°  Y {y:+6.1f}°  Z {z:+6.1f}°"
+            + (" · 保护中" if mode == "guard" and state.guarded_active else ""))
+
+    def show_axis_mapping(self, state: HandState) -> None:
+        dialog = AxisMappingDialog(state, self)
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        state.axis_mapping = normalized_mapping(dialog.mapping())
+        state.mapping_button.setText(
+            "轴映射*" if state.axis_mapping != DEFAULT_AXIS_MAPPING else "轴映射")
+        state.mapping_button.setToolTip("；".join(
+            f"设备 +{axis} → 模型 {target}"
+            for axis, target in zip("XYZ", state.axis_mapping)))
+        self._render_selected_pose(state)
+        state.status.setText("GUI 轴映射已更新；设备寄存器未改变")
+
     def open_device_setup(self):
         if not self.controls_enabled:
             return
@@ -567,7 +835,7 @@ class WristWindow(QtWidgets.QMainWindow):
             if device_id == state.device_id:
                 continue
             state.device_id = device_id
-            state.reference = state.current = None
+            self._reset_orientation_streams(state)
             state.last_packet_time = state.last_details_time = 0.0
             state.registers.clear()
             state.parameters.setText("寄存器参数：尚未读取")
@@ -575,8 +843,6 @@ class WristWindow(QtWidgets.QMainWindow):
             state.status.setText("已换绑；等待新设备建立中立位" if device_id else "尚未分配设备")
             state.info.setText(f"{state.name} {device_id}：等待数据" if device_id
                                else f"{state.name}：尚未分配设备")
-            for part in state.parts:
-                part.setTransform(qt_matrix(np.eye(3), state.y_offset))
             for control in state.controls:
                 control.setEnabled(self.controls_enabled and bool(device_id))
             for button in (state.orient_apply, state.bandwidth_apply, state.rate_apply,
@@ -589,16 +855,31 @@ class WristWindow(QtWidgets.QMainWindow):
 
     def poll(self):
         latest = {}
+        now = time.monotonic()
         for packet in self.source.poll():
             state = self.hands.get(packet.device_id)
             if state is None:
                 continue
+            tick = (packet.hour * 3600 + packet.minute * 60 + packet.second
+                    + packet.millisecond / 1000.0)
+            gap = tick - state.last_device_tick_s if state.last_device_tick_s is not None else 0.0
+            if gap < -43200:
+                gap += 86400.0
+            if gap > 1.0:
+                # A real device-time gap, not a temporarily slow GUI render.
+                # Unobserved rotation cannot be reconstructed reliably.
+                self._reset_orientation_streams(state)
+                state.status.setText("设备时间间断超过 1 秒；三条姿态已重新建立中立位")
+            state.last_device_tick_s = tick
             latest[packet.device_id] = packet
+            # The QTimer may receive several packets at once. Integrate every
+            # gyro sample, not only the last packet rendered in this tick.
+            self._update_orientation_streams(state, packet)
+            state.last_packet_time = now
             if state.calibration in ("mag_precheck", "mag"):
                 for i, value in enumerate((packet.mag_x, packet.mag_y, packet.mag_z)):
                     state.mag_min[i] = min(state.mag_min[i], value)
                     state.mag_max[i] = max(state.mag_max[i], value)
-        now = time.monotonic()
         if self.controls_enabled:
             for device_id, values in self.source.take_replies():
                 state = self.hands.get(device_id)
@@ -613,7 +894,8 @@ class WristWindow(QtWidgets.QMainWindow):
                         if actual == setting.value:
                             self._show_parameters(state)
                             if setting.address in (REG_AXIS6, REG_ORIENT):
-                                state.reference = None
+                                self._reset_orientation_streams(state)
+                                latest.pop(device_id, None)
                             state.status.setText(
                                 f"{state.name} {setting.label}：已保存并回读确认"
                                 + ("；下一包数据将作为新的手腕中立位"
@@ -649,18 +931,7 @@ class WristWindow(QtWidgets.QMainWindow):
                     state.calibration = None
                     state.status.setText("预检时设备离线，未写入；请检查热点连接")
                 continue
-            state.last_packet_time = now
-            state.current = rotation_matrix(packet.roll, packet.pitch, packet.yaw, "ZYX")
-            if state.reference is None:
-                state.reference = state.current.copy()
-            relative = relative_rotation(state.reference, state.current)
-            transform = qt_matrix(relative, state.y_offset)
-            for part in state.parts:
-                part.setTransform(transform)
-            x, y, z = xyz_angles(relative)
-            state.info.setText(
-                f"{state.name} {device_id}：X {x:+6.1f}°  Y {y:+6.1f}°  Z {z:+6.1f}°"
-            )
+            self._render_selected_pose(state)
             if now - state.last_details_time >= 0.2:
                 state.last_details_time = now
                 ip = self.source.device_ip(device_id) if self.controls_enabled else "TCP"
@@ -676,6 +947,18 @@ class WristWindow(QtWidgets.QMainWindow):
                     f"磁场 X/Y/Z: {packet.mag_x:+.1f} / {packet.mag_y:+.1f} / {packet.mag_z:+.1f} µT\n"
                     f"温度: {packet.temperature:.1f} °C    固件: {packet.version}"
                 )
+                guard_mode = "保护中：三轴陀螺积分" if state.guarded_active else "未进入保护区"
+                fused = state.tilt_estimate
+                bias = "/".join(f"{value:+.2f}" for value in fused.gyro_bias_dps)
+                selected_health = state.stream_health[state.mode_combo.currentData()]
+                state.guard_status.setText(
+                    f"四条姿态同时计算；|Pitch| {abs(packet.pitch):.1f}°；"
+                    f"{guard_mode}；保护航向修正 {state.guarded_offset_deg:+.1f}°。\n"
+                    f"融合零偏 X/Y/Z：{bias} °/s"
+                    f"（{'已建立' if fused.bias_ready else '待静止约 1 秒'}）；"
+                    f"加计权重 {fused.accelerometer_weight:.2f}。\n"
+                    f"当前模式距 SO(3)：{selected_health.distance_to_so3:.2e}；"
+                    f"SVD 投影累计 {state.so3_projection_count} 次。")
             if state.calibration in ("mag_precheck", "mag"):
                 span, covered = mag_coverage(state)
                 if state.calibration == "mag_precheck":
@@ -1110,13 +1393,11 @@ class WristWindow(QtWidgets.QMainWindow):
         for state in self.hands.values():
             if device_id is not None and state.device_id != device_id:
                 continue
-            if state.current is None:
+            if not state.stream_current:
                 continue
-            state.reference = state.current.copy()
-            transform = qt_matrix(np.eye(3), state.y_offset)
-            for part in state.parts:
-                part.setTransform(transform)
-            state.info.setText(f"{state.name} {state.device_id}：X 0.0°  Y 0.0°  Z 0.0°")
+            state.stream_reference = {mode: rotation.copy()
+                                      for mode, rotation in state.stream_current.items()}
+            self._render_selected_pose(state)
 
 
 def main() -> int:

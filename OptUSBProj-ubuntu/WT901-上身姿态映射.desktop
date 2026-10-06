@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=WT901 全身姿态映射
+Name[en_US]=WT901 Full-Body Pose Mapping
+Comment=通过 OptUSBProj Conda 环境启动 WT901 全身姿态界面
+Comment[en_US]=Launch the WT901 full-body pose viewer in the OptUSBProj Conda environment
+Exec=/home/hzb/Work/WT901/OptUSBProj-ubuntu/launch.sh
+Path=/home/hzb/Work/WT901
+Icon=/home/hzb/Work/WT901/OptUSBProj-ubuntu/assets/wt901-upper-body.svg
+Terminal=false
+Categories=Science;
+Keywords=WT901;IMU;Pose;Motion;Sensor;
+StartupNotify=true

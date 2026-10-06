@@ -1,0 +1,10 @@
+moveit_setup_assistant_config:
+  urdf:
+    package: pkg_robot_model
+    relative_path: urdf/pkg_robot_model.urdf
+  srdf:
+    relative_path: config/pkg_robot_model.srdf
+  package_settings:
+    author_name: xiaobei
+    author_email: user@todo.com
+    generated_timestamp: 1764055478

@@ -1,0 +1,37 @@
+// Local-browser QA, no dependency installs or network requests.
+const {chromium}=require('/home/hzb/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
+const fs=require('fs');
+const path=require('path');
+(async()=>{
+ const browser=await chromium.launch({executablePath:'/usr/bin/google-chrome',headless:true,args:['--no-sandbox']});
+ const page=await browser.newPage({viewport:{width:1440,height:1000}});
+ const errors=[];page.on('pageerror',e=>errors.push(String(e)));
+ await page.route(/^https?:/,r=>r.abort());
+ await page.goto('file://'+path.join(__dirname,'index.html'));
+ await page.locator('img').first().waitFor();
+ await page.evaluate(async()=>{await Promise.all([...document.images].map(i=>i.decode().catch(()=>{})));});
+ const capture=path.join(__dirname,'qa');fs.mkdirSync(capture,{recursive:true});
+ const result={};
+ result.desktop=await page.evaluate(()=>({panels:document.querySelectorAll('.am-panel').length,math:document.querySelectorAll('math').length,brokenImages:[...document.images].filter(i=>i.id!=='zoom-image'&&(!i.complete||!i.naturalWidth)).map(i=>i.src),overflow:document.documentElement.scrollWidth>innerWidth}));
+ await page.screenshot({path:path.join(capture,'desktop.png')});
+ await page.getByRole('button',{name:'侧平举 · 31 s',exact:true}).click();
+ await page.evaluate(async()=>{await Promise.all([...document.images].filter(i=>i.id.startsWith('demo-')).map(i=>i.decode()));});
+ result.poseSwitch=await page.locator('#demo-rgb').getAttribute('src')==='assets/lateral-rgb.jpg';
+ await page.locator('#demo-rgb').click();result.zoom=await page.locator('#image-zoom').evaluate(d=>d.open);
+ await page.keyboard.press('Escape');result.escapeClose=await page.locator('#image-zoom').evaluate(d=>!d.open);
+ await page.evaluate(()=>document.querySelectorAll('details').forEach(d=>d.open=true));
+ for(const letter of ['C','E','F','G','H'])await page.locator('#panel-'+letter).screenshot({path:path.join(capture,'chapter-'+letter+'.png')});
+ result.mathMetrics=await page.locator('math').evaluateAll(ms=>ms.map(m=>({width:m.getBoundingClientRect().width,height:m.getBoundingClientRect().height,namespace:m.namespaceURI})));
+ result.brokenLinks=await page.evaluate(()=>[...document.querySelectorAll('a[href]')].filter(a=>!a.getAttribute('href').startsWith('#')).map(a=>a.getAttribute('href')));
+ result.brokenLinks=result.brokenLinks.filter(h=>!h.startsWith('http')&&!fs.existsSync(path.resolve(__dirname,decodeURIComponent(h.split('#')[0]))));
+ await page.evaluate(()=>document.documentElement.setAttribute('data-mode','dark'));
+ await page.locator('#panel-F').screenshot({path:path.join(capture,'chapter-F-dark.png')});
+ await page.setViewportSize({width:720,height:1000});await page.evaluate(()=>document.documentElement.setAttribute('data-mode','light'));
+ await page.locator('#panel-A').screenshot({path:path.join(capture,'narrow-A.png')});
+ result.narrow=await page.evaluate(()=>({overflow:document.documentElement.scrollWidth>innerWidth,gridColumns:getComputedStyle(document.querySelector('.photo-grid')).gridTemplateColumns}));
+ result.clippedDiagrams=await page.evaluate(()=>[...document.querySelectorAll('.am-panel-body svg')].map(s=>({id:s.closest('.am-panel').id,clipped:s.getBoundingClientRect().width>s.parentElement.getBoundingClientRect().width+1})).filter(s=>s.clipped));
+ result.errors=errors;
+ result.passed=result.desktop.panels===8&&result.desktop.math>=10&&!result.desktop.overflow&&!result.narrow.overflow&&!result.clippedDiagrams.length&&!result.desktop.brokenImages.length&&!result.brokenLinks.length&&!errors.length&&result.poseSwitch&&result.zoom&&result.escapeClose;
+ fs.writeFileSync(path.join(capture,'browser-check.json'),JSON.stringify(result,null,2));
+ console.log(JSON.stringify(result,null,2));await browser.close();if(!result.passed)process.exitCode=1;
+})();

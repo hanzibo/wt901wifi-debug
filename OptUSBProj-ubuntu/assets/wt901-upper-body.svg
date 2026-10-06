@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="WT901 upper-body pose mapping">
+  <rect x="4" y="4" width="120" height="120" rx="26" fill="#202a3c"/>
+  <circle cx="64" cy="28" r="11" fill="#eea5a7"/>
+  <path d="M47 43h34l9 35-18 10H56L38 78Z" fill="#d42d52"/>
+  <path d="M48 45 26 54l-7 35m61-44 22 9 7 35" fill="none" stroke="#76b6d5" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="26" cy="54" r="4" fill="#62dd93"/>
+  <circle cx="102" cy="54" r="4" fill="#62dd93"/>
+  <circle cx="19" cy="89" r="4" fill="#62dd93"/>
+  <circle cx="109" cy="89" r="4" fill="#62dd93"/>
+  <path d="M64 55V80m0-12 13-8m-13 8-13-8" fill="none" stroke="#f5c044" stroke-width="3" stroke-linecap="round"/>
+</svg>

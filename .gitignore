@@ -1,6 +1,15 @@
 # Local reference archive (vendor PDFs and example SDK are kept on this machine).
 no-improtent/
 
+# Original Windows reference project stays local.
+/OptUSBProj/
+
+# ROS/colcon generated outputs stay local; retain sources and mesh assets.
+/urdf-model/build/
+/urdf-model/install/
+/urdf-model/log/
+/urdf-model/pkg_robot_model/export.log
+
 # Python-generated files.
 __pycache__/
 *.py[cod]
@@ -10,3 +19,19 @@ __pycache__/
 .firecrawl/
 .agents/
 .codex/
+.archify/
+# Generated explainer output and private recording-derived images stay local.
+/docs/project-explainer/index.html
+/docs/project-explainer/assets/
+/docs/project-explainer/qa/
+# CoppeliaSim 临时会话状态（不是真实场景文件）。
+/:memory:.ses
+
+# Per-machine body sensor assignments (never commit local device mapping).
+OptUSBProj-ubuntu/local_config.json
+OptUSBProj-ubuntu/local_config.json.tmp
+OptUSBProj-ubuntu/recordings/
+OptUSBProj-ubuntu/calibrations/
+
+# Downloaded MediaPipe task model (not source code).
+OptUSBProj-ubuntu/assets/mediapipe/*.task
