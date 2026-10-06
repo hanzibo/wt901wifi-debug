@@ -6,13 +6,14 @@ from pathlib import Path
 import time
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 from .calibration_reuse import proper
 from .camera_protocol import camera_phases
 from .guided_calibration import fit_guided_arm, neutral_matrices_by_mode, reference_motion_deg
 from .pose import GYRO_TILT
 from .calibration_options import capture_prior_weight
-from .rgbd_fusion import ARM_SEGMENTS, angle_deg, gravity_alignment, load_live_series, visual_direction
+from .rgbd_fusion import ARM_SEGMENTS, angle_deg, gravity_alignment, load_live_series, visual_direction, unit
 from .visual_wearing import PASS, REVIEW, analyze_wearing, apply_wearing_report
 from .analysis_context import AnalysisContext
 
@@ -109,15 +110,10 @@ def validate_camera(session, report, *, context=None):
         return report
     result = _validate_camera(session, report, context)
     context.camera_validation[key] = deepcopy(result)
-    # Preserve the legacy second-pass report semantics without recomputing
-    # accepted parts. That pass clears metrics of rejected parts only when
-    # at least one part is still accepted; when all fail it returns early.
-    next_result = deepcopy(result)
-    if any(d.get('accepted') for d in next_result['parts'].values()):
-        for data in next_result['parts'].values():
-            if not data.get('accepted'):data['independent_validation'] = {}
+    # Validation is idempotent. In particular, retain failed-part evidence on
+    # the CLI's second validation pass instead of clearing rejection metrics.
     next_key = json.dumps(result, sort_keys=True, allow_nan=False)
-    context.camera_validation[next_key] = next_result
+    context.camera_validation[next_key] = deepcopy(result)
     return result
 
 
@@ -130,8 +126,8 @@ def _validate_camera(session, report, context):
     for part in parts:
         data = report['parts'].get(part)
         if data is None:continue
-        data['independent_validation'] = {};failures = []
         if not data.get('accepted'):continue
+        data['independent_validation'] = {};failures = []
         try:
             series, _, _, _ = load_live_series(session, data['device_id'], windows['neutral'], context=context)
             q = proper(data['Q_camera_from_imu_world']);bone = np.asarray(data['bone_axis_sensor'])
@@ -149,7 +145,57 @@ def _validate_camera(session, report, context):
                 data['independent_validation'][phase] = metrics
         except (ValueError, KeyError) as exc:failures.append(str(exc))
         if failures:data['accepted'] = False;data['reason'] = '；'.join(failures)
+        # Diagnostics do not enter either fit or acceptance; never subtract a
+        # neutral residual to make a failed absolute consistency check pass.
+        try:
+            data['camera_diagnostics'] = camera_diagnostics(
+                vision, series, part, data, windows, check_phases)
+        except (ValueError, KeyError, TypeError) as exc:
+            data['camera_diagnostics'] = {'error':str(exc)}
     return report
+
+
+def camera_diagnostics(vision, series, part, data, windows, check_phases):
+    """Separate absolute fit residual, return change, and RGB-D endpoint depth.
+
+    All numbers describe noisy cross-modal consistency, not measured GT.
+    Uses exactly the same valid observations as independent acceptance.
+    """
+    q=proper(data['Q_camera_from_imu_world']);bone=np.asarray(data['bone_axis_sensor'])
+    a,b=ARM_SEGMENTS[part]
+    summaries={};samples={}
+    for phase in ('neutral',*check_phases):
+        rotations=[];predicted=[];observed=[];points=[];invalid={}
+        for row in vision:
+            stamp=row['captured_mono_ns']
+            if not windows[phase][0]<=stamp<=windows[phase][1]:continue
+            r=series.at(stamp);d,reason=visual_direction(row,part,data['bone_length_m'])
+            if r is None or d is None:
+                reason='没有同期IMU姿态/间隔过大' if r is None else reason
+                invalid[reason]=invalid.get(reason,0)+1;continue
+            rotations.append(r);predicted.append(q@r@bone);observed.append(d)
+            points.append(np.asarray(row['points_camera_m'],float)[[a,b]])
+        metric={'samples':len(rotations),'excluded':invalid}
+        if rotations:
+            p=unit(np.mean(predicted,axis=0));v=unit(np.mean(observed,axis=0))
+            errors=[angle_deg(x,y) for x,y in zip(predicted,observed)]
+            xyz=np.median(points,axis=0)
+            metric.update(median_deg=float(np.median(errors)),p90_deg=float(np.percentile(errors,90)),
+                visual_direction_spread_p90_deg=float(np.percentile([angle_deg(x,v) for x in observed],90)),
+                predicted_direction_spread_p90_deg=float(np.percentile([angle_deg(x,p) for x in predicted],90)),
+                endpoints_camera_m=xyz.tolist(),endpoint_depth_difference_m=float(xyz[1,2]-xyz[0,2]))
+            samples[phase]=(Rotation.from_matrix(rotations).mean().as_matrix(),p,v)
+        summaries[phase]=metric
+    diagnostic={'note':'预测与RGB-D表面方向的一致性，非GT；不改变拟合/验收门槛',
+                'windows':summaries,'return_vs_initial':{}}
+    if 'neutral' in samples and 'neutral_return' in samples:
+        n=samples['neutral'];r=samples['neutral_return']
+        diagnostic['return_vs_initial']={
+            'imu_orientation_change_deg':float(np.degrees(Rotation.from_matrix(n[0].T@r[0]).magnitude())),
+            'predicted_direction_change_deg':angle_deg(n[1],r[1]),
+            'visual_direction_change_deg':angle_deg(n[2],r[2]),
+            'endpoint_depth_difference_change_m':summaries['neutral_return']['endpoint_depth_difference_m']-summaries['neutral']['endpoint_depth_difference_m']}
+    return diagnostic
 
 
 def build_joint_report(session, camera_report, method='imu', *, prior_weight=None, context=None):

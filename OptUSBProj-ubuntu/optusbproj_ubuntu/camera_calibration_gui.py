@@ -153,7 +153,7 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
 
     def begin(self):
         error=self.readiness_error()
-        if error:self.status.setText(error);return
+        if error:self.status.setText(error);return False
         self.devices={k:self.owner.engine.assignments[k] for k in self.capture_parts()}
         self.capture_scope=self.scope_combo.currentData()
         self.reference_epochs={d:getattr(self.owner.engine,'epochs',{}).get(d) for d in self.devices.values()}
@@ -172,6 +172,7 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
         self.apply.setEnabled(False)
         self.state='delay';self.deadline=time.monotonic()+self.delay.value()
         self.set_controls(True);self.timer.start();self.tick()
+        return True
 
     def monitor_error(self):
         if self.capture_camera_epoch is not None and getattr(getattr(self.owner,'camera_worker',None),'capture_epoch',None)!=self.capture_camera_epoch:return '相机采集会话变化，请重新标定。'

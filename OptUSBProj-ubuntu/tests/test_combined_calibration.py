@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import time
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
@@ -127,7 +128,9 @@ class CombinedTests(unittest.TestCase):
                 engine,fusion,_=system();w.engine=engine;w.live_fusion=fusion
                 d.enable_bilateral_rgbd()
                 self.assertTrue(all(engine.algorithm_modes[p]==GYRO_TILT for p in fusion.bindings))
-                _,report=self.joint();d.report=report;d.devices={p:r['device_id'] for p,r in report['wearing']['parts'].items()}
+                _,report=self.joint()
+                for data in report['camera']['parts'].values():data['reference_epoch']=engine.epochs[data['device_id']]
+                d.report=report;d.devices={p:r['device_id'] for p,r in report['wearing']['parts'].items()}
                 d.analysis_path=Path(tmp)
                 d.show_results()
                 with patch('PySide6.QtWidgets.QMessageBox.question',return_value=QtWidgets.QMessageBox.StandardButton.Yes),patch('optusbproj_ubuntu.combined_calibration_gui.apply_joint',side_effect=ValueError('invalid')):
@@ -136,11 +139,6 @@ class CombinedTests(unittest.TestCase):
                 with patch('PySide6.QtWidgets.QMessageBox.question',return_value=QtWidgets.QMessageBox.StandardButton.Yes),patch('optusbproj_ubuntu.combined_calibration_gui.apply_joint'):
                     d.apply_live()
                 self.assertTrue(d.enable_rgbd.isEnabled())
-                last=engine.assignments['right_forearm'];engine.fusion_ready.discard(last)
-                d.enable_bilateral_rgbd()
-                self.assertTrue(all(engine.algorithm_modes[p]==GYRO_TILT for p in fusion.bindings))
-                self.assertIn('右前臂',d.status.text())
-                engine.fusion_ready.add(last)
                 with patch('optusbproj_ubuntu.combined_calibration_gui.save_config',side_effect=OSError('disk')):
                     d.enable_bilateral_rgbd()
                 self.assertTrue(all(engine.algorithm_modes[p]==GYRO_TILT for p in fusion.bindings))
@@ -148,11 +146,126 @@ class CombinedTests(unittest.TestCase):
                 d.enable_bilateral_rgbd()
                 self.assertTrue(all(engine.algorithm_modes[p]==GYRO_TILT for p in fusion.bindings))
                 w.x1_preview_dialog=None
+                last=engine.assignments['right_forearm'];engine.fusion_ready.discard(last)
+                d.enable_bilateral_rgbd()
+                for part in fusion.bindings:
+                    self.assertEqual(engine.algorithm_modes[part],GYRO_TILT if part=='right_forearm' else GYRO_RGBD)
+                self.assertIn('右前臂',d.status.text());self.assertIn('3/4',d.status.text())
+                engine.fusion_ready.add(last)
                 d.enable_bilateral_rgbd()
                 for p in fusion.bindings:
                     self.assertEqual(engine.algorithm_modes[p],GYRO_RGBD)
                     self.assertEqual(w.algorithm_combos[p].currentData(),GYRO_RGBD)
                 self.assertIsNone(w.x1_preview_dialog)
+            finally:w.close()
+
+    def test_oneclick_only_actual_applied_camera_selection(self):
+        with TemporaryDirectory() as tmp,patch.object(FusionWindow,'start_camera'):
+            w=FusionWindow(Source(),Path(tmp)/'settings.json',{}, {},camera_source='orbbec');w.poll_timer.stop()
+            try:
+                w._show_combined_calibration();d=w._combined_calibration_dialog
+                engine,fusion,_=system();w.engine=engine;w.live_fusion=fusion
+                _,report=self.joint()
+                for data in report['camera']['parts'].values():data['reference_epoch']=engine.epochs[data['device_id']]
+                report['camera']['parts']['right_forearm']['accepted']=False
+                d.report=report;d.devices={p:r['device_id'] for p,r in report['wearing']['parts'].items()};d.analysis_path=Path(tmp)
+                d.show_results()
+                with patch('PySide6.QtWidgets.QMessageBox.question',return_value=QtWidgets.QMessageBox.StandardButton.Yes),patch('optusbproj_ubuntu.combined_calibration_gui.apply_joint'):
+                    d.apply_live()
+                # Even old ready state and later checkbox edits cannot enroll
+                # a failed/unapplied part in this round's one-click action.
+                d.camera_checks['right_forearm'].setChecked(True)
+                d.enable_bilateral_rgbd()
+                self.assertEqual(engine.algorithm_modes['right_forearm'],GYRO_TILT)
+                self.assertIn('右前臂：相机未通过',d.status.text())
+                self.assertIn('3/4',d.status.text())
+                # Safety gate failure for every applied part produces no write.
+                engine.fusion_ready.clear()
+                with patch('optusbproj_ubuntu.combined_calibration_gui.save_config') as save:
+                    d.enable_bilateral_rgbd();save.assert_not_called()
+                self.assertIn('没有本轮已应用且仍有效',d.status.text())
+            finally:w.close()
+
+    def test_wearing_only_application_keeps_fusion_button_disabled(self):
+        with TemporaryDirectory() as tmp,patch.object(FusionWindow,'start_camera'):
+            w=FusionWindow(Source(),Path(tmp)/'settings.json',{}, {},camera_source='orbbec');w.poll_timer.stop()
+            try:
+                w._show_combined_calibration();d=w._combined_calibration_dialog
+                _,report=self.joint();d.report=report;d.devices={p:r['device_id'] for p,r in report['wearing']['parts'].items()};d.analysis_path=Path(tmp)
+                d.show_results()
+                for check in d.camera_checks.values():check.setChecked(False)
+                with patch('PySide6.QtWidgets.QMessageBox.question',return_value=QtWidgets.QMessageBox.StandardButton.Yes),patch('optusbproj_ubuntu.combined_calibration_gui.apply_joint'):
+                    d.apply_live()
+                self.assertFalse(d.enable_rgbd.isEnabled());self.assertEqual(d._applied_camera_parts,())
+                self.assertIn('未应用相机',d.status.text())
+            finally:w.close()
+
+    def test_restart_preflight_preserves_results_and_shows_error(self):
+        with TemporaryDirectory() as tmp,patch.object(FusionWindow,'start_camera'):
+            w=FusionWindow(Source(),Path(tmp)/'settings.json',{}, {},camera_source='orbbec');w.poll_timer.stop()
+            try:
+                w._show_combined_calibration();d=w._combined_calibration_dialog
+                engine,fusion,_=system();w.engine=engine;w.live_fusion=fusion
+                _,report=self.joint();d.report=report;d.devices={p:r['device_id'] for p,r in report['wearing']['parts'].items()};d.analysis_path=Path(tmp)
+                d.show_results();d.applied=True;d._applied_camera_parts=tuple(fusion.bindings);d.enable_rgbd.setEnabled(True)
+                d.state='complete';d.recording_path=Path(tmp)/'previous'
+                for part in fusion.bindings:engine.set_algorithm_mode(part,GYRO_RGBD)
+                w.rgbd_pose_enabled.setChecked(True)
+                w.last_rgbd_observation=SimpleNamespace(captured_mono_ns=time.monotonic_ns())
+                w.last_pose_estimate=SimpleNamespace(captured_mono_ns=time.monotonic_ns())
+                with patch('PySide6.QtWidgets.QMessageBox.warning') as warning:
+                    d.begin();warning.assert_called_once()
+                self.assertIs(d.report,report);self.assertTrue(d.applied)
+                self.assertEqual(d.table.rowCount(),4);self.assertTrue(d.enable_rgbd.isEnabled())
+                self.assertEqual(d.recording_path,Path(tmp)/'previous')
+                self.assertIn('一键切回',d.status.text());self.assertFalse(d.active)
+                # A second check crossing a freshness boundary also preserves it.
+                with patch.object(d,'readiness_error',side_effect=[None,'相机过期']),patch('PySide6.QtWidgets.QMessageBox.warning'):
+                    d.begin()
+                self.assertIs(d.report,report);self.assertTrue(d.applied)
+                self.assertEqual(d.recording_path,Path(tmp)/'previous')
+                d.enable_bilateral_gyro()
+                with patch('PySide6.QtWidgets.QMessageBox.warning') as warning:
+                    d.begin();warning.assert_not_called()
+                d.timer.stop();self.assertTrue(d.active);self.assertEqual(d.state,'delay')
+                self.assertIsNone(d.report);self.assertFalse(d.applied)
+                d.abort('测试取消')
+            finally:w.close()
+
+    def test_gyro_button_atomicity_safety_and_no_reset(self):
+        with TemporaryDirectory() as tmp,patch.object(FusionWindow,'start_camera'):
+            w=FusionWindow(Source(),Path(tmp)/'settings.json',{}, {},camera_source='orbbec');w.poll_timer.stop()
+            try:
+                w._show_combined_calibration();d=w._combined_calibration_dialog
+                engine,fusion,_=system();w.engine=engine;w.live_fusion=fusion
+                for part in fusion.bindings:engine.set_algorithm_mode(part,GYRO_RGBD)
+                geometry=deepcopy((engine.continuous_basis,engine.mode_neutral,engine.fusion_corrections))
+                filters=dict(engine._tilt_filters);epochs=dict(engine.epochs)
+                for case in ('save','robot','sample','recorder','paired'):
+                    with patch('PySide6.QtWidgets.QMessageBox.warning') as warning:
+                        if case=='save':
+                            with patch('optusbproj_ubuntu.combined_calibration_gui.save_config',side_effect=OSError('disk')):d.enable_bilateral_gyro()
+                        else:
+                            if case=='robot':w.x1_preview_dialog=SimpleNamespace(sender=object())
+                            if case=='sample':d.state='delay'
+                            if case=='recorder':w.recorder=object()
+                            if case=='paired':engine.mode_neutral['0'].pop(GYRO_TILT)
+                            d.enable_bilateral_gyro()
+                            if case=='paired':engine.mode_neutral['0'][GYRO_TILT]=geometry[1]['0'][GYRO_TILT].copy()
+                            w.x1_preview_dialog=None;w.recorder=None;d.state='idle'
+                        warning.assert_called_once()
+                    self.assertTrue(all(engine.algorithm_modes[p]==GYRO_RGBD for p in fusion.bindings))
+                d.enable_bilateral_gyro()
+                self.assertTrue(all(engine.algorithm_modes[p]==GYRO_TILT for p in fusion.bindings))
+                for part in fusion.bindings:self.assertEqual(w.algorithm_combos[part].currentData(),GYRO_TILT)
+                for old,new in zip(geometry,(engine.continuous_basis,engine.mode_neutral,engine.fusion_corrections)):
+                    for key,value in old.items():
+                        if isinstance(value,dict):
+                            for mode in value:np.testing.assert_array_equal(value[mode],new[key][mode])
+                        else:np.testing.assert_array_equal(value,new[key])
+                self.assertEqual(filters,engine._tilt_filters);self.assertEqual(epochs,engine.epochs)
+                self.assertEqual(set(fusion.bindings),set(d.owner.live_fusion.bindings))
+                self.assertIn('没有归零',d.status.text())
             finally:w.close()
 
     def test_oblique_protocol_front_occlusion_and_held_out_checks(self):

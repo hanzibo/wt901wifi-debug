@@ -14,7 +14,7 @@ from .recording_cleanup import validate_capture
 from .visual_wearing import needs_review
 from .visual_wearing_gui import wearing_steps
 from .guided_calibration import ARM_PARTS
-from .pose import GYRO_RGBD
+from .pose import GYRO_RGBD, GYRO_TILT
 from .settings import save_config
 
 
@@ -23,6 +23,7 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
         super().__init__(owner)
         self.setWindowTitle('双臂一体标定 · 穿戴映射＋相机纠偏');self.resize(920,850)
         self.report=None;self._preview_opened=False;self.applied=False
+        self._applied_camera_parts=()
         self._cleanup_process=None;self._cleanup_capture=None;self._deleted_capture=None
         self._camera_preview_processes=[]
         self.delay.setValue(5)
@@ -49,11 +50,15 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
         self.replay.setText('穿戴双模型回放 · 现有 vs 本轮候选')
         self.replay.clicked.disconnect();self.replay.clicked.connect(self.open_wearing_preview)
         self.apply.setText('应用勾选合格结果（不自动启用融合或机器人）')
-        self.enable_rgbd=QtWidgets.QPushButton('一键切换双臂为陀螺＋加计＋RGB-D')
+        self.enable_rgbd=QtWidgets.QPushButton('一键切换已应用合格部位为陀螺＋加计＋RGB-D')
         self.enable_rgbd.setEnabled(False)
-        self.enable_rgbd.setToolTip('应用成功后可点击；四个部位全部通过现有切换检查后才一起切换，不启动X1。')
+        self.enable_rgbd.setToolTip('仅切换本轮已应用的合格相机部位；未通过、未应用或参考失效的部位跳过，保留原模式。不启动X1。')
         self.enable_rgbd.clicked.connect(self.enable_bilateral_rgbd)
         layout.insertWidget(layout.indexOf(self.apply)+1,self.enable_rgbd)
+        self.enable_gyro=QtWidgets.QPushButton('一键切回双臂陀螺＋加计（重力纠倾斜）')
+        self.enable_gyro.setToolTip('切换左右上臂、前臂的显示/控制模式，不归零、不重置积分器，不删除穿戴或相机标定。需先停止录制和X1随动。')
+        self.enable_gyro.clicked.connect(self.enable_bilateral_gyro)
+        layout.insertWidget(layout.indexOf(self.enable_rgbd)+1,self.enable_gyro)
         self.table=QtWidgets.QTableWidget(0,5)
         self.table.setHorizontalHeaderLabels(['部位','穿戴结果','应用穿戴','相机结果','应用相机'])
         self.table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Stretch)
@@ -81,19 +86,35 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
                 'camera_pose_protocol':OBLIQUE_PROTOCOL}
 
     def begin(self):
-        if self._cleanup_running():self.status.setText('正在删除原始录制，请等待完成。');return
         error=self.owner._pose_change_error()
-        if error:self.status.setText(error);return
-        self.capture_method=self.method.currentData();self.report=None;self.applied=False;self._preview_opened=False
+        if self.active or self.state=='analyzing':error='当前采集/分析尚未结束'
+        if self._cleanup_running():error='正在删除原始录制，请等待完成'
+        if not error:error=self.readiness_error()
+        if error:
+            self._show_start_error(error);return
+        self.capture_method=self.method.currentData()
+        # Parent must accept startup before retiring previous results. A second
+        # readiness check can still fail at an age boundary; preserve those too.
+        if not super().begin():
+            self._show_start_error(self.status.text());return
+        self.report=None;self.applied=False;self._preview_opened=False
+        self._applied_camera_parts=()
         self.enable_rgbd.setEnabled(False)
         self._cleanup_capture=None;self._deleted_capture=None;self.delete_recording.setEnabled(False)
         self.table.setRowCount(0);self.review.setChecked(False);self.camera_replay.setEnabled(False)
-        super().begin()
+
+    def _show_start_error(self,error):
+        if '不要用视觉纠偏流拟合' in error:
+            error+='\n请点击“一键切回双臂陀螺＋加计”，再开始录制。'
+        message='未开始录制：'+error+'\n上次标定结果保留。'
+        self.status.setText(message)
+        QtWidgets.QMessageBox.warning(self,'无法开始标定录制',message)
 
     def set_controls(self,running):
         super().set_controls(running)
         if hasattr(self,'method'):self.method.setEnabled(not running)
-        if hasattr(self,'enable_rgbd'):self.enable_rgbd.setEnabled(self.applied and not running)
+        if hasattr(self,'enable_rgbd'):self.enable_rgbd.setEnabled(self.applied and bool(self._applied_camera_parts) and not running)
+        if hasattr(self,'enable_gyro'):self.enable_gyro.setEnabled(not running and not self.owner.replay_mode)
 
     def analyze_recording(self):
         if self._cleanup_running() or self._deleted_capture is not None:return
@@ -102,6 +123,7 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
         self.analysis_method=self.method.currentData()
         self.prior_capture_label.setText(f'本次计算 λ={self.prior_weight_spin.value():.3f}（结果报告记录实际使用值）')
         self._preview_opened=False;self.review.setChecked(False);self.applied=False
+        self._applied_camera_parts=()
         self.enable_rgbd.setEnabled(False)
         self.analysis_path=self.recording_path.parent/'analysis_combined'/(self.recording_path.name+'-'+uuid.uuid4().hex[:6])
         if self.process is not None:self.process.deleteLater()
@@ -145,6 +167,23 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
             for phase,label in (('forward_repeat','再次前举'),('oblique_repeat','再次斜前举'),('lateral_repeat','再次侧举'),('neutral_return','回中立')):
                 reason=reason.replace(phase,label)
             message=f'{PART_LABELS[part]} · 穿戴：'+('；'.join(w.get('warnings',[])) or w.get('status','失败'))+' · 相机：'+reason
+            checks=c.get('independent_validation',{})
+            for phase,label in (('forward_repeat','再次前举'),('oblique_repeat','再次斜前举'),('lateral_repeat','再次侧举'),('neutral_return','回中立')):
+                metric=checks.get(phase)
+                if metric:
+                    detail=f"{label} {metric['samples']}帧"
+                    if 'median_deg' in metric:detail+=f" · 中位/P90 {metric['median_deg']:.2f}°/{metric['p90_deg']:.2f}°"
+                    message+='\n  '+detail
+            diagnostic=c.get('camera_diagnostics',{})
+            neutral=diagnostic.get('windows',{}).get('neutral',{})
+            if 'median_deg' in neutral:message+=f"\n  首次中立预测/视觉残差 {neutral['median_deg']:.2f}°（不是回位角）"
+            returned=diagnostic.get('return_vs_initial',{})
+            if returned:
+                message+=(f"\n  首尾变化：IMU姿态 {returned['imu_orientation_change_deg']:.2f}°"
+                          f" · 预测骨向 {returned['predicted_direction_change_deg']:.2f}°"
+                          f" · 视觉骨向 {returned['visual_direction_change_deg']:.2f}°"
+                          f" · 肘腕/端点深度落差变化 {returned['endpoint_depth_difference_change_m']*100:+.2f} cm")
+                message+='\n  上述是两路一致性诊断，不是GT；相机验收仍要求中位<12°、P90<25°且≥8帧。'
             messages.append(message)
             self.table.item(row,1).setToolTip(message);self.table.item(row,3).setToolTip(message)
         self.status.setText('\n'.join(messages)+f'\n分析目录：{self.analysis_path}')
@@ -165,8 +204,12 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
         try:apply_joint(self.owner,self.report,wear,camera,review_acknowledged=self.review.isChecked())
         except (ValueError,KeyError) as exc:self.status.setText('未应用：'+str(exc));return
         self.applied=True;self.apply.setEnabled(False)
-        self.enable_rgbd.setEnabled(True)
-        self.status.setText('已应用所选合格结果。可点击一键切换双臂RGB-D融合；请先观察人体模型，没有自动启动机器人。')
+        # Snapshot actual successful application, not later checkbox edits.
+        self._applied_camera_parts=tuple(camera)
+        self.enable_rgbd.setEnabled(bool(camera))
+        self.status.setText('已应用所选合格结果。'+
+            (f'可一键启用 {len(camera)} 个已应用相机部位的RGB-D融合。' if camera else '本轮未应用相机结果，不能启用融合。')+
+            '请先观察人体模型，没有自动启动机器人。')
 
     def enable_bilateral_rgbd(self):
         if not self.applied:return
@@ -177,22 +220,63 @@ class CombinedCalibrationDialog(CameraCalibrationDialog):
         if error:
             self.status.setText('未切换：'+error);return
         try:
-            # Preflight all four on a copy: never leave a half-switched arm.
+            # Skip ineligible parts, but commit all eligible changes atomically.
             trial=deepcopy(owner.engine)
+            selected=[];skipped=[]
             for part in ARM_PARTS:
-                try:trial.set_algorithm_mode(part,GYRO_RGBD)
-                except ValueError as exc:raise ValueError(f'{PART_LABELS[part]}：{exc}') from exc
-                if owner.algorithm_combos[part].findData(GYRO_RGBD)<0:raise ValueError(f'{PART_LABELS[part]}：界面缺少RGB-D模式')
+                data=self.report['camera']['parts'].get(part,{})
+                if part not in self._applied_camera_parts:
+                    reason='相机未通过' if data and not data.get('accepted') else '本轮未应用相机结果'
+                    skipped.append(f'{PART_LABELS[part]}：{reason}');continue
+                try:
+                    if not data.get('accepted'):raise ValueError('相机结果未通过')
+                    device=data['device_id']
+                    if trial.assignments.get(part)!=device or trial.epochs.get(device)!=data.get('reference_epoch'):
+                        raise ValueError('设备绑定/参考系已变化，需重新标定')
+                    if owner.algorithm_combos[part].findData(GYRO_RGBD)<0:raise ValueError('界面缺少RGB-D模式')
+                    trial.set_algorithm_mode(part,GYRO_RGBD)
+                except (ValueError,KeyError) as exc:
+                    skipped.append(f'{PART_LABELS[part]}：{exc}');continue
+                selected.append(part)
+            if not selected:
+                self.status.setText('未切换：没有本轮已应用且仍有效的相机部位。\n跳过：'+'；'.join(skipped));return
             save_config(owner.settings_path,trial.assignments,trial.axis_mappings,trial.algorithm_modes)
         except (ValueError,OSError,KeyError) as exc:
             self.status.setText('双臂未切换，原模式保持不变：'+str(exc));return
         for field in ('algorithm_modes','current','neutral','natural_hand_previews','natural_hand_references'):
             setattr(owner.engine,field,getattr(trial,field))
-        for part in ARM_PARTS:
+        for part in selected:
             combo=owner.algorithm_combos[part];combo.blockSignals(True)
             combo.setCurrentIndex(combo.findData(GYRO_RGBD));combo.blockSignals(False)
         owner._render_dirty=True
-        self.status.setText('左右上臂／前臂已全部切换为陀螺＋加计＋RGB-D。请先观察人体随动；未启动X1。')
+        self.status.setText(f'已切换 {len(selected)}/4：'+ '、'.join(PART_LABELS[p] for p in selected)+
+            ' → 陀螺＋加计＋RGB-D。'+ ('\n跳过（保留原模式）：'+'；'.join(skipped) if skipped else '')+
+            '\n请先观察人体随动；未启动X1。')
+
+    def enable_bilateral_gyro(self):
+        error=self.owner._pose_change_error()
+        if self.active or self.state=='analyzing' or self._cleanup_running():error='请先结束采集、分析或删除操作'
+        if self.owner.recorder is not None:error='请先结束录制'
+        if error:
+            self.status.setText('未切换：'+error)
+            QtWidgets.QMessageBox.warning(self,'无法切回纯IMU模式',self.status.text());return
+        try:
+            trial=deepcopy(self.owner.engine)
+            for part in ARM_PARTS:
+                if self.owner.algorithm_combos[part].findData(GYRO_TILT)<0:raise ValueError(f'{PART_LABELS[part]}：界面缺少陀螺＋加计模式')
+                try:trial.set_algorithm_mode(part,GYRO_TILT)
+                except ValueError as exc:raise ValueError(f'{PART_LABELS[part]}：{exc}') from exc
+            save_config(self.owner.settings_path,trial.assignments,trial.axis_mappings,trial.algorithm_modes)
+        except (ValueError,OSError,KeyError) as exc:
+            self.status.setText('未切换，原模式保持不变：'+str(exc))
+            QtWidgets.QMessageBox.warning(self,'无法切回纯IMU模式',self.status.text());return
+        for field in ('algorithm_modes','current','neutral','natural_hand_previews','natural_hand_references'):
+            setattr(self.owner.engine,field,getattr(trial,field))
+        for part in ARM_PARTS:
+            combo=self.owner.algorithm_combos[part];combo.blockSignals(True)
+            combo.setCurrentIndex(combo.findData(GYRO_TILT));combo.blockSignals(False)
+        self.owner._render_dirty=True
+        self.status.setText('左右上臂、前臂已切回陀螺＋加计（重力纠倾斜）。标定和积分器保留，没有归零。请确认相机/设备就绪，再点击开始录制。')
 
     def _authorize_cleanup(self):
         # Freeze the exact computed session identity, not a later mutable path.

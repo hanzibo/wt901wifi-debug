@@ -96,3 +96,39 @@ class AnalysisContextTests(unittest.TestCase):
             camera['parts']['right_upper_arm']['Q_camera_from_imu_world']=[[1,0,0],[0,1,0],[0,0,2]]
             checked=validate_camera(session,camera,context=ctx)
             self.assertFalse(checked['parts']['right_upper_arm']['accepted'])
+
+    def test_failed_validation_retains_evidence_on_second_pass(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp);session=root/'capture';session.mkdir()
+            capture(session,corrupt=True,camera_oblique=True)
+            ctx=AnalysisContext(session)
+            camera=analyze_camera(options(session,root/'output',ctx),context=ctx)
+            first=validate_camera(session,camera,context=ctx)
+            failed=first['parts']['left_upper_arm']
+            self.assertFalse(failed['accepted'])
+            self.assertIn('lateral_repeat',failed['independent_validation'])
+            self.assertIn('neutral',failed['camera_diagnostics']['windows'])
+            self.assertIn('return_vs_initial',failed['camera_diagnostics'])
+            expected=deepcopy(first)
+            self.assertEqual(validate_camera(session,camera,context=ctx),expected)
+            # Separate context must also keep rejected-part metrics intact.
+            self.assertEqual(validate_camera(session,deepcopy(camera)),expected)
+
+    def test_diagnostics_do_not_change_fit_or_acceptance(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp);session=root/'capture';session.mkdir();capture(session,camera_oblique=True)
+            ctx=AnalysisContext(session)
+            camera=analyze_camera(options(session,root/'output',ctx),context=ctx)
+            before=deepcopy(camera)
+            checked=validate_camera(session,camera,context=ctx)
+            for part,data in checked['parts'].items():
+                self.assertTrue(data['accepted'])
+                for name in ('Q_camera_from_imu_world','bone_axis_sensor','fit_median_deg','fit_p90_deg'):
+                    self.assertEqual(data[name],before['parts'][part][name])
+                diagnostics=data['camera_diagnostics']
+                self.assertAlmostEqual(diagnostics['return_vs_initial']['imu_orientation_change_deg'],0,places=7)
+                self.assertAlmostEqual(diagnostics['return_vs_initial']['visual_direction_change_deg'],0,places=7)
+            with patch('optusbproj_ubuntu.combined_calibration.camera_diagnostics',side_effect=ValueError('diagnostic only')):
+                changed=validate_camera(session,deepcopy(before))
+            self.assertTrue(all(d['accepted'] for d in changed['parts'].values()))
+            self.assertEqual(changed['parts']['right_forearm']['camera_diagnostics']['error'],'diagnostic only')
