@@ -1,0 +1,1377 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="shadcn" data-mode="dark" data-style="off">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="Answer me with HTML 0.4.9">
+<title>陀螺＋重力：纠正倾斜，留下航向</title>
+<style>
+html[data-theme="blueprint"], html[data-theme="blueprint"][data-mode="light"] {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --radius: 0px;
+  --shadow: none;
+  --bw: 1.5px;
+  --head-font: var(--font-sans);
+  --bg: #f6f6f3;
+  --paper: #ffffff;
+  --ink: #16181d;
+  --ink-2: #4b5260;
+  --ink-3: #8b929e;
+  --line: #1d2026;
+  --line-2: #d6dae1;
+  --fill: #f3f5f8;
+  --accent: #1d5fbf;
+  --accent-bg: #e4ecf8;
+  --ok: #1d5fbf;
+  --ok-bg: #e4ecf8;
+  --err: #c62828;
+  --err-bg: #fbeaea;
+  --warn: #a8620a;
+  --warn-bg: #fdf3e2;
+  --head-bg: #16181d;
+  --head-fg: #ffffff;
+}
+html[data-theme="blueprint"][data-mode="dark"] {
+  --bg: #081322;
+  --paper: #0d1c31;
+  --ink: #e6edf7;
+  --ink-2: #a9b8cc;
+  --ink-3: #6b7f99;
+  --line: #c9d6e8;
+  --line-2: #23385a;
+  --fill: #12253f;
+  --accent: #6ea8ff;
+  --accent-bg: #16305a;
+  --ok: #6ea8ff;
+  --ok-bg: #16305a;
+  --err: #ff7070;
+  --err-bg: #3b1620;
+  --warn: #f0b14a;
+  --warn-bg: #3a2a10;
+  --head-bg: #e6edf7;
+  --head-fg: #081322;
+}
+@media (prefers-color-scheme: dark) {
+html[data-theme="blueprint"][data-mode="auto"] {
+  --bg: #081322;
+  --paper: #0d1c31;
+  --ink: #e6edf7;
+  --ink-2: #a9b8cc;
+  --ink-3: #6b7f99;
+  --line: #c9d6e8;
+  --line-2: #23385a;
+  --fill: #12253f;
+  --accent: #6ea8ff;
+  --accent-bg: #16305a;
+  --ok: #6ea8ff;
+  --ok-bg: #16305a;
+  --err: #ff7070;
+  --err-bg: #3b1620;
+  --warn: #f0b14a;
+  --warn-bg: #3a2a10;
+  --head-bg: #e6edf7;
+  --head-fg: #081322;
+}
+}
+
+html[data-theme="shadcn"], html[data-theme="shadcn"][data-mode="light"] {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --radius: 8px;
+  --shadow: 0 1px 2px 0 rgba(0,0,0,0.05);
+  --bw: 1px;
+  --head-font: var(--font-sans);
+  --bg: #fafafa;
+  --paper: #ffffff;
+  --ink: #09090b;
+  --ink-2: #71717a;
+  --ink-3: #a1a1aa;
+  --line: #e4e4e7;
+  --line-2: #f0f0f2;
+  --fill: #f4f4f5;
+  --accent: #2563eb;
+  --accent-bg: #eff6ff;
+  --ok: #16a34a;
+  --ok-bg: #f0fdf4;
+  --err: #dc2626;
+  --err-bg: #fef2f2;
+  --warn: #d97706;
+  --warn-bg: #fffbeb;
+  --head-bg: #18181b;
+  --head-fg: #fafafa;
+}
+html[data-theme="shadcn"][data-mode="dark"] {
+  --bg: #09090b;
+  --paper: #121215;
+  --ink: #fafafa;
+  --ink-2: #a1a1aa;
+  --ink-3: #71717a;
+  --line: #27272a;
+  --line-2: #1c1c1f;
+  --fill: #18181b;
+  --accent: #60a5fa;
+  --accent-bg: #172554;
+  --ok: #4ade80;
+  --ok-bg: #052e16;
+  --err: #f87171;
+  --err-bg: #450a0a;
+  --warn: #fbbf24;
+  --warn-bg: #451a03;
+  --head-bg: #fafafa;
+  --head-fg: #18181b;
+}
+@media (prefers-color-scheme: dark) {
+html[data-theme="shadcn"][data-mode="auto"] {
+  --bg: #09090b;
+  --paper: #121215;
+  --ink: #fafafa;
+  --ink-2: #a1a1aa;
+  --ink-3: #71717a;
+  --line: #27272a;
+  --line-2: #1c1c1f;
+  --fill: #18181b;
+  --accent: #60a5fa;
+  --accent-bg: #172554;
+  --ok: #4ade80;
+  --ok-bg: #052e16;
+  --err: #f87171;
+  --err-bg: #450a0a;
+  --warn: #fbbf24;
+  --warn-bg: #451a03;
+  --head-bg: #fafafa;
+  --head-fg: #18181b;
+}
+}
+
+html[lang="ja"][data-theme][data-mode] {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Yu Gothic", Meiryo, "Noto Sans CJK JP", "Noto Sans JP", "PingFang SC", "Microsoft YaHei", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+html[lang="ja"][data-theme="3b1b"][data-mode] {
+  --v-title-font: "CMU Serif", "Latin Modern Roman", "Iowan Old Style", "Palatino", "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif CJK JP", "Noto Serif JP", "Songti SC", serif;
+}
+
+/* Answer me with HTML base — uses theme variables only, never hard-coded colors (theme tokens: themes/index.js). Exception: the var() fallbacks of diagrams (flow / sequence) equal the blueprint light tokens, guarded by a test. */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--font-sans); font-size: 14px; line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+code, pre, kbd { font-family: var(--font-mono); }
+
+/* ── Toolbar ─────────────────────────────── */
+.am-toolbar {
+  position: fixed; top: 12px; right: 12px; z-index: 10; display: flex; gap: 6px;
+}
+.am-btn {
+  font: 12px/1 var(--font-sans); color: var(--ink); background: var(--paper);
+  border: 1px solid var(--line-2); border-radius: var(--radius); padding: 7px 10px; cursor: pointer;
+}
+.am-btn:hover { border-color: var(--ink-3); }
+.am-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ── Header ───────────────────────────────── */
+.am-head { margin: 0 0 20px; padding-right: 260px; }
+.am-head h1 { margin: 0; font-size: 24px; line-height: 1.25; letter-spacing: -0.01em; }
+.am-sub { margin: 4px 0 0; color: var(--ink-2); }
+.am-head-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; font-size: 12px; color: var(--ink-2); }
+.am-head-meta b { font-family: var(--font-mono); font-weight: 400; color: var(--ink-3); margin-right: 6px; }
+.am-intro { margin-top: 12px; max-width: 80ch; }
+
+/* ── sheet template ────────────────────────── */
+.am-sheet { max-width: 1680px; margin: 0 auto; padding: 32px 28px 40px; }
+.am-frame { position: relative; }
+.am-grid {
+  display: grid; grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr));
+  gap: 20px; align-items: start;
+}
+.am-ruler { display: none; }
+html[data-theme="blueprint"] .am-frame { border: 1px solid var(--line); padding: 30px; }
+html[data-theme="blueprint"] .am-frame::before {
+  content: ""; position: absolute; inset: 18px; border: 1px solid var(--line); pointer-events: none;
+}
+html[data-theme="blueprint"] .am-ruler {
+  display: flex; position: absolute; font: 10px/1 var(--font-mono); color: var(--ink-3);
+}
+.am-ruler span { flex: 1; display: flex; align-items: center; justify-content: center; }
+.am-ruler--top, .am-ruler--bottom { left: 18px; right: 18px; height: 18px; }
+.am-ruler--top { top: 0; }
+.am-ruler--bottom { bottom: 0; }
+.am-ruler--left, .am-ruler--right { top: 18px; bottom: 18px; width: 18px; flex-direction: column; }
+.am-ruler--left { left: 0; }
+.am-ruler--right { right: 0; }
+.am-ruler--top span + span, .am-ruler--bottom span + span { border-left: 1px solid var(--line); }
+.am-ruler--left span + span, .am-ruler--right span + span { border-top: 1px solid var(--line); }
+
+/* ── Panels ───────────────────────────────── */
+.am-panel {
+  background: var(--paper); border: var(--bw) solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow); min-width: 0; overflow: hidden;
+}
+.am-panel-head {
+  display: flex; align-items: stretch; gap: 0; border-bottom: var(--bw) solid var(--line); min-height: 34px;
+}
+.am-panel-id {
+  display: flex; align-items: center; justify-content: center; min-width: 34px; padding: 0 8px;
+  background: var(--head-bg); color: var(--head-fg); font-weight: 600; font-size: 14px;
+}
+html[data-theme="shadcn"] .am-panel-id { border-radius: 6px; min-width: 24px; height: 24px; margin: 9px 0 9px 14px; font-size: 12px; }
+html[data-theme="shadcn"] .am-panel-head { border-bottom-width: 1px; }
+.am-panel-head h2 { margin: 0; padding: 7px 12px; font-size: 15px; font-weight: 600; flex: 1; display: flex; align-items: center; }
+.am-panel-meta { align-self: center; padding: 0 12px; font: 11px/1.3 var(--font-mono); color: var(--ink-2); text-align: right; }
+.am-panel-body { padding: 14px 16px 16px; }
+.am-panel-body > * + * { margin-top: 12px; }
+
+/* ── Markdown body ───────────────────────── */
+.am-md > :first-child { margin-top: 0; }
+.am-md > :last-child { margin-bottom: 0; }
+.am-md p { margin: 0 0 8px; }
+.am-md ul, .am-md ol { margin: 0 0 8px; padding-left: 20px; }
+.am-md li + li { margin-top: 3px; }
+.am-md h3, .am-md h4 { margin: 14px 0 6px; font-size: 13px; }
+.am-md a { color: var(--accent); }
+.am-md blockquote { margin: 0 0 8px; padding: 2px 12px; border-left: 3px solid var(--line-2); color: var(--ink-2); }
+.am-md :not(pre) > code { font-size: 0.9em; background: var(--fill); padding: 1px 5px; border-radius: 4px; }
+.am-md hr { border: 0; border-top: 1px solid var(--line-2); margin: 12px 0; }
+.am-md table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.am-md th {
+  text-align: left; font: 11px/1.3 var(--font-mono); color: var(--ink-2); font-weight: 400;
+  padding: 6px 10px; border-bottom: 1px solid var(--line-2);
+}
+/* th { text-align: left } outranks the align attribute from Markdown alignment, so restore right and center columns explicitly. */
+.am-md th[align="right"] { text-align: right; }
+.am-md th[align="center"] { text-align: center; }
+.am-md td { padding: 7px 10px; border-bottom: 1px solid var(--line-2); vertical-align: top; }
+.am-md tbody tr:nth-child(even) td { background: var(--fill); }
+.am-table-wrap { overflow-x: auto; }
+.am-code {
+  margin: 0; padding: 12px 14px; background: var(--fill); border: 1px solid var(--line-2);
+  border-radius: var(--radius); overflow-x: auto; font-size: 12.5px; line-height: 1.5;
+}
+
+/* ── Status badges ok / no / warn ──────────────── */
+.am-status { white-space: nowrap; font-weight: 500; }
+.am-status--ok { color: var(--ok); }
+.am-status--no { color: var(--err); }
+.am-status--warn { color: var(--warn); }
+.am-status-icon { display: inline-block; width: 1.1em; font-weight: 700; }
+
+/* ── callout ─────────────────────────────── */
+.am-callout {
+  border: 1px solid var(--line-2); border-left: 3px solid var(--accent); background: var(--accent-bg);
+  padding: 10px 14px; border-radius: var(--radius);
+}
+.am-callout--ok { border-left-color: var(--ok); background: var(--ok-bg); }
+.am-callout--warn { border-left-color: var(--warn); background: var(--warn-bg); }
+.am-callout--err { border-left-color: var(--err); background: var(--err-bg); }
+.am-callout-title { font-weight: 600; margin-bottom: 4px; }
+
+/* ── kv title block ─────────────────────────── */
+.am-kv {
+  display: grid; grid-template-columns: repeat(var(--kv-cols, 2), minmax(0, 1fr)); margin: 0;
+  border-top: var(--bw) solid var(--line); border-left: var(--bw) solid var(--line);
+}
+.am-kv-cell { border-right: var(--bw) solid var(--line); border-bottom: var(--bw) solid var(--line); padding: 6px 10px 8px; min-width: 0; }
+.am-kv-cell--wide { grid-column: 1 / -1; }
+.am-kv dt { font: 11px/1.4 var(--font-mono); color: var(--ink-2); }
+.am-kv dd { margin: 2px 0 0; font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
+.am-kv-cell--wide dd { font-size: 17px; font-weight: 600; }
+html[data-theme="shadcn"] .am-kv { border-color: var(--line); border-radius: var(--radius); overflow: hidden; }
+
+/* ── timeline ────────────────────────────── */
+.am-timeline { list-style: none; margin: 0; padding: 0; }
+.am-timeline--h { display: grid; grid-template-columns: repeat(var(--n, 1), minmax(0, 1fr)); padding-top: 4px; }
+.am-timeline--h li { position: relative; text-align: center; padding: 0 6px; }
+.am-timeline--h li::before {
+  content: ""; position: absolute; top: 31px; left: 0; right: 0; border-top: var(--bw) solid var(--line);
+}
+.am-timeline--h li:first-child::before { left: 50%; }
+.am-timeline--h li:last-child::before { right: 50%; }
+.am-tl-when { display: block; font-size: 15px; font-weight: 500; height: 24px; }
+.am-tl-dot {
+  position: relative; display: block; width: 11px; height: 11px; margin: 2px auto 8px;
+  border: var(--bw) solid var(--line); border-radius: 50%; background: var(--paper);
+}
+.am-tl-item--hi .am-tl-dot { background: var(--accent); border-color: var(--accent); }
+.am-tl-title { display: block; font-size: 12.5px; font-weight: 500; }
+.am-tl-text { display: block; font-size: 12px; color: var(--ink-2); line-height: 1.45; }
+.am-timeline--v li { position: relative; padding: 0 0 14px 22px; }
+.am-timeline--v li::before { content: ""; position: absolute; left: 5px; top: 6px; bottom: -6px; border-left: var(--bw) solid var(--line-2); }
+.am-timeline--v li:last-child::before { display: none; }
+.am-timeline--v .am-tl-dot { position: absolute; left: 0; top: 4px; margin: 0; }
+.am-timeline--v .am-tl-when { display: inline; height: auto; font: 12px var(--font-mono); color: var(--ink-2); margin-right: 8px; }
+.am-timeline--v .am-tl-title { display: inline; font-size: 14px; }
+.am-timeline--v .am-tl-text { margin-top: 2px; }
+
+/* ── annot sentence notes ──────────────────────── */
+.am-annot + .am-annot { border-top: 1px solid var(--line-2); padding-top: 12px; }
+.am-annot-head { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.am-annot-meta { font: 11px var(--font-mono); font-weight: 400; color: var(--ink-2); }
+.am-annot-scroll { overflow-x: auto; }
+.am-annot-line {
+  position: relative; display: inline-block; white-space: pre; font: 14px/1.6 var(--font-mono);
+  padding-bottom: calc(var(--rows, 0) * 17px + 14px);
+}
+.am-annot-line--wrap { display: block; white-space: normal; padding-bottom: 10px; }
+.am-annot-line--wrap .am-seg { white-space: nowrap; }
+.am-seg { position: relative; }
+.am-seg::after {
+  content: ""; position: absolute; left: 1px; right: 1px; top: calc(100% + 1px); height: 5px;
+  border: 1px solid var(--accent); border-top: 0;
+}
+.am-seg-n {
+  position: absolute; left: 0; top: calc(100% + 8px + var(--row, 0) * 17px);
+  font: 11px/16px var(--font-sans); color: var(--accent); white-space: nowrap;
+}
+.am-seg--err { color: var(--err); }
+.am-seg--err::after { border-color: var(--err); }
+.am-seg--err .am-seg-n { color: var(--err); }
+.am-annot-caption { font-size: 12px; color: var(--ink-2); }
+
+/* ── limits bars ───────────────────────── */
+.am-lim + .am-lim { margin-top: 14px; }
+.am-lim-head { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; margin-bottom: 4px; }
+.am-lim-val { font: 12px var(--font-mono); color: var(--accent); white-space: nowrap; }
+.am-lim-track { position: relative; height: 12px; border: 1px solid var(--line-2); background: var(--fill); border-radius: calc(var(--radius) / 2); }
+.am-lim-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent-bg); border-right: 1px solid var(--accent); }
+.am-lim-mark { position: absolute; top: -4px; bottom: -4px; border-left: 2px solid var(--accent); }
+.am-lim.is-over .am-lim-fill { background: var(--err-bg); border-right-color: var(--err); }
+.am-lim.is-over .am-lim-val { color: var(--err); }
+.am-lim-ticks { position: relative; height: 16px; font: 10px/16px var(--font-mono); color: var(--ink-3); }
+.am-lim-ticks span { position: absolute; transform: translateX(-50%); }
+.am-lim-ticks span:first-child { transform: none; }
+.am-lim-note { font-size: 11px; color: var(--ink-2); margin-left: 6px; }
+
+/* ── tree ─────────────────────────── */
+.am-tree { font-size: 13px; }
+.am-tree-root { display: flex; justify-content: center; position: relative; padding-bottom: 18px; }
+.am-tree-root::after { content: ""; position: absolute; bottom: 0; left: 50%; height: 18px; border-left: var(--bw) solid var(--line); }
+.am-tree-root--solo { padding-bottom: 12px; }
+.am-tree-root--solo::after { display: none; }
+.am-tree-box {
+  border: var(--bw) solid var(--line); background: var(--paper); padding: 6px 14px; text-align: center;
+  border-radius: var(--radius); font-weight: 600;
+}
+.am-tree-box small { display: block; font-weight: 400; color: var(--ink-2); font-size: 12px; }
+.am-tree-box--root { background: var(--accent-bg); font-size: 15px; padding: 8px 28px; }
+.am-tree-cols { display: grid; grid-template-columns: repeat(var(--n, 1), minmax(0, 1fr)); }
+.am-tree-col { position: relative; padding: 18px 8px 0; min-width: 0; }
+.am-tree-col::before { content: ""; position: absolute; top: 0; left: 0; right: 0; border-top: var(--bw) solid var(--line); }
+.am-tree-col:first-child::before { left: 50%; }
+.am-tree-col:last-child::before { right: 50%; }
+.am-tree-col::after { content: ""; position: absolute; top: 0; left: 50%; height: 18px; border-left: var(--bw) solid var(--line); }
+.am-tree-list, .am-tree-list ul { list-style: none; margin: 0; padding: 0; }
+.am-tree-col > .am-tree-list { margin: 8px 0 0 14px; }
+.am-tree-list ul { margin-left: 16px; }
+.am-tree-list li { position: relative; padding: 3px 0 3px 18px; }
+.am-tree-list li::before { content: ""; position: absolute; left: 0; top: 0.95em; width: 12px; border-top: 1px solid var(--ink-3); }
+.am-tree-list li::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; border-left: 1px solid var(--ink-3); }
+.am-tree-list li:last-child::after { bottom: auto; height: 0.95em; }
+.am-tree-tag { font: 11px var(--font-mono); color: var(--ink-3); margin-right: 4px; }
+.am-tree code { font: 12px var(--font-mono); }
+.am-tree-sub { display: block; font-size: 11.5px; color: var(--ink-2); }
+.am-tree-hi > .am-tree-label { color: var(--accent); font-weight: 600; }
+
+/* ── Diagrams (flow / sequence) ───────────────── */
+.am-diagram { margin: 0; overflow-x: auto; text-align: center; }
+/* Embedded previews can lose html[data-theme]; the fallbacks keep diagrams readable, and defined theme variables still win. */
+.am-diagram svg { max-width: 100%; height: auto; font-family: var(--font-sans, sans-serif); }
+.am-diagram text { fill: var(--ink, #16181d); font-size: 13px; }
+.am-node-shape { fill: var(--paper, #ffffff); stroke: var(--line, #1d2026); stroke-width: var(--bw, 1.5px); }
+.am-node--hi .am-node-shape { fill: var(--accent-bg, #e4ecf8); stroke: var(--accent, #1d5fbf); }
+.am-node--hi text { fill: var(--accent, #1d5fbf); font-weight: 600; }
+.am-edge { fill: none; stroke: var(--ink-2, #4b5260); stroke-width: 1.3; }
+.am-edge--dashed { stroke-dasharray: 5 4; }
+.am-arrow { fill: var(--ink-2, #4b5260); }
+.am-edge-label rect { fill: var(--paper, #ffffff); }
+.am-diagram .am-edge-label text { fill: var(--accent, #1d5fbf); font-size: 11.5px; }
+.am-cluster { fill: var(--fill, #f3f5f8); stroke: var(--line-2, #d6dae1); stroke-width: 1; stroke-dasharray: 4 3; }
+.am-diagram .am-cluster-label { fill: var(--ink-2, #4b5260); font: 11px var(--font-mono, monospace); }
+.am-lifeline { stroke: var(--ink-3, #8b929e); stroke-width: 1; stroke-dasharray: 4 4; }
+.am-actor { fill: var(--paper, #ffffff); stroke: var(--line, #1d2026); stroke-width: var(--bw, 1.5px); }
+.am-note { fill: var(--warn-bg, #fdf3e2); stroke: var(--warn, #a8620a); stroke-width: 1; }
+.am-diagram .am-step { fill: var(--ink-3, #8b929e); font: 10px var(--font-mono, monospace); }
+
+/* ── doc template ────────────────────────── */
+.am-doc { max-width: 1120px; margin: 0 auto; padding: 40px 28px 64px; }
+.am-doc-layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 32px; align-items: start; }
+.am-doc-layout--notoc { grid-template-columns: minmax(0, 1fr); max-width: 860px; }
+.am-toc { position: sticky; top: 24px; font-size: 13px; }
+.am-toc a { display: block; color: var(--ink-2); text-decoration: none; padding: 4px 0 4px 10px; border-left: 2px solid var(--line-2); }
+.am-toc a:hover { color: var(--ink); border-left-color: var(--accent); }
+.am-doc-body > .am-panel + .am-panel { margin-top: 20px; }
+
+/* ── Responsive and print ─────────────────────────── */
+@media (max-width: 1100px) {
+  .am-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .am-grid > .am-panel { grid-column: auto !important; }
+  .am-grid > .am-panel.am-span-wide { grid-column: 1 / -1 !important; }
+}
+@media (max-width: 760px) {
+  .am-sheet, .am-doc { padding: 56px 12px 24px; }
+  .am-head { padding-right: 0; }
+  .am-grid { grid-template-columns: minmax(0, 1fr); }
+  .am-grid > .am-panel.am-span-wide { grid-column: auto !important; }
+  html[data-theme="blueprint"] .am-frame { padding: 0; border: 0; }
+  html[data-theme="blueprint"] .am-frame::before, html[data-theme="blueprint"] .am-ruler { display: none; }
+  .am-doc-layout { grid-template-columns: minmax(0, 1fr); }
+  .am-toc { position: static; }
+  .am-timeline--h { grid-template-columns: minmax(0, 1fr); }
+  .am-tree-cols { grid-template-columns: minmax(0, 1fr); }
+  /* Tables and diagrams keep their size: the wrapper scrolls horizontally when they overflow. */
+  .am-md th, .am-md td { min-width: 6em; }
+  .am-diagram svg { max-width: none; }
+}
+.am-colophon { text-align: center; padding: 0 0 28px; font: 11px var(--font-mono); color: var(--ink-3); }
+
+@media print {
+  .am-toolbar { display: none; }
+  body { background: var(--paper); }
+  .am-panel { break-inside: avoid; box-shadow: none; }
+}
+.am-panel--bare { border: 0; background: transparent; box-shadow: none; }
+.am-panel--bare > .am-panel-body { padding: 0; }
+.am-panel--bare .am-kv { background: var(--paper); }
+
+</style>
+</head>
+<body>
+<div class="am-toolbar">
+<button class="am-btn" type="button" data-am="theme" data-labels="{&quot;blueprint&quot;:&quot;主题：图纸&quot;,&quot;shadcn&quot;:&quot;主题：卡片&quot;}">主题：卡片</button>
+<button class="am-btn" type="button" data-am="mode" data-labels="{&quot;auto&quot;:&quot;明暗：跟随系统&quot;,&quot;light&quot;:&quot;明暗：亮&quot;,&quot;dark&quot;:&quot;明暗：暗&quot;}">明暗：暗</button>
+<button class="am-btn" type="button" data-am="copy" data-done="已复制 ✓">复制源稿</button>
+</div>
+<main class="am-doc">
+<header class="am-head"><h1>陀螺＋重力：纠正倾斜，留下航向</h1><p class="am-sub">第一讲 · 从一个向量到姿态约束 · 可播放的三维数学演示</p><div class="am-intro am-md"><div class="am-md"><p>这不是把设备朝向直接变成真值。陀螺先传播姿态，加计再约束向上方向；绕向上方向的转动仍无法由重力确定。</p>
+</div></div></header>
+<div class="am-doc-layout">
+<nav class="am-toc" aria-label="目录"><a href="#panel-A">A · 先认识三个量</a><a href="#panel-B">B · 播放一次纠倾斜过程</a><a href="#panel-C">C · 为什么修正要右乘逆矩阵？</a><a href="#panel-D">D · 数学上的对齐，和代码的小步反馈</a><a href="#panel-E">E · 为什么航向仍然未知？</a><a href="#panel-F">F · 文档和代码依据</a></nav><div class="am-doc-body">
+<section class="am-panel" id="panel-A">
+<header class="am-panel-head"><span class="am-panel-id">A</span><h2>先认识三个量</h2></header>
+<div class="am-panel-body"><div class="am-md"><div class="am-table-wrap"><table>
+<thead>
+<tr>
+<th>符号</th>
+<th>含义</th>
+<th>如何得到</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>W</mi></mrow><annotation encoding="application/x-tex">W</annotation></semantics></math></span></span></td>
+<td>软件建立的固定参考系</td>
+<td>初始与设备本体系重合；<span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>Z</mi></mrow><annotation encoding="application/x-tex">Z</annotation></semantics></math></span></span> 不一定竖直</td>
+</tr>
+<tr>
+<td><span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>S</mi><mo stretchy="false">(</mo><mi>t</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">S(t)</annotation></semantics></math></span></span>、<span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>R</mi><mo stretchy="false">(</mo><mi>t</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">R(t)</annotation></semantics></math></span></span></td>
+<td>随设备运动的本体系；其三根轴在 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>W</mi></mrow><annotation encoding="application/x-tex">W</annotation></semantics></math></span></span> 中的表示</td>
+<td><span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>R</mi></mrow><annotation encoding="application/x-tex">R</annotation></semantics></math></span></span> 把本体坐标变为 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>W</mi></mrow><annotation encoding="application/x-tex">W</annotation></semantics></math></span></span> 坐标：<span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi mathvariant="bold">x</mi><mi>W</mi></msub><mo>=</mo><mi>R</mi><msub><mi mathvariant="bold">x</mi><mi>S</mi></msub></mrow><annotation encoding="application/x-tex">\mathbf x_W=R\mathbf x_S</annotation></semantics></math></span></span></td>
+</tr>
+<tr>
+<td><span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi mathvariant="bold">a</mi><mi>S</mi></msub><mo stretchy="false">(</mo><mi>t</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">\mathbf a_S(t)</annotation></semantics></math></span></span></td>
+<td>竖直向上在本体系中的单位坐标</td>
+<td>静止或低动态时，把加计比力归一化</td>
+</tr>
+<tr>
+<td><span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi mathvariant="bold">k</mi><mi>W</mi></msub></mrow><annotation encoding="application/x-tex">\mathbf k_W</annotation></semantics></math></span></span></td>
+<td>向上方向在 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>W</mi></mrow><annotation encoding="application/x-tex">W</annotation></semantics></math></span></span> 中的固定坐标</td>
+<td>在静止参考时刻，<span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi mathvariant="bold">k</mi><mi>W</mi></msub><mo>=</mo><msub><mi>R</mi><mn>0</mn></msub><msub><mi mathvariant="bold">a</mi><mn>0</mn></msub></mrow><annotation encoding="application/x-tex">\mathbf k_W=R_0\mathbf a_0</annotation></semantics></math></span></span></td>
+</tr>
+</tbody></table></div>
+<p>这里用“向上”避免混淆：地球重力指向下，但静止加计比力指向上。动画的真值仅是教学设定，不是设备额外读出的数据。</p>
+</div></div>
+</section>
+<section class="am-panel" id="panel-B">
+<header class="am-panel-head"><span class="am-panel-id">B</span><h2>播放一次纠倾斜过程</h2></header>
+<div class="am-panel-body"><style>
+.tg-math-block{display:block;text-align:center;overflow-x:auto;padding:14px 6px;margin:12px 0}
+.tg-math-inline{display:inline-block;max-width:100%;vertical-align:middle}
+.tg-math-block math{font-size:1.22em}.tg-math-inline math{font-size:1.08em}
+#tgEquation{overflow-x:auto}#tgEquation math{font-size:1.18em}
+@media print{.tg-math-block{break-inside:avoid}}
+</style>
+<section id="tiltLesson" style="color:#dbeafe;background:#0c1628;border:1px solid #334155;border-radius:16px;padding:18px;font:16px system-ui;">
+ <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+  <button id="tgPlay" type="button">▶ 播放</button><button id="tgPrev" type="button">上一步</button><button id="tgNext" type="button">下一步</button><button id="tgReset" type="button">重置</button>
+  <label>进度 <input id="tgTime" aria-label="动画进度" type="range" min="0" max="5.999" step="0.001" value="0"></label>
+ </div>
+ <div id="tgSteps" style="display:flex;gap:6px;flex-wrap:wrap;margin:14px 0"></div>
+ <h3 id="tgTitle" style="color:#fff;margin:10px 0"></h3><p id="tgExplain" style="min-height:3em;line-height:1.7"></p>
+ <div style="display:flex;gap:20px;flex-wrap:wrap;margin:12px 0">
+  <label>教学模拟：纯倾斜误差 <input id="tgTilt" aria-label="纯倾斜误差" type="range" min="0" max="65" value="28"><output id="tgTiltOut"></output></label>
+  <label>人为注入绕 k_W 的误差 <input id="tgYaw" aria-label="航向误差" type="range" min="-120" max="120" value="42"><output id="tgYawOut"></output></label>
+ </div>
+ <p style="font-size:14px;color:#a9bad2">滑杆只为构造带误差的教学估计，不是实际滤波器需要注入的量。纯倾斜轴 b 垂直于本体中的向上方向 v；因此倾斜滑杆就是初始重力夹角。完整纠倾斜后，只留下航向滑杆指定的误差。</p>
+ <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:12px 0">
+  <button id="tgViewIso" type="button">立体视角</button><button id="tgViewFront" type="button">正视（沿 −Y 看）</button><button id="tgViewSide" type="button">侧视（沿 −X 看）</button><button id="tgViewTop" type="button">俯视（沿 −Z 看）</button><button id="tgViewReset" type="button">复位视角</button>
+  <label><input id="tgLinkViews" type="checkbox" checked> 联动两个视角</label><label><input id="tgPerspective" type="checkbox" checked> 透视投影</label>
+ </div>
+ <p style="font-size:14px;color:#a9bad2">在任一视图内拖动旋转视角，滚轮缩放；触屏支持单指旋转、双指缩放。双击视图复位。视角操作不改变设备姿态或动画进度。标准视角相对于各图的 W / S 坐标轴。</p>
+ <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:12px">
+  <div><strong>固定参考系 W：看设备姿态</strong><canvas id="tgWorld" tabindex="0" aria-label="原参考系三维视图，拖动旋转，滚轮缩放，方向键旋转，加减键缩放" style="width:100%;height:420px;display:block;touch-action:none;cursor:grab;border:1px solid #334155;border-radius:10px"></canvas></div>
+  <div><strong>本体坐标 S：比较两个向量的坐标</strong><canvas id="tgBody" tabindex="0" aria-label="本体系三维视图，拖动旋转，滚轮缩放，方向键旋转，加减键缩放" style="width:100%;height:420px;display:block;touch-action:none;cursor:grab;border:1px solid #334155;border-radius:10px"></canvas></div>
+ </div>
+ <p style="font-size:14px;color:#a9bad2">轴色：X 红、Y 绿、Z 蓝。白色：向上；橙色：预测/当前估计；青色：教学真值。左图是 W 中的姿态；右图是统一本体轴坐标中的向量比较，不是第二台设备。</p>
+ <div id="tgEquation" style="background:#16243a;padding:15px;border-radius:10px;font-size:18px;line-height:1.8;overflow-wrap:anywhere"></div>
+ <div id="tgValues" style="white-space:pre-wrap;font:14px/1.7 ui-monospace,monospace;padding:12px 0"></div>
+ <details><summary>查看当前矩阵与数学检查</summary><pre id="tgMatrices" style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px"></pre></details>
+ <p style="font-size:14px;color:#a9bad2">示例数值由 SO(3) 指数映射计算，不是实测精度。W 的 Z 故意不与向上方向重合。公式由 LaTeX 预排版为原生 MathML，无需联网加载字体或公式库，断网也能播放。</p>
+</section>
+<script>
+(()=>{
+ const $=id=>document.getElementById(id), root=$('tiltLesson');
+ const I=[[1,0,0],[0,1,0],[0,0,1]], rad=Math.PI/180;
+ const dot=(a,b)=>a.reduce((s,x,i)=>s+x*b[i],0), cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+ const norm=a=>Math.hypot(...a), scale=(a,s)=>a.map(x=>x*s), unit=a=>scale(a,1/norm(a));
+ const T=A=>A[0].map((_,j)=>A.map(r=>r[j])), mv=(A,v)=>A.map(r=>dot(r,v));
+ const mm=(A,B)=>A.map(r=>T(B).map(c=>dot(r,c)));
+ const exp=v=>{let t=norm(v);if(t<1e-12)return I.map(r=>r.slice());let n=scale(v,1/t),c=Math.cos(t),s=Math.sin(t),K=[[0,-n[2],n[1]],[n[2],0,-n[0]],[-n[1],n[0],0]];return I.map((r,i)=>r.map((x,j)=>c*x+(1-c)*n[i]*n[j]+s*K[i][j]));};
+ const angle=(u,v)=>Math.atan2(norm(cross(u,v)),dot(u,v))/rad;
+ const sub=(a,b)=>a.map((x,i)=>x-b[i]);
+ // The build step pre-renders these TeX formulas; no runtime library is needed.
+ const equationTex=[
+  String.raw`\mathbf x_W=R_0\mathbf x_S\quad\Longrightarrow\quad\mathbf k_W=R_0\mathbf a_0`,
+  String.raw`R_{\mathrm{pred},n}=R_{n-1}\operatorname{Exp}(\bar{\boldsymbol\omega}_S\Delta t)`,
+  String.raw`\begin{aligned}\mathbf u&=R_{\mathrm{pred}}^{\mathsf T}\mathbf k_W,\quad\mathbf v=\mathbf a_S\\\mathbf e&=\mathbf v\times\mathbf u,\quad\mathbf n=\frac{\mathbf e}{\lVert\mathbf e\rVert}\\\theta&=\operatorname{atan2}(\lVert\mathbf e\rVert,\mathbf v^{\mathsf T}\mathbf u)\end{aligned}`,
+  String.raw`\begin{aligned}D&=\operatorname{Exp}(-\theta\mathbf n),\quad D\mathbf u=\mathbf v\\\Delta R&=D^{\mathsf T}=\operatorname{Exp}(\theta\mathbf n)\\R_c&=R_{\mathrm{pred}}\Delta R\end{aligned}`,
+  String.raw`R_c^{\mathsf T}\mathbf k_W=R_{\mathrm{true}}^{\mathsf T}\mathbf k_W=\mathbf a_S`,
+  String.raw`\begin{aligned}H(\mathbf k_W,\psi)&=\operatorname{Exp}(\psi\mathbf k_W)\\(HR_c)^{\mathsf T}\mathbf k_W&=R_c^{\mathsf T}\mathbf k_W\end{aligned}`
+ ];
+ const equationMathML = /* @precompute-math */ ["<span class=\"tg-math-block\"><span class=\"katex\"><math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><semantics><mrow><msub><mi mathvariant=\"bold\">x</mi><mi>W</mi></msub><mo>=</mo><msub><mi>R</mi><mn>0</mn></msub><msub><mi mathvariant=\"bold\">x</mi><mi>S</mi></msub><mspace width=\"1em\"/><mo>⟹</mo><mspace width=\"1em\"/><msub><mi mathvariant=\"bold\">k</mi><mi>W</mi></msub><mo>=</mo><msub><mi>R</mi><mn>0</mn></msub><msub><mi mathvariant=\"bold\">a</mi><mn>0</mn></msub></mrow><annotation encoding=\"application/x-tex\">\\mathbf x_W=R_0\\mathbf x_S\\quad\\Longrightarrow\\quad\\mathbf k_W=R_0\\mathbf a_0</annotation></semantics></math></span></span>","<span class=\"tg-math-block\"><span class=\"katex\"><math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><semantics><mrow><msub><mi>R</mi><mrow><mrow><mi mathvariant=\"normal\">p</mi><mi mathvariant=\"normal\">r</mi><mi mathvariant=\"normal\">e</mi><mi mathvariant=\"normal\">d</mi></mrow><mo separator=\"true\">,</mo><mi>n</mi></mrow></msub><mo>=</mo><msub><mi>R</mi><mrow><mi>n</mi><mo>−</mo><mn>1</mn></mrow></msub><mi mathvariant=\"normal\">Exp</mi><mo>⁡</mo><mo stretchy=\"false\">(</mo><msub><mover accent=\"true\"><mi mathvariant=\"bold-italic\">ω</mi><mo>ˉ</mo></mover><mi>S</mi></msub><mi mathvariant=\"normal\">Δ</mi><mi>t</mi><mo stretchy=\"false\">)</mo></mrow><annotation encoding=\"application/x-tex\">R_{\\mathrm{pred},n}=R_{n-1}\\operatorname{Exp}(\\bar{\\boldsymbol\\omega}_S\\Delta t)</annotation></semantics></math></span></span>","<span class=\"tg-math-block\"><span class=\"katex\"><math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><semantics><mtable rowspacing=\"0.25em\" columnalign=\"right left\" columnspacing=\"0em\"><mtr><mtd><mstyle scriptlevel=\"0\" displaystyle=\"true\"><mi mathvariant=\"bold\">u</mi></mstyle></mtd><mtd><mstyle scriptlevel=\"0\" displaystyle=\"true\"><mrow><mrow></mrow><mo>=</mo><msubsup><mi>R</mi><mrow><mi mathvariant=\"normal\">p</mi><mi mathvariant=\"normal\">r</mi><mi mathvariant=\"normal\">e</mi><mi mathvariant=\"normal\">d</mi></mrow><mi mathvariant=\"sans-serif\">T</mi></msubsup><msub><mi mathvariant=\"bold\">k</mi><mi>W</mi></msub><mo separator=\"true\">,</mo><mspace width=\"1em\"/><mi mathvariant=\"bold\">v</mi><mo>=</mo><msub><mi mathvariant=\"bold\">a</mi><mi>S</mi></msub></mrow></mstyle></mtd></mtr><mtr><mtd><mstyle scriptlevel=\"0\" displaystyle=\"true\"><mi mathvariant=\"bold\">e</mi></mstyle></mtd><mtd><mstyle scriptlevel=\"0\" displaystyle=\"true\"><mrow><mrow></mrow><mo>=</mo><mi mathvariant=\"bold\">v</mi><mo>×</mo><mi mathvariant=\"bold\">u</mi><mo separator=\"true\">,</mo><mspace width=\"1em\"/><mi mathvariant=\"bold\">n</mi><mo>=</mo><mfrac><mi mathvariant=\"bold\">e</mi><mrow><mo stretchy=\"false\">∥</mo><mi mathvariant=\"bold\">e</mi><mo stretchy=\"false\">∥</mo></mrow></mfrac></mrow></mstyle></mtd></mtr><mtr><mtd><mstyle scriptlevel=\"0\" displaystyle=\"true\"><mi>θ</mi></mstyle></mtd><mtd><mstyle scriptlevel=\"0\" displaystyle=\"true\"><mrow><mrow></mrow><mo>=</mo><mi mathvariant=\"normal\">atan2</mi><mo>⁡</mo><mo stretchy=\"false\">(</mo><mo stretchy=\"false\">∥</mo><mi mathvariant=\"bold\">e</mi><mo stretchy=\"false\">∥</mo><mo separator=\"true\">,</mo><msup><mi mathvariant=\"bold\">v</mi><mi mathvariant=\"sans-serif\">T</mi></msup><mi mathvariant=\"bold\">u</mi><mo stretchy=\"false\">)</mo></mrow></mstyle></mtd></mtr></mtable><annotation encoding=\"application/x-tex\">\\begin{aligned}\\mathbf u&amp;=R_{\\mathrm{pred}}^{\\mathsf T}\\mathbf k_W,\\quad\\mathbf v=\\mathbf a_S\\\\\\mathbf e&amp;=\\mathbf v\\times\\mathbf u,\\quad\\mathbf n=\\frac{\\mathbf e}{\\lVert\\mathbf e\\rVert}\\\\\\theta&amp;=\\operatorname{atan2}(\\lVert\\mathbf e\\rVert,\\mathbf v^{\\mathsf T}\\mathbf u)\\end{aligned}</annotation></semantics></math></span></span>","<span class=\"tg-math-block\"><span class=\"katex\"><math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><semantics><mtable rowspacing=\"0.25em\" columnalign=\"right left\" columnspacing=\"0em\"><mtr><mtd><mstyle scriptlevel=\"0\" displaystyle=\"true\"><mi>D</mi></mstyle></mtd><mtd><mstyle scriptlevel=\"0\" displaystyle=\"true\"><mrow><mrow></mrow><mo>=</mo><mi mathvariant=\"normal\">Exp</mi><mo>⁡</mo><mo stretchy=\"false\">(</mo><mo>−</mo><mi>θ</mi><mi mathvariant=\"bold\">n</mi><mo stretchy=\"false\">)</mo><mo separator=\"true\">,</mo><mspace width=\"1em\"/><mi>D</mi><mi mathvariant=\"bold\">u</mi><mo>=</mo><mi mathvariant=\"bold\">v</mi></mrow></mstyle></mtd></mtr><mtr><mtd><mstyle scriptlevel=\"0\" displaystyle=\"true\"><mrow><mi mathvariant=\"normal\">Δ</mi><mi>R</mi></mrow></mstyle></mtd><mtd><mstyle scriptlevel=\"0\" displaystyle=\"true\"><mrow><mrow></mrow><mo>=</mo><msup><mi>D</mi><mi mathvariant=\"sans-serif\">T</mi></msup><mo>=</mo><mi mathvariant=\"normal\">Exp</mi><mo>⁡</mo><mo stretchy=\"false\">(</mo><mi>θ</mi><mi mathvariant=\"bold\">n</mi><mo stretchy=\"false\">)</mo></mrow></mstyle></mtd></mtr><mtr><mtd><mstyle scriptlevel=\"0\" displaystyle=\"true\"><msub><mi>R</mi><mi>c</mi></msub></mstyle></mtd><mtd><mstyle scriptlevel=\"0\" displaystyle=\"true\"><mrow><mrow></mrow><mo>=</mo><msub><mi>R</mi><mrow><mi mathvariant=\"normal\">p</mi><mi mathvariant=\"normal\">r</mi><mi mathvariant=\"normal\">e</mi><mi mathvariant=\"normal\">d</mi></mrow></msub><mi mathvariant=\"normal\">Δ</mi><mi>R</mi></mrow></mstyle></mtd></mtr></mtable><annotation encoding=\"application/x-tex\">\\begin{aligned}D&amp;=\\operatorname{Exp}(-\\theta\\mathbf n),\\quad D\\mathbf u=\\mathbf v\\\\\\Delta R&amp;=D^{\\mathsf T}=\\operatorname{Exp}(\\theta\\mathbf n)\\\\R_c&amp;=R_{\\mathrm{pred}}\\Delta R\\end{aligned}</annotation></semantics></math></span></span>","<span class=\"tg-math-block\"><span class=\"katex\"><math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><semantics><mrow><msubsup><mi>R</mi><mi>c</mi><mi mathvariant=\"sans-serif\">T</mi></msubsup><msub><mi mathvariant=\"bold\">k</mi><mi>W</mi></msub><mo>=</mo><msubsup><mi>R</mi><mrow><mi mathvariant=\"normal\">t</mi><mi mathvariant=\"normal\">r</mi><mi mathvariant=\"normal\">u</mi><mi mathvariant=\"normal\">e</mi></mrow><mi mathvariant=\"sans-serif\">T</mi></msubsup><msub><mi mathvariant=\"bold\">k</mi><mi>W</mi></msub><mo>=</mo><msub><mi mathvariant=\"bold\">a</mi><mi>S</mi></msub></mrow><annotation encoding=\"application/x-tex\">R_c^{\\mathsf T}\\mathbf k_W=R_{\\mathrm{true}}^{\\mathsf T}\\mathbf k_W=\\mathbf a_S</annotation></semantics></math></span></span>","<span class=\"tg-math-block\"><span class=\"katex\"><math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><semantics><mtable rowspacing=\"0.25em\" columnalign=\"right left\" columnspacing=\"0em\"><mtr><mtd><mstyle scriptlevel=\"0\" displaystyle=\"true\"><mrow><mi>H</mi><mo stretchy=\"false\">(</mo><msub><mi mathvariant=\"bold\">k</mi><mi>W</mi></msub><mo separator=\"true\">,</mo><mi>ψ</mi><mo stretchy=\"false\">)</mo></mrow></mstyle></mtd><mtd><mstyle scriptlevel=\"0\" displaystyle=\"true\"><mrow><mrow></mrow><mo>=</mo><mi mathvariant=\"normal\">Exp</mi><mo>⁡</mo><mo stretchy=\"false\">(</mo><mi>ψ</mi><msub><mi mathvariant=\"bold\">k</mi><mi>W</mi></msub><mo stretchy=\"false\">)</mo></mrow></mstyle></mtd></mtr><mtr><mtd><mstyle scriptlevel=\"0\" displaystyle=\"true\"><mrow><mo stretchy=\"false\">(</mo><mi>H</mi><msub><mi>R</mi><mi>c</mi></msub><msup><mo stretchy=\"false\">)</mo><mi mathvariant=\"sans-serif\">T</mi></msup><msub><mi mathvariant=\"bold\">k</mi><mi>W</mi></msub></mrow></mstyle></mtd><mtd><mstyle scriptlevel=\"0\" displaystyle=\"true\"><mrow><mrow></mrow><mo>=</mo><msubsup><mi>R</mi><mi>c</mi><mi mathvariant=\"sans-serif\">T</mi></msubsup><msub><mi mathvariant=\"bold\">k</mi><mi>W</mi></msub></mrow></mstyle></mtd></mtr></mtable><annotation encoding=\"application/x-tex\">\\begin{aligned}H(\\mathbf k_W,\\psi)&amp;=\\operatorname{Exp}(\\psi\\mathbf k_W)\\\\(HR_c)^{\\mathsf T}\\mathbf k_W&amp;=R_c^{\\mathsf T}\\mathbf k_W\\end{aligned}</annotation></semantics></math></span></span>"];
+ const k=unit([.35,-.25,.90]),R0=exp([.32,-.20,.18]),Rt=mm(exp(scale(k,.30)),mm(R0,exp([.65,.25,-.12]))),a0=mv(T(R0),k),v=mv(T(Rt),k);
+ // Project a seed axis onto the plane normal to the true body up direction.
+ // This keeps the synthetic tilt separate from the synthetic heading error.
+ function pureTiltAxis(up){const seed=Math.abs(up[0])<.9?[1,0,0]:[0,1,0];return unit(sub(seed,scale(up,dot(seed,up))));}
+ function signedHeading(E){return Math.atan2(dot([E[2][1]-E[1][2],E[0][2]-E[2][0],E[1][0]-E[0][1]],k)/2,(E[0][0]+E[1][1]+E[2][2]-1)/2)/rad;}
+ const titles=['① t₀：静止建立重力参考','② t₁：陀螺传播到新姿态','③ 预测重力，与加计比较','④ 用本体系增量右乘修正','⑤ 倾斜对齐，不等于真值','⑥ 绕重力转动仍不可见'];
+ const desc=[
+ '软件参考系 W 保持固定。设备在 t₀ 已有姿态 R₀。静止加计给出 a₀，把其坐标乘 R₀，就得到固定的向上方向 k_W。',
+ '设备真实转动到 t₁。陀螺积分得到 R_pred，可能带有倾斜与航向误差。青色真值只供讲解，实际程序并不知道它。',
+ '同一个 k_W，经 R_pred 的转置转换成预测本体坐标 u。加计独立提供观测 v。它们不重合，说明估计的倾斜有误。',
+ '先求 D，让 D u = v。姿态却必须右乘 ΔR = Dᵀ。动画逐渐施加这一最短修正，观察右图两个向量趋于重合。',
+ '修正后 R_cᵀ k_W = a_S，方向约束已经满足。但橙色姿态与青色真值仍不同：重力对齐没有找回完整姿态。',
+ '在 W 中，继续绕 k_W 转动整个姿态，右图预测向上坐标仍不变。试着调节航向滑杆：重力残差保持为零，姿态误差却改变。'
+ ];
+ let time=0,playing=false,last=0;
+ const buttons=titles.map((t,i)=>{let b=document.createElement('button');b.textContent=t.slice(0,2);b.title=t;b.type='button';b.onclick=()=>{playing=false;time=i;update();};$('tgSteps').appendChild(b);return b;});
+ root.querySelectorAll('button').forEach(b=>{b.style.cssText='background:#22334e;color:#e0f2fe;border:1px solid #557092;border-radius:7px;padding:8px 12px;cursor:pointer';});
+ function calc(){
+  const tilt=+$('tgTilt').value*rad,yaw=+$('tgYaw').value*rad;
+  const b=pureTiltAxis(v),Rp=mm(exp(scale(k,yaw)),mm(Rt,exp(scale(b,tilt)))),u=mv(T(Rp),k),e=cross(v,u),theta=Math.atan2(norm(e),dot(v,u)),n=norm(e)>1e-12?unit(e):b;
+  const delta=exp(scale(n,theta)),Rc=mm(Rp,delta);
+  let R,q=0;if(time<1)R=R0;else if(time<2){let f=time-1;let truth=mm(exp(scale(k,.30*f)),mm(R0,exp(scale([.65,.25,-.12],f))));let bf=pureTiltAxis(mv(T(truth),k));R=mm(exp(scale(k,yaw*f)),mm(truth,exp(scale(bf,tilt*f))));}else if(time<3)R=Rp;else if(time<4){q=time-3;R=mm(Rp,exp(scale(n,theta*q)));}else if(time<5)R=Rc;else R=mm(exp(scale(k,Math.sin((time-5)*Math.PI*2)*.5)),Rc);
+  const current=mv(T(R),k),E=mm(Rc,T(Rt));
+  return {Rp,u,e,theta,n,b,delta,Rc,R,current,E,q};
+ }
+ function setup(canvas){let dpr=window.devicePixelRatio||1,w=canvas.clientWidth,h=canvas.clientHeight;canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);let c=canvas.getContext('2d');c.scale(dpr,dpr);c.clearRect(0,0,w,h);return {c,w,h};}
+ // All geometry remains in 3D. Only the orbit camera and projection change.
+ const defaultCamera=()=>({az:-Math.atan2(.8,.6),el:Math.asin(.6),zoom:1});
+ const cameras={tgWorld:defaultCamera(),tgBody:defaultCamera()};let activeView='tgWorld';
+ function cameraBasis(camera){let ca=Math.cos(camera.az),sa=Math.sin(camera.az),ce=Math.cos(camera.el),se=Math.sin(camera.el);return {right:[-sa,ca,0],up:[-se*ca,-se*sa,ce],near:[ce*ca,ce*sa,se]};}
+ function projection(x,camera,w,h){let b=cameraBasis(camera),z=dot(b.near,x),factor=$('tgPerspective').checked?4.5/(4.5-z):1,s=Math.min(w,h)*.22*camera.zoom;return [w*.48+s*factor*dot(b.right,x),h*.58-s*factor*dot(b.up,x),z];}
+ function changeCamera(id,action){activeView=id;action(cameras[id]);if($('tgLinkViews').checked){let other=id==='tgWorld'?'tgBody':'tgWorld';Object.assign(cameras[other],cameras[id]);}update();}
+ function setView(az,el){changeCamera(activeView,c=>Object.assign(c,{az,el,zoom:1}));}
+ function scene(canvas,body,d){let {c,w,h}=setup(canvas),camera=cameras[canvas.id],geometry=[],labels=[];
+  const p=x=>projection(x,camera,w,h);
+  function line(a,b,color,width=2,dash=[]){geometry.push({kind:'line',a:p(a),b:p(b),color,width,dash,depth:(p(a)[2]+p(b)[2])/2});}
+  function arrow(a,b,color,label,width=3){line(a,b,color,width);let A=p(a),B=p(b),t=Math.atan2(B[1]-A[1],B[0]-A[0]);labels.push(()=>{c.beginPath();c.fillStyle=color;c.moveTo(B[0],B[1]);if(Math.hypot(B[0]-A[0],B[1]-A[1])>3){c.lineTo(B[0]-10*Math.cos(t-.4),B[1]-10*Math.sin(t-.4));c.lineTo(B[0]-10*Math.cos(t+.4),B[1]-10*Math.sin(t+.4));}else c.arc(B[0],B[1],3,0,2*Math.PI);c.closePath();c.fill();c.font='13px system-ui';let textWidth=c.measureText(label).width;c.fillText(label,Math.max(5,Math.min(w-textWidth-5,B[0]+7)),Math.max(66,Math.min(h-32,B[1]-7)));});}
+  function device(R,color,offset=[0,0,0],axes=false){let corners=[];for(let z of [-.10,.10])for(let y of [-.28,.28])for(let x of [-.42,.42])corners.push(mv(R,[x,y,z]).map((v,i)=>v+offset[i]));for(let indices of [[0,1,3,2],[4,5,7,6],[0,1,5,4],[2,3,7,6],[0,2,6,4],[1,3,7,5]]){let points=indices.map(i=>p(corners[i]));geometry.push({kind:'face',points,color:axes?'rgba(251,191,36,.16)':'rgba(34,211,238,.07)',depth:points.reduce((s,a)=>s+a[2],0)/4});}for(let i=0;i<8;i++)for(let mask of [1,2,4])if(i<(i^mask))line(corners[i],corners[i^mask],color,2);if(axes)T(R).forEach((a,i)=>arrow(offset,mv(I,scale(a,.85)).map((v,j)=>v+offset[j]),['#fb7185','#4ade80','#60a5fa'][i],['X_S','Y_S','Z_S'][i],2));}
+  // A faint reference XY grid supplies depth cues; it is not a gravity plane.
+  for(let a=-1;a<=1.001;a+=.25){line([a,-1,0],[a,1,0],'#23344c',1);line([-1,a,0],[1,a,0],'#23344c',1);}
+  let colors=['#fb7185','#4ade80','#60a5fa'];I.forEach((a,i)=>arrow([0,0,0],scale(a,1.22),colors[i],['X','Y','Z'][i]+(body?'_S':'_W'),1.6));
+  if(!body){arrow([0,0,0],scale(k,1.65),'#fff','k_W',3);device(d.R,'#fbbf24',[0,0,0],true);if(time>=1)device(Rt,'#22d3ee');if(time<1)arrow([0,0,0],scale(mv(R0,a0),1.65),'#fff','R₀ a₀ = k_W',3);c.fillStyle='#fbbf24';c.fillText(time<1?'橙色：t₀ 姿态':'橙色：当前估计姿态',12,26);if(time>=1){c.fillStyle='#22d3ee';c.fillText('青色：教学真值（同一原点）',12,48);}if(time>=4){let b=unit(cross(k,[1,0,0])),a=cross(k,b);for(let j=0;j<70;j++){let f=j/70*2*Math.PI,g=(j+1)/70*2*Math.PI;line(b.map((x,i)=>.8*(Math.cos(f)*x+Math.sin(f)*a[i])),b.map((x,i)=>.8*(Math.cos(g)*x+Math.sin(g)*a[i])),'#667891',1,[3,3]);}c.fillStyle='#a9bad2';c.fillText('虚线圆：绕 k_W 的不可观测转动',12,h-12);}}
+  else{let obs=time<1?a0:v,pred=time<1?a0:d.current;arrow([0,0,0],scale(obs,1.60),'#22d3ee',time<1?'a₀（加计）':'v = a_S（加计）',5);arrow([0,0,0],scale(pred,1.22),'#fbbf24',time<1?'R₀ᵀ k_W':'u_current = Rᵀ k_W',3);if(time>=2&&time<4&&norm(d.e)>1e-10)arrow([0,0,0],scale(d.n,.9),'#c4b5fd','n ∥ v × u',2);c.fillStyle='#a9bad2';c.fillText('两向量表达在同一组本体轴坐标中',12,26);c.fillText('向量长度错开，仅为避免重合遮挡',12,h-12);}
+  geometry.sort((a,b)=>a.depth-b.depth);for(let g of geometry){c.beginPath();if(g.kind==='face'){c.fillStyle=g.color;c.moveTo(g.points[0][0],g.points[0][1]);g.points.slice(1).forEach(p=>c.lineTo(p[0],p[1]));c.closePath();c.fill();}else{c.strokeStyle=g.color;c.lineWidth=g.width;c.setLineDash(g.dash);c.moveTo(g.a[0],g.a[1]);c.lineTo(g.b[0],g.b[1]);c.stroke();c.setLineDash([]);}}
+  labels.forEach(draw=>draw());
+ }
+ function fmt(v){return '['+v.map(x=>x.toFixed(3)).join(', ')+']';}
+ function matrix(R){return R.map(fmt).join('\n');}
+ function update(){let d=calc(),i=Math.min(5,Math.floor(time));$('tgTime').value=time;$('tgPlay').textContent=playing?'Ⅱ 暂停':'▶ 播放';buttons.forEach((b,j)=>b.style.background=j===i?'#0e7490':'#22334e');$('tgTitle').textContent=titles[i];$('tgExplain').textContent=desc[i];$('tgTiltOut').textContent=$('tgTilt').value+'°';$('tgYawOut').textContent=$('tgYaw').value+'°';
+  const notes=['之后固定重力参考，不逐帧重新学习。','本体系角速度产生右乘增量。','同向时无需纠偏，不计算零向量的归一化。','向量修正与姿态右乘增量互为转置。','注意：真值姿态这里也必须取转置。','重力观测无法区分不同的航向。'];
+  $('tgEquation').innerHTML=equationMathML[i];$('tgEquation').insertAdjacentHTML('beforeend','<p style="font-size:14px;margin:12px 0 0">'+notes[i]+'</p>');let obs=time<1?a0:v;
+  const currentError=mm(d.R,T(Rt));
+  $('tgValues').textContent='k_W = '+fmt(k)+' （固定）\n观测 a_S = '+fmt(obs)+'\n预测 Rᵀ k_W = '+fmt(time<1?a0:d.current)+'\n当前重力方向误差 = '+angle(time<1?a0:d.current,obs).toFixed(2)+'°'+(time>=4?'；当前姿态与真值之差 = '+(Math.acos(Math.max(-1,Math.min(1,(currentError[0][0]+currentError[1][1]+currentError[2][2]-1)/2)))/rad).toFixed(2)+'°':'');
+  const residual=norm(sub(mv(T(d.Rc),k),v)),axisResidual=norm(sub(mv(d.E,k),k));
+  $('tgMatrices').textContent='教学注入轴 b = '+fmt(d.b)+'，b·v = '+dot(d.b,v).toExponential(3)+'\n初始重力夹角 = '+(d.theta/rad).toFixed(2)+'°（应等于纯倾斜滑杆）\n完整纠偏后绕 k_W 的有符号误差 = '+signedHeading(d.E).toFixed(2)+'°（应等于航向滑杆）\nR₀:\n'+matrix(R0)+'\nR_pred:\n'+matrix(d.Rp)+'\nΔR（完整对齐）:\n'+matrix(d.delta)+'\nR_c:\n'+matrix(d.Rc)+'\nR_true:\n'+matrix(Rt)+'\n‖R_cᵀ k_W − a_S‖ = '+residual.toExponential(3)+'\n‖(R_c R_trueᵀ) k_W − k_W‖ = '+axisResidual.toExponential(3);
+  scene($('tgWorld'),false,d);scene($('tgBody'),true,d);
+ }
+ $('tgPlay').onclick=()=>{if(time>=5.999)time=0;playing=!playing;last=performance.now();update();};$('tgPrev').onclick=()=>{playing=false;time=Math.max(0,Math.floor(time)-1);update();};$('tgNext').onclick=()=>{playing=false;time=Math.min(5,Math.floor(time)+1);update();};$('tgReset').onclick=()=>{playing=false;time=0;$('tgTilt').value=28;$('tgYaw').value=42;update();};$('tgTime').oninput=()=>{playing=false;time=+$('tgTime').value;update();};['tgTilt','tgYaw'].forEach(id=>$(id).oninput=update);
+ $('tgViewIso').onclick=()=>setView(defaultCamera().az,defaultCamera().el);$('tgViewFront').onclick=()=>setView(Math.PI/2,0);$('tgViewSide').onclick=()=>setView(0,0);$('tgViewTop').onclick=()=>setView(-Math.PI/2,Math.PI/2);$('tgViewReset').onclick=()=>{Object.assign(cameras.tgWorld,defaultCamera());Object.assign(cameras.tgBody,defaultCamera());update();};
+ $('tgPerspective').onchange=update;$('tgLinkViews').onchange=()=>{if($('tgLinkViews').checked)changeCamera(activeView,()=>{});};
+ for(let id of ['tgWorld','tgBody']){
+  let canvas=$(id),pointers=new Map();
+  const position=e=>[e.clientX,e.clientY];
+  const distance=()=>{let a=[...pointers.values()];return a.length>=2?Math.hypot(a[0][0]-a[1][0],a[0][1]-a[1][1]):0;};
+  canvas.addEventListener('pointerdown',e=>{if(e.pointerType==='mouse'&&e.button!==0)return;activeView=id;canvas.focus({preventScroll:true});canvas.setPointerCapture(e.pointerId);pointers.set(e.pointerId,position(e));canvas.style.cursor='grabbing';});
+  canvas.addEventListener('pointermove',e=>{if(!pointers.has(e.pointerId))return;let previous=pointers.get(e.pointerId),before=distance();pointers.set(e.pointerId,position(e));if(pointers.size===1)changeCamera(id,c=>{c.az-=(e.clientX-previous[0])*.009;c.el=Math.max(-Math.PI/2+.005,Math.min(Math.PI/2-.005,c.el+(e.clientY-previous[1])*.009));});else{let after=distance();if(before>2&&after>2)changeCamera(id,c=>{c.zoom=Math.max(.55,Math.min(1.75,c.zoom*after/before));});}});
+  const release=e=>{pointers.delete(e.pointerId);canvas.style.cursor=pointers.size?'grabbing':'grab';};
+  ['pointerup','pointercancel','lostpointercapture'].forEach(event=>canvas.addEventListener(event,release));
+  canvas.addEventListener('wheel',e=>{e.preventDefault();changeCamera(id,c=>{c.zoom=Math.max(.55,Math.min(1.75,c.zoom*Math.exp(-Math.sign(e.deltaY)*.10)));});},{passive:false});
+  canvas.addEventListener('dblclick',()=>changeCamera(id,c=>Object.assign(c,defaultCamera())));
+  canvas.addEventListener('keydown',e=>{let directions={ArrowLeft:[-.12,0],ArrowRight:[.12,0],ArrowUp:[0,.12],ArrowDown:[0,-.12]};if(directions[e.key]){e.preventDefault();changeCamera(id,c=>{c.az+=directions[e.key][0];c.el=Math.max(-Math.PI/2+.005,Math.min(Math.PI/2-.005,c.el+directions[e.key][1]));});}else if(['+','=','-'].includes(e.key)){e.preventDefault();changeCamera(id,c=>{c.zoom=Math.max(.55,Math.min(1.75,c.zoom*(e.key==='-'?.9:1.1)));});}else if(e.key==='Home'){e.preventDefault();changeCamera(id,c=>Object.assign(c,defaultCamera()));}});
+ }
+ function tick(now){if(playing){time=Math.min(5.999,time+(now-last)/4500);if(time>=5.999)playing=false;update();}last=now;requestAnimationFrame(tick);}window.addEventListener('resize',update);update();requestAnimationFrame(tick);
+ // Public read-only diagnostics for reproducible browser tests.
+ window.tiltLessonCheck=()=>{let d=calc();return {alignmentResidual:norm(sub(mv(T(d.Rc),k),v)),headingAxisResidual:norm(sub(mv(d.E,k),k)),tiltAxisDotUp:dot(d.b,v),recoveredHeadingDegrees:signedHeading(d.E),thetaDegrees:d.theta/rad,stage:Math.floor(time),cameras:JSON.parse(JSON.stringify(cameras)),projectedWorldAxes:I.map(x=>projection(x,cameras.tgWorld,$('tgWorld').clientWidth,$('tgWorld').clientHeight))};};
+})();
+</script></div>
+</section>
+<section class="am-panel" id="panel-C">
+<header class="am-panel-head"><span class="am-panel-id">C</span><h2>为什么修正要右乘逆矩阵？</h2></header>
+<div class="am-panel-body"><div class="am-md"><p>使用列向量，定义预测与观测方向：</p>
+<p><span class="tg-math-block"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mi mathvariant="bold">u</mi><mo>=</mo><msubsup><mi>R</mi><mrow><mi mathvariant="normal">p</mi><mi mathvariant="normal">r</mi><mi mathvariant="normal">e</mi><mi mathvariant="normal">d</mi></mrow><mi mathvariant="sans-serif">T</mi></msubsup><msub><mi mathvariant="bold">k</mi><mi>W</mi></msub><mo separator="true">,</mo><mspace width="2em"/><mi mathvariant="bold">v</mi><mo>=</mo><msub><mi mathvariant="bold">a</mi><mi>S</mi></msub><mi mathvariant="normal">.</mi></mrow><annotation encoding="application/x-tex">\mathbf u=R_{\mathrm{pred}}^{\mathsf T}\mathbf k_W,
+\qquad \mathbf v=\mathbf a_S.</annotation></semantics></math></span></span></p>
+<p>在本体坐标中寻找向量修正 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>D</mi></mrow><annotation encoding="application/x-tex">D</annotation></semantics></math></span></span>，再逐步代入并取转置：</p>
+<p><span class="tg-math-block"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mtable rowspacing="0.25em" columnalign="right left" columnspacing="0em"><mtr><mtd><mstyle scriptlevel="0" displaystyle="true"><mrow><mi>D</mi><mi mathvariant="bold">u</mi></mrow></mstyle></mtd><mtd><mstyle scriptlevel="0" displaystyle="true"><mrow><mrow></mrow><mo>=</mo><mi mathvariant="bold">v</mi><mo separator="true">,</mo></mrow></mstyle></mtd></mtr><mtr><mtd><mstyle scriptlevel="0" displaystyle="true"><mi mathvariant="bold">v</mi></mstyle></mtd><mtd><mstyle scriptlevel="0" displaystyle="true"><mrow><mrow></mrow><mo>=</mo><mi>D</mi><msubsup><mi>R</mi><mrow><mi mathvariant="normal">p</mi><mi mathvariant="normal">r</mi><mi mathvariant="normal">e</mi><mi mathvariant="normal">d</mi></mrow><mi mathvariant="sans-serif">T</mi></msubsup><msub><mi mathvariant="bold">k</mi><mi>W</mi></msub><mo separator="true">,</mo></mrow></mstyle></mtd></mtr><mtr><mtd><mstyle scriptlevel="0" displaystyle="true"><msubsup><mi>R</mi><mi>c</mi><mi mathvariant="sans-serif">T</mi></msubsup></mstyle></mtd><mtd><mstyle scriptlevel="0" displaystyle="true"><mrow><mrow></mrow><mo>=</mo><mi>D</mi><msubsup><mi>R</mi><mrow><mi mathvariant="normal">p</mi><mi mathvariant="normal">r</mi><mi mathvariant="normal">e</mi><mi mathvariant="normal">d</mi></mrow><mi mathvariant="sans-serif">T</mi></msubsup><mo separator="true">,</mo></mrow></mstyle></mtd></mtr><mtr><mtd><mstyle scriptlevel="0" displaystyle="true"><msub><mi>R</mi><mi>c</mi></msub></mstyle></mtd><mtd><mstyle scriptlevel="0" displaystyle="true"><mrow><mrow></mrow><mo>=</mo><msub><mi>R</mi><mrow><mi mathvariant="normal">p</mi><mi mathvariant="normal">r</mi><mi mathvariant="normal">e</mi><mi mathvariant="normal">d</mi></mrow></msub><msup><mi>D</mi><mi mathvariant="sans-serif">T</mi></msup><mi mathvariant="normal">.</mi></mrow></mstyle></mtd></mtr></mtable><annotation encoding="application/x-tex">\begin{aligned}
+D\mathbf u&amp;=\mathbf v,\
+\mathbf v&amp;=D R_{\mathrm{pred}}^{\mathsf T}\mathbf k_W,\
+R_c^{\mathsf T}&amp;=D R_{\mathrm{pred}}^{\mathsf T},\
+R_c&amp;=R_{\mathrm{pred}}D^{\mathsf T}.
+\end{aligned}</annotation></semantics></math></span></span></p>
+<p>所以，作用于向量的 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>D</mi></mrow><annotation encoding="application/x-tex">D</annotation></semantics></math></span></span> 与右乘姿态的 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi mathvariant="normal">Δ</mi><mi>R</mi></mrow><annotation encoding="application/x-tex">\Delta R</annotation></semantics></math></span></span> 不是同一个矩阵。右乘 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi mathvariant="normal">Δ</mi><mi>R</mi></mrow><annotation encoding="application/x-tex">\Delta R</annotation></semantics></math></span></span> 表示在当前本体系轴坐标中的姿态增量。</p>
+<p>动画使用观测方向叉乘预测方向：</p>
+<p><span class="tg-math-block"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mi mathvariant="bold">e</mi><mo>=</mo><mi mathvariant="bold">v</mi><mo>×</mo><mi mathvariant="bold">u</mi><mo separator="true">,</mo><mspace width="2em"/><mi mathvariant="bold">n</mi><mo>=</mo><mfrac><mi mathvariant="bold">e</mi><mrow><mo stretchy="false">∥</mo><mi mathvariant="bold">e</mi><mo stretchy="false">∥</mo></mrow></mfrac><mo separator="true">,</mo><mspace width="2em"/><mi>θ</mi><mo>=</mo><mi mathvariant="normal">atan2</mi><mo>⁡</mo><mtext> ⁣</mtext><mrow><mo fence="true">(</mo><mo stretchy="false">∥</mo><mi mathvariant="bold">e</mi><mo stretchy="false">∥</mo><mo separator="true">,</mo><msup><mi mathvariant="bold">v</mi><mi mathvariant="sans-serif">T</mi></msup><mi mathvariant="bold">u</mi><mo fence="true">)</mo></mrow><mi mathvariant="normal">.</mi></mrow><annotation encoding="application/x-tex">\mathbf e=\mathbf v\times\mathbf u,\qquad
+\mathbf n=\frac{\mathbf e}{\lVert\mathbf e\rVert},\qquad
+\theta=\operatorname{atan2}!\left(\lVert\mathbf e\rVert,\mathbf v^{\mathsf T}\mathbf u\right).</annotation></semantics></math></span></span></p>
+<p><span class="tg-math-block"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><menclose notation="box"><mstyle scriptlevel="0" displaystyle="false"><mstyle scriptlevel="0" displaystyle="false"><mstyle scriptlevel="0" displaystyle="true"><mrow><mi>D</mi><mo>=</mo><mi mathvariant="normal">Exp</mi><mo>⁡</mo><mo stretchy="false">(</mo><mo>−</mo><mi>θ</mi><mi mathvariant="bold">n</mi><mo stretchy="false">)</mo><mo separator="true">,</mo><mspace width="2em"/><mi mathvariant="normal">Δ</mi><mi>R</mi><mo>=</mo><msup><mi>D</mi><mi mathvariant="sans-serif">T</mi></msup><mo>=</mo><mi mathvariant="normal">Exp</mi><mo>⁡</mo><mo stretchy="false">(</mo><mi>θ</mi><mi mathvariant="bold">n</mi><mo stretchy="false">)</mo><mi mathvariant="normal">.</mi></mrow></mstyle></mstyle></mstyle></menclose></mrow><annotation encoding="application/x-tex">\boxed{D=\operatorname{Exp}(-\theta\mathbf n),\qquad
+\Delta R=D^{\mathsf T}=\operatorname{Exp}(\theta\mathbf n).}</annotation></semantics></math></span></span></p>
+<p>同向时取单位矩阵，不归一化零叉积；反向时最短轴不唯一。本演示限制误差范围，避开反向退化。这里 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi mathvariant="normal">Exp</mi><mo>⁡</mo><mo stretchy="false">(</mo><mi mathvariant="bold-italic">ϕ</mi><mo stretchy="false">)</mo><mo>=</mo><mi>exp</mi><mo>⁡</mo><mo stretchy="false">(</mo><mo stretchy="false">[</mo><mi mathvariant="bold-italic">ϕ</mi><msub><mo stretchy="false">]</mo><mo>×</mo></msub><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">\operatorname{Exp}(\boldsymbol\phi)=\exp([\boldsymbol\phi]_\times)</annotation></semantics></math></span></span> 是旋转向量的指数映射。</p>
+<h3>两个误差滑杆怎样独立？</h3>
+<p>设教学真值的本体向上方向为 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi mathvariant="bold">v</mi><mo>=</mo><msubsup><mi>R</mi><mrow><mi mathvariant="normal">t</mi><mi mathvariant="normal">r</mi><mi mathvariant="normal">u</mi><mi mathvariant="normal">e</mi></mrow><mi mathvariant="sans-serif">T</mi></msubsup><msub><mi mathvariant="bold">k</mi><mi>W</mi></msub></mrow><annotation encoding="application/x-tex">\mathbf v=R_{\mathrm{true}}^{\mathsf T}\mathbf k_W</annotation></semantics></math></span></span>。将候选轴投影到 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi mathvariant="bold">v</mi></mrow><annotation encoding="application/x-tex">\mathbf v</annotation></semantics></math></span></span> 的垂直平面，得到单位注入轴 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi mathvariant="bold">b</mi></mrow><annotation encoding="application/x-tex">\mathbf b</annotation></semantics></math></span></span>：</p>
+<p><span class="tg-math-block"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><menclose notation="box"><mstyle scriptlevel="0" displaystyle="false"><mstyle scriptlevel="0" displaystyle="false"><mstyle scriptlevel="0" displaystyle="true"><mrow><mi mathvariant="bold">b</mi><mo>=</mo><mfrac><mrow><msub><mi mathvariant="bold">e</mi><mi>x</mi></msub><mo>−</mo><mo stretchy="false">(</mo><msubsup><mi mathvariant="bold">e</mi><mi>x</mi><mi mathvariant="sans-serif">T</mi></msubsup><mi mathvariant="bold">v</mi><mo stretchy="false">)</mo><mi mathvariant="bold">v</mi></mrow><mrow><mo fence="true">∥</mo><msub><mi mathvariant="bold">e</mi><mi>x</mi></msub><mo>−</mo><mo stretchy="false">(</mo><msubsup><mi mathvariant="bold">e</mi><mi>x</mi><mi mathvariant="sans-serif">T</mi></msubsup><mi mathvariant="bold">v</mi><mo stretchy="false">)</mo><mi mathvariant="bold">v</mi><mo fence="true">∥</mo></mrow></mfrac><mo separator="true">,</mo><mspace width="2em"/><msup><mi mathvariant="bold">b</mi><mi mathvariant="sans-serif">T</mi></msup><mi mathvariant="bold">v</mi><mo>=</mo><mn>0.</mn></mrow></mstyle></mstyle></mstyle></menclose></mrow><annotation encoding="application/x-tex">\boxed{\mathbf b=
+\frac{\mathbf e_x-(\mathbf e_x^{\mathsf T}\mathbf v)\mathbf v}
+{\left\lVert\mathbf e_x-(\mathbf e_x^{\mathsf T}\mathbf v)\mathbf v\right\rVert},
+\qquad \mathbf b^{\mathsf T}\mathbf v=0.}</annotation></semantics></math></span></span></p>
+<p>如果候选轴接近 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi mathvariant="bold">v</mi></mrow><annotation encoding="application/x-tex">\mathbf v</annotation></semantics></math></span></span>，就换用 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi mathvariant="bold">e</mi><mi>y</mi></msub></mrow><annotation encoding="application/x-tex">\mathbf e_y</annotation></semantics></math></span></span>。这只是教学构造，真实滤波器不需要知道真值或 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi mathvariant="bold">b</mi></mrow><annotation encoding="application/x-tex">\mathbf b</annotation></semantics></math></span></span>。</p>
+<p>构造带误差的教学估计：</p>
+<p><span class="tg-math-block"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msub><mi>R</mi><mrow><mi mathvariant="normal">p</mi><mi mathvariant="normal">r</mi><mi mathvariant="normal">e</mi><mi mathvariant="normal">d</mi></mrow></msub><mo>=</mo><mi>H</mi><mo stretchy="false">(</mo><msub><mi mathvariant="bold">k</mi><mi>W</mi></msub><mo separator="true">,</mo><mi>ψ</mi><mo stretchy="false">)</mo><mtext> </mtext><msub><mi>R</mi><mrow><mi mathvariant="normal">t</mi><mi mathvariant="normal">r</mi><mi mathvariant="normal">u</mi><mi mathvariant="normal">e</mi></mrow></msub><mi mathvariant="normal">Exp</mi><mo>⁡</mo><mo stretchy="false">(</mo><mi>θ</mi><mi mathvariant="bold">b</mi><mo stretchy="false">)</mo><mi mathvariant="normal">.</mi></mrow><annotation encoding="application/x-tex">R_{\mathrm{pred}}=H(\mathbf k_W,\psi),R_{\mathrm{true}}\operatorname{Exp}(\theta\mathbf b).</annotation></semantics></math></span></span></p>
+<p>因为 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>H</mi><msub><mi mathvariant="bold">k</mi><mi>W</mi></msub><mo>=</mo><msub><mi mathvariant="bold">k</mi><mi>W</mi></msub></mrow><annotation encoding="application/x-tex">H\mathbf k_W=\mathbf k_W</annotation></semantics></math></span></span>，有 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi mathvariant="bold">u</mi><mo>=</mo><mi mathvariant="normal">Exp</mi><mo>⁡</mo><mo stretchy="false">(</mo><mo>−</mo><mi>θ</mi><mi mathvariant="bold">b</mi><mo stretchy="false">)</mo><mi mathvariant="bold">v</mi></mrow><annotation encoding="application/x-tex">\mathbf u=\operatorname{Exp}(-\theta\mathbf b)\mathbf v</annotation></semantics></math></span></span>。又因为 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msup><mi mathvariant="bold">b</mi><mi mathvariant="sans-serif">T</mi></msup><mi mathvariant="bold">v</mi><mo>=</mo><mn>0</mn></mrow><annotation encoding="application/x-tex">\mathbf b^{\mathsf T}\mathbf v=0</annotation></semantics></math></span></span>，在本页 0–65° 范围内，两方向的夹角恰好为 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>θ</mi></mrow><annotation encoding="application/x-tex">\theta</annotation></semantics></math></span></span>。</p>
+<p>完整最短修正及其结果为：</p>
+<p><span class="tg-math-block"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mi mathvariant="normal">Δ</mi><mi>R</mi><mo>=</mo><mi mathvariant="normal">Exp</mi><mo>⁡</mo><mo stretchy="false">(</mo><mo>−</mo><mi>θ</mi><mi mathvariant="bold">b</mi><mo stretchy="false">)</mo><mo separator="true">,</mo><mspace width="2em"/><menclose notation="box"><mstyle scriptlevel="0" displaystyle="false"><mstyle scriptlevel="0" displaystyle="false"><mstyle scriptlevel="0" displaystyle="true"><mrow><msub><mi>R</mi><mi>c</mi></msub><mo>=</mo><mi>H</mi><mo stretchy="false">(</mo><msub><mi mathvariant="bold">k</mi><mi>W</mi></msub><mo separator="true">,</mo><mi>ψ</mi><mo stretchy="false">)</mo><mtext> </mtext><msub><mi>R</mi><mrow><mi mathvariant="normal">t</mi><mi mathvariant="normal">r</mi><mi mathvariant="normal">u</mi><mi mathvariant="normal">e</mi></mrow></msub><mi mathvariant="normal">.</mi></mrow></mstyle></mstyle></mstyle></menclose></mrow><annotation encoding="application/x-tex">\Delta R=\operatorname{Exp}(-\theta\mathbf b),\qquad
+\boxed{R_c=H(\mathbf k_W,\psi),R_{\mathrm{true}}.}</annotation></semantics></math></span></span></p>
+<p>注入倾斜被消除，<span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>ψ</mi></mrow><annotation encoding="application/x-tex">\psi</annotation></semantics></math></span></span> 原样保留。<span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi mathvariant="bold">b</mi></mrow><annotation encoding="application/x-tex">\mathbf b</annotation></semantics></math></span></span> 是注入轴，<span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi mathvariant="bold">n</mi></mrow><annotation encoding="application/x-tex">\mathbf n</annotation></semantics></math></span></span> 是纠偏轴；非零倾斜时 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi mathvariant="bold">n</mi><mo>=</mo><mo>−</mo><mi mathvariant="bold">b</mi></mrow><annotation encoding="application/x-tex">\mathbf n=-\mathbf b</annotation></semantics></math></span></span>，两者不要混淆。</p>
+</div></div>
+</section>
+<section class="am-panel" id="panel-D">
+<header class="am-panel-head"><span class="am-panel-id">D</span><h2>数学上的对齐，和代码的小步反馈</h2></header>
+<div class="am-panel-body"><div class="am-md"><div class="am-table-wrap"><table>
+<thead>
+<tr>
+<th>教学用精确对齐</th>
+<th>当前代码</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>R</mi><mi>c</mi></msub><mo>=</mo><msub><mi>R</mi><mrow><mi mathvariant="normal">p</mi><mi mathvariant="normal">r</mi><mi mathvariant="normal">e</mi><mi mathvariant="normal">d</mi></mrow></msub><mi mathvariant="normal">Exp</mi><mo>⁡</mo><mo stretchy="false">(</mo><mi>θ</mi><mi mathvariant="bold">n</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">R_c=R_{\mathrm{pred}}\operatorname{Exp}(\theta\mathbf n)</annotation></semantics></math></span></span></td>
+<td><span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>R</mi><mi>n</mi></msub><mo>=</mo><msub><mi>R</mi><mrow><mi mathvariant="normal">p</mi><mi mathvariant="normal">r</mi><mi mathvariant="normal">e</mi><mi mathvariant="normal">d</mi></mrow></msub><mi mathvariant="normal">Exp</mi><mo>⁡</mo><mo stretchy="false">(</mo><mi>γ</mi><mi>w</mi><mi mathvariant="normal">Δ</mi><mi>t</mi><mtext> </mtext><mi mathvariant="bold">e</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">R_n=R_{\mathrm{pred}}\operatorname{Exp}(\gamma w\Delta t,\mathbf e)</annotation></semantics></math></span></span></td>
+</tr>
+<tr>
+<td>一次消除理想方向误差</td>
+<td>每帧只修正一小步</td>
+</tr>
+<tr>
+<td><span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>θ</mi></mrow><annotation encoding="application/x-tex">\theta</annotation></semantics></math></span></span> 是完整夹角</td>
+<td>单步角为 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>γ</mi><mi>w</mi><mi mathvariant="normal">Δ</mi><mi>t</mi><mi>sin</mi><mo>⁡</mo><mi>θ</mi></mrow><annotation encoding="application/x-tex">\gamma w\Delta t\sin\theta</annotation></semantics></math></span></span></td>
+</tr>
+</tbody></table></div>
+<p>默认 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>γ</mi><mo>=</mo><mn>0.8</mn><mtext> </mtext><msup><mi mathvariant="normal">s</mi><mrow><mo>−</mo><mn>1</mn></mrow></msup></mrow><annotation encoding="application/x-tex">\gamma=0.8,\mathrm{s}^{-1}</annotation></semantics></math></span></span>，<span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>w</mi></mrow><annotation encoding="application/x-tex">w</annotation></semantics></math></span></span> 是加计可靠性权重。<span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi mathvariant="normal">Δ</mi><mi>t</mi></mrow><annotation encoding="application/x-tex">\Delta t</annotation></semantics></math></span></span> 来自设备包内时间链路，不是画面刷新间隔。动画中缓慢施加完整 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>θ</mi></mrow><annotation encoding="application/x-tex">\theta</annotation></semantics></math></span></span>，是教学插值，不代表代码实际迭代过程。</p>
+<p>当加计受明显平移加速度影响时，方向不再等于真实向上方向。代码降低权重，但不能保证完全分离运动加速度。本讲先在理想、低动态条件下解释几何关系。</p>
+</div></div>
+</section>
+<section class="am-panel" id="panel-E">
+<header class="am-panel-head"><span class="am-panel-id">E</span><h2>为什么航向仍然未知？</h2></header>
+<div class="am-panel-body"><div class="am-md"><p>假设修正与真值已经满足同一重力约束：</p>
+<p><span class="tg-math-block"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msubsup><mi>R</mi><mi>c</mi><mi mathvariant="sans-serif">T</mi></msubsup><msub><mi mathvariant="bold">k</mi><mi>W</mi></msub><mo>=</mo><msubsup><mi>R</mi><mrow><mi mathvariant="normal">t</mi><mi mathvariant="normal">r</mi><mi mathvariant="normal">u</mi><mi mathvariant="normal">e</mi></mrow><mi mathvariant="sans-serif">T</mi></msubsup><msub><mi mathvariant="bold">k</mi><mi>W</mi></msub><mi mathvariant="normal">.</mi></mrow><annotation encoding="application/x-tex">R_c^{\mathsf T}\mathbf k_W=R_{\mathrm{true}}^{\mathsf T}\mathbf k_W.</annotation></semantics></math></span></span></p>
+<p>定义相对误差 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>E</mi><mo>=</mo><msub><mi>R</mi><mi>c</mi></msub><msubsup><mi>R</mi><mrow><mi mathvariant="normal">t</mi><mi mathvariant="normal">r</mi><mi mathvariant="normal">u</mi><mi mathvariant="normal">e</mi></mrow><mi mathvariant="sans-serif">T</mi></msubsup></mrow><annotation encoding="application/x-tex">E=R_c R_{\mathrm{true}}^{\mathsf T}</annotation></semantics></math></span></span>。两边左乘 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>R</mi><mi>c</mi></msub></mrow><annotation encoding="application/x-tex">R_c</annotation></semantics></math></span></span>，可得：</p>
+<p><span class="tg-math-block"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msub><mi mathvariant="bold">k</mi><mi>W</mi></msub><mo>=</mo><msub><mi>R</mi><mi>c</mi></msub><msubsup><mi>R</mi><mrow><mi mathvariant="normal">t</mi><mi mathvariant="normal">r</mi><mi mathvariant="normal">u</mi><mi mathvariant="normal">e</mi></mrow><mi mathvariant="sans-serif">T</mi></msubsup><msub><mi mathvariant="bold">k</mi><mi>W</mi></msub><mo>=</mo><mi>E</mi><msub><mi mathvariant="bold">k</mi><mi>W</mi></msub><mi mathvariant="normal">.</mi></mrow><annotation encoding="application/x-tex">\mathbf k_W=R_c R_{\mathrm{true}}^{\mathsf T}\mathbf k_W=E\mathbf k_W.</annotation></semantics></math></span></span></p>
+<p><span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>E</mi><mo>∈</mo><mi>S</mi><mi>O</mi><mo stretchy="false">(</mo><mn>3</mn><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">E\in SO(3)</annotation></semantics></math></span></span> 又保持 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi mathvariant="bold">k</mi><mi>W</mi></msub></mrow><annotation encoding="application/x-tex">\mathbf k_W</annotation></semantics></math></span></span> 不变，因此它是绕 <span class="tg-math-inline"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi mathvariant="bold">k</mi><mi>W</mi></msub></mrow><annotation encoding="application/x-tex">\mathbf k_W</annotation></semantics></math></span></span> 的旋转：</p>
+<p><span class="tg-math-block"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><menclose notation="box"><mstyle scriptlevel="0" displaystyle="false"><mstyle scriptlevel="0" displaystyle="false"><mstyle scriptlevel="0" displaystyle="true"><mrow><mi>E</mi><mo>=</mo><mi mathvariant="normal">Exp</mi><mo>⁡</mo><mo stretchy="false">(</mo><mi>ψ</mi><msub><mi mathvariant="bold">k</mi><mi>W</mi></msub><mo stretchy="false">)</mo><mo separator="true">,</mo><mspace width="2em"/><msub><mi>R</mi><mi>c</mi></msub><mo>=</mo><mi>H</mi><mo stretchy="false">(</mo><msub><mi mathvariant="bold">k</mi><mi>W</mi></msub><mo separator="true">,</mo><mi>ψ</mi><mo stretchy="false">)</mo><msub><mi>R</mi><mrow><mi mathvariant="normal">t</mi><mi mathvariant="normal">r</mi><mi mathvariant="normal">u</mi><mi mathvariant="normal">e</mi></mrow></msub><mi mathvariant="normal">.</mi></mrow></mstyle></mstyle></mstyle></menclose></mrow><annotation encoding="application/x-tex">\boxed{E=\operatorname{Exp}(\psi\mathbf k_W),\qquad
+R_c=H(\mathbf k_W,\psi)R_{\mathrm{true}}.}</annotation></semantics></math></span></span></p>
+</div>
+<div class="am-callout am-callout--warn" role="note"><div class="am-callout-title">这是一条有条件的结论</div><div class="am-callout-body am-md"><p>“仅剩绕重力转动”要求理想重力观测，且倾斜已完全对齐。实际噪声、动态加速度和有限反馈增益会留下倾斜残差。$\mathbf k_W$ 在 $t_0$ 建立的是软件坐标中的参考方向，不能据此宣称初始绝对姿态已知。</p>
+</div></div>
+<div class="am-md"><p>一个向量给出两个独立约束，无法确定三自由度姿态。即使重力方向误差为零，航向误差也可以很大。这正是下一讲引入相机方向观测的原因；本页尚未演示相机标定。</p>
+</div></div>
+</section>
+<section class="am-panel" id="panel-F">
+<header class="am-panel-head"><span class="am-panel-id">F</span><h2>文档和代码依据</h2></header>
+<div class="am-panel-body"><div class="am-md"><ul>
+<li>数学文档：<code>docs/GYRO_GRAVITY_TILT_MATH.md</code>，第 3–7、10 节。</li>
+<li>滤波实现：<code>wt901_viz/so3_filter.py</code>，<code>AdaptiveTiltFilter.update()</code>。</li>
+<li>时间和人体姿态入口：<code>OptUSBProj-ubuntu/optusbproj_ubuntu/pose.py</code>。</li>
+</ul>
+<p>本页只解释第一步。后续可分别扩展：重力不可观测性的完整证明、相机换基共轭、相机标定与航向补偿。</p>
+</div></div>
+</section>
+</div>
+</div>
+</main>
+<footer class="am-colophon">Generated by Answer me with HTML 0.4.9 · 2026-10-07 12:17</footer>
+<textarea id="am-source" hidden readonly aria-hidden="true">---
+title: 陀螺＋重力：纠正倾斜，留下航向
+subtitle: 第一讲 · 从一个向量到姿态约束 · 可播放的三维数学演示
+template: doc
+theme: shadcn
+mode: dark
+lang: zh
+style: off
+---
+
+这不是把设备朝向直接变成真值。陀螺先传播姿态，加计再约束向上方向；绕向上方向的转动仍无法由重力确定。
+
+## A 先认识三个量
+
+| 符号 | 含义 | 如何得到 |
+| --- | --- | --- |
+| &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;W&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; | 软件建立的固定参考系 | 初始与设备本体系重合；&lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi&gt;Z&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;Z&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; 不一定竖直 |
+| &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi&gt;S&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;(&lt;/mo&gt;&lt;mi&gt;t&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;)&lt;/mo&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;S(t)&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;、&lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;(&lt;/mo&gt;&lt;mi&gt;t&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;)&lt;/mo&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;R(t)&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; | 随设备运动的本体系；其三根轴在 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;W&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; 中的表示 | &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;R&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; 把本体坐标变为 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;W&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; 坐标：&lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;x&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;x&lt;/mi&gt;&lt;mi&gt;S&lt;/mi&gt;&lt;/msub&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\mathbf x_W=R\mathbf x_S&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; |
+| &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;a&lt;/mi&gt;&lt;mi&gt;S&lt;/mi&gt;&lt;/msub&gt;&lt;mo stretchy=&quot;false&quot;&gt;(&lt;/mo&gt;&lt;mi&gt;t&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;)&lt;/mo&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\mathbf a_S(t)&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; | 竖直向上在本体系中的单位坐标 | 静止或低动态时，把加计比力归一化 |
+| &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\mathbf k_W&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; | 向上方向在 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;W&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; 中的固定坐标 | 在静止参考时刻，&lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mn&gt;0&lt;/mn&gt;&lt;/msub&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;a&lt;/mi&gt;&lt;mn&gt;0&lt;/mn&gt;&lt;/msub&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\mathbf k_W=R_0\mathbf a_0&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; |
+
+这里用“向上”避免混淆：地球重力指向下，但静止加计比力指向上。动画的真值仅是教学设定，不是设备额外读出的数据。
+
+## B 播放一次纠倾斜过程
+
+```html
+&lt;style&gt;
+.tg-math-block{display:block;text-align:center;overflow-x:auto;padding:14px 6px;margin:12px 0}
+.tg-math-inline{display:inline-block;max-width:100%;vertical-align:middle}
+.tg-math-block math{font-size:1.22em}.tg-math-inline math{font-size:1.08em}
+#tgEquation{overflow-x:auto}#tgEquation math{font-size:1.18em}
+@media print{.tg-math-block{break-inside:avoid}}
+&lt;/style&gt;
+&lt;section id=&quot;tiltLesson&quot; style=&quot;color:#dbeafe;background:#0c1628;border:1px solid #334155;border-radius:16px;padding:18px;font:16px system-ui;&quot;&gt;
+ &lt;div style=&quot;display:flex;gap:10px;flex-wrap:wrap;align-items:center&quot;&gt;
+  &lt;button id=&quot;tgPlay&quot; type=&quot;button&quot;&gt;▶ 播放&lt;/button&gt;&lt;button id=&quot;tgPrev&quot; type=&quot;button&quot;&gt;上一步&lt;/button&gt;&lt;button id=&quot;tgNext&quot; type=&quot;button&quot;&gt;下一步&lt;/button&gt;&lt;button id=&quot;tgReset&quot; type=&quot;button&quot;&gt;重置&lt;/button&gt;
+  &lt;label&gt;进度 &lt;input id=&quot;tgTime&quot; aria-label=&quot;动画进度&quot; type=&quot;range&quot; min=&quot;0&quot; max=&quot;5.999&quot; step=&quot;0.001&quot; value=&quot;0&quot;&gt;&lt;/label&gt;
+ &lt;/div&gt;
+ &lt;div id=&quot;tgSteps&quot; style=&quot;display:flex;gap:6px;flex-wrap:wrap;margin:14px 0&quot;&gt;&lt;/div&gt;
+ &lt;h3 id=&quot;tgTitle&quot; style=&quot;color:#fff;margin:10px 0&quot;&gt;&lt;/h3&gt;&lt;p id=&quot;tgExplain&quot; style=&quot;min-height:3em;line-height:1.7&quot;&gt;&lt;/p&gt;
+ &lt;div style=&quot;display:flex;gap:20px;flex-wrap:wrap;margin:12px 0&quot;&gt;
+  &lt;label&gt;教学模拟：纯倾斜误差 &lt;input id=&quot;tgTilt&quot; aria-label=&quot;纯倾斜误差&quot; type=&quot;range&quot; min=&quot;0&quot; max=&quot;65&quot; value=&quot;28&quot;&gt;&lt;output id=&quot;tgTiltOut&quot;&gt;&lt;/output&gt;&lt;/label&gt;
+  &lt;label&gt;人为注入绕 k_W 的误差 &lt;input id=&quot;tgYaw&quot; aria-label=&quot;航向误差&quot; type=&quot;range&quot; min=&quot;-120&quot; max=&quot;120&quot; value=&quot;42&quot;&gt;&lt;output id=&quot;tgYawOut&quot;&gt;&lt;/output&gt;&lt;/label&gt;
+ &lt;/div&gt;
+ &lt;p style=&quot;font-size:14px;color:#a9bad2&quot;&gt;滑杆只为构造带误差的教学估计，不是实际滤波器需要注入的量。纯倾斜轴 b 垂直于本体中的向上方向 v；因此倾斜滑杆就是初始重力夹角。完整纠倾斜后，只留下航向滑杆指定的误差。&lt;/p&gt;
+ &lt;div style=&quot;display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:12px 0&quot;&gt;
+  &lt;button id=&quot;tgViewIso&quot; type=&quot;button&quot;&gt;立体视角&lt;/button&gt;&lt;button id=&quot;tgViewFront&quot; type=&quot;button&quot;&gt;正视（沿 −Y 看）&lt;/button&gt;&lt;button id=&quot;tgViewSide&quot; type=&quot;button&quot;&gt;侧视（沿 −X 看）&lt;/button&gt;&lt;button id=&quot;tgViewTop&quot; type=&quot;button&quot;&gt;俯视（沿 −Z 看）&lt;/button&gt;&lt;button id=&quot;tgViewReset&quot; type=&quot;button&quot;&gt;复位视角&lt;/button&gt;
+  &lt;label&gt;&lt;input id=&quot;tgLinkViews&quot; type=&quot;checkbox&quot; checked&gt; 联动两个视角&lt;/label&gt;&lt;label&gt;&lt;input id=&quot;tgPerspective&quot; type=&quot;checkbox&quot; checked&gt; 透视投影&lt;/label&gt;
+ &lt;/div&gt;
+ &lt;p style=&quot;font-size:14px;color:#a9bad2&quot;&gt;在任一视图内拖动旋转视角，滚轮缩放；触屏支持单指旋转、双指缩放。双击视图复位。视角操作不改变设备姿态或动画进度。标准视角相对于各图的 W / S 坐标轴。&lt;/p&gt;
+ &lt;div style=&quot;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:12px&quot;&gt;
+  &lt;div&gt;&lt;strong&gt;固定参考系 W：看设备姿态&lt;/strong&gt;&lt;canvas id=&quot;tgWorld&quot; tabindex=&quot;0&quot; aria-label=&quot;原参考系三维视图，拖动旋转，滚轮缩放，方向键旋转，加减键缩放&quot; style=&quot;width:100%;height:420px;display:block;touch-action:none;cursor:grab;border:1px solid #334155;border-radius:10px&quot;&gt;&lt;/canvas&gt;&lt;/div&gt;
+  &lt;div&gt;&lt;strong&gt;本体坐标 S：比较两个向量的坐标&lt;/strong&gt;&lt;canvas id=&quot;tgBody&quot; tabindex=&quot;0&quot; aria-label=&quot;本体系三维视图，拖动旋转，滚轮缩放，方向键旋转，加减键缩放&quot; style=&quot;width:100%;height:420px;display:block;touch-action:none;cursor:grab;border:1px solid #334155;border-radius:10px&quot;&gt;&lt;/canvas&gt;&lt;/div&gt;
+ &lt;/div&gt;
+ &lt;p style=&quot;font-size:14px;color:#a9bad2&quot;&gt;轴色：X 红、Y 绿、Z 蓝。白色：向上；橙色：预测/当前估计；青色：教学真值。左图是 W 中的姿态；右图是统一本体轴坐标中的向量比较，不是第二台设备。&lt;/p&gt;
+ &lt;div id=&quot;tgEquation&quot; style=&quot;background:#16243a;padding:15px;border-radius:10px;font-size:18px;line-height:1.8;overflow-wrap:anywhere&quot;&gt;&lt;/div&gt;
+ &lt;div id=&quot;tgValues&quot; style=&quot;white-space:pre-wrap;font:14px/1.7 ui-monospace,monospace;padding:12px 0&quot;&gt;&lt;/div&gt;
+ &lt;details&gt;&lt;summary&gt;查看当前矩阵与数学检查&lt;/summary&gt;&lt;pre id=&quot;tgMatrices&quot; style=&quot;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px&quot;&gt;&lt;/pre&gt;&lt;/details&gt;
+ &lt;p style=&quot;font-size:14px;color:#a9bad2&quot;&gt;示例数值由 SO(3) 指数映射计算，不是实测精度。W 的 Z 故意不与向上方向重合。公式由 LaTeX 预排版为原生 MathML，无需联网加载字体或公式库，断网也能播放。&lt;/p&gt;
+&lt;/section&gt;
+&lt;script&gt;
+(()=&gt;{
+ const $=id=&gt;document.getElementById(id), root=$(&#39;tiltLesson&#39;);
+ const I=[[1,0,0],[0,1,0],[0,0,1]], rad=Math.PI/180;
+ const dot=(a,b)=&gt;a.reduce((s,x,i)=&gt;s+x*b[i],0), cross=(a,b)=&gt;[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+ const norm=a=&gt;Math.hypot(...a), scale=(a,s)=&gt;a.map(x=&gt;x*s), unit=a=&gt;scale(a,1/norm(a));
+ const T=A=&gt;A[0].map((_,j)=&gt;A.map(r=&gt;r[j])), mv=(A,v)=&gt;A.map(r=&gt;dot(r,v));
+ const mm=(A,B)=&gt;A.map(r=&gt;T(B).map(c=&gt;dot(r,c)));
+ const exp=v=&gt;{let t=norm(v);if(t&lt;1e-12)return I.map(r=&gt;r.slice());let n=scale(v,1/t),c=Math.cos(t),s=Math.sin(t),K=[[0,-n[2],n[1]],[n[2],0,-n[0]],[-n[1],n[0],0]];return I.map((r,i)=&gt;r.map((x,j)=&gt;c*x+(1-c)*n[i]*n[j]+s*K[i][j]));};
+ const angle=(u,v)=&gt;Math.atan2(norm(cross(u,v)),dot(u,v))/rad;
+ const sub=(a,b)=&gt;a.map((x,i)=&gt;x-b[i]);
+ // The build step pre-renders these TeX formulas; no runtime library is needed.
+ const equationTex=[
+  String.raw`\mathbf x_W=R_0\mathbf x_S\quad\Longrightarrow\quad\mathbf k_W=R_0\mathbf a_0`,
+  String.raw`R_{\mathrm{pred},n}=R_{n-1}\operatorname{Exp}(\bar{\boldsymbol\omega}_S\Delta t)`,
+  String.raw`\begin{aligned}\mathbf u&amp;=R_{\mathrm{pred}}^{\mathsf T}\mathbf k_W,\quad\mathbf v=\mathbf a_S\\\mathbf e&amp;=\mathbf v\times\mathbf u,\quad\mathbf n=\frac{\mathbf e}{\lVert\mathbf e\rVert}\\\theta&amp;=\operatorname{atan2}(\lVert\mathbf e\rVert,\mathbf v^{\mathsf T}\mathbf u)\end{aligned}`,
+  String.raw`\begin{aligned}D&amp;=\operatorname{Exp}(-\theta\mathbf n),\quad D\mathbf u=\mathbf v\\\Delta R&amp;=D^{\mathsf T}=\operatorname{Exp}(\theta\mathbf n)\\R_c&amp;=R_{\mathrm{pred}}\Delta R\end{aligned}`,
+  String.raw`R_c^{\mathsf T}\mathbf k_W=R_{\mathrm{true}}^{\mathsf T}\mathbf k_W=\mathbf a_S`,
+  String.raw`\begin{aligned}H(\mathbf k_W,\psi)&amp;=\operatorname{Exp}(\psi\mathbf k_W)\\(HR_c)^{\mathsf T}\mathbf k_W&amp;=R_c^{\mathsf T}\mathbf k_W\end{aligned}`
+ ];
+ const equationMathML = /* @precompute-math */ [&quot;&lt;span class=\&quot;tg-math-block\&quot;&gt;&lt;span class=\&quot;katex\&quot;&gt;&lt;math xmlns=\&quot;http://www.w3.org/1998/Math/MathML\&quot; display=\&quot;block\&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;msub&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;x&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mn&gt;0&lt;/mn&gt;&lt;/msub&gt;&lt;msub&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;x&lt;/mi&gt;&lt;mi&gt;S&lt;/mi&gt;&lt;/msub&gt;&lt;mspace width=\&quot;1em\&quot;/&gt;&lt;mo&gt;⟹&lt;/mo&gt;&lt;mspace width=\&quot;1em\&quot;/&gt;&lt;msub&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mn&gt;0&lt;/mn&gt;&lt;/msub&gt;&lt;msub&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;a&lt;/mi&gt;&lt;mn&gt;0&lt;/mn&gt;&lt;/msub&gt;&lt;/mrow&gt;&lt;annotation encoding=\&quot;application/x-tex\&quot;&gt;\\mathbf x_W=R_0\\mathbf x_S\\quad\\Longrightarrow\\quad\\mathbf k_W=R_0\\mathbf a_0&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;&quot;,&quot;&lt;span class=\&quot;tg-math-block\&quot;&gt;&lt;span class=\&quot;katex\&quot;&gt;&lt;math xmlns=\&quot;http://www.w3.org/1998/Math/MathML\&quot; display=\&quot;block\&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mrow&gt;&lt;mrow&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;p&lt;/mi&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;r&lt;/mi&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;e&lt;/mi&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;d&lt;/mi&gt;&lt;/mrow&gt;&lt;mo separator=\&quot;true\&quot;&gt;,&lt;/mo&gt;&lt;mi&gt;n&lt;/mi&gt;&lt;/mrow&gt;&lt;/msub&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mrow&gt;&lt;mi&gt;n&lt;/mi&gt;&lt;mo&gt;−&lt;/mo&gt;&lt;mn&gt;1&lt;/mn&gt;&lt;/mrow&gt;&lt;/msub&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;Exp&lt;/mi&gt;&lt;mo&gt;⁡&lt;/mo&gt;&lt;mo stretchy=\&quot;false\&quot;&gt;(&lt;/mo&gt;&lt;msub&gt;&lt;mover accent=\&quot;true\&quot;&gt;&lt;mi mathvariant=\&quot;bold-italic\&quot;&gt;ω&lt;/mi&gt;&lt;mo&gt;ˉ&lt;/mo&gt;&lt;/mover&gt;&lt;mi&gt;S&lt;/mi&gt;&lt;/msub&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;Δ&lt;/mi&gt;&lt;mi&gt;t&lt;/mi&gt;&lt;mo stretchy=\&quot;false\&quot;&gt;)&lt;/mo&gt;&lt;/mrow&gt;&lt;annotation encoding=\&quot;application/x-tex\&quot;&gt;R_{\\mathrm{pred},n}=R_{n-1}\\operatorname{Exp}(\\bar{\\boldsymbol\\omega}_S\\Delta t)&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;&quot;,&quot;&lt;span class=\&quot;tg-math-block\&quot;&gt;&lt;span class=\&quot;katex\&quot;&gt;&lt;math xmlns=\&quot;http://www.w3.org/1998/Math/MathML\&quot; display=\&quot;block\&quot;&gt;&lt;semantics&gt;&lt;mtable rowspacing=\&quot;0.25em\&quot; columnalign=\&quot;right left\&quot; columnspacing=\&quot;0em\&quot;&gt;&lt;mtr&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=\&quot;0\&quot; displaystyle=\&quot;true\&quot;&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;u&lt;/mi&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=\&quot;0\&quot; displaystyle=\&quot;true\&quot;&gt;&lt;mrow&gt;&lt;mrow&gt;&lt;/mrow&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;msubsup&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mrow&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;p&lt;/mi&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;r&lt;/mi&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;e&lt;/mi&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;d&lt;/mi&gt;&lt;/mrow&gt;&lt;mi mathvariant=\&quot;sans-serif\&quot;&gt;T&lt;/mi&gt;&lt;/msubsup&gt;&lt;msub&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;mo separator=\&quot;true\&quot;&gt;,&lt;/mo&gt;&lt;mspace width=\&quot;1em\&quot;/&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;v&lt;/mi&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;msub&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;a&lt;/mi&gt;&lt;mi&gt;S&lt;/mi&gt;&lt;/msub&gt;&lt;/mrow&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;/mtr&gt;&lt;mtr&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=\&quot;0\&quot; displaystyle=\&quot;true\&quot;&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;e&lt;/mi&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=\&quot;0\&quot; displaystyle=\&quot;true\&quot;&gt;&lt;mrow&gt;&lt;mrow&gt;&lt;/mrow&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;v&lt;/mi&gt;&lt;mo&gt;×&lt;/mo&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;u&lt;/mi&gt;&lt;mo separator=\&quot;true\&quot;&gt;,&lt;/mo&gt;&lt;mspace width=\&quot;1em\&quot;/&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;n&lt;/mi&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mfrac&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;e&lt;/mi&gt;&lt;mrow&gt;&lt;mo stretchy=\&quot;false\&quot;&gt;∥&lt;/mo&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;e&lt;/mi&gt;&lt;mo stretchy=\&quot;false\&quot;&gt;∥&lt;/mo&gt;&lt;/mrow&gt;&lt;/mfrac&gt;&lt;/mrow&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;/mtr&gt;&lt;mtr&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=\&quot;0\&quot; displaystyle=\&quot;true\&quot;&gt;&lt;mi&gt;θ&lt;/mi&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=\&quot;0\&quot; displaystyle=\&quot;true\&quot;&gt;&lt;mrow&gt;&lt;mrow&gt;&lt;/mrow&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;atan2&lt;/mi&gt;&lt;mo&gt;⁡&lt;/mo&gt;&lt;mo stretchy=\&quot;false\&quot;&gt;(&lt;/mo&gt;&lt;mo stretchy=\&quot;false\&quot;&gt;∥&lt;/mo&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;e&lt;/mi&gt;&lt;mo stretchy=\&quot;false\&quot;&gt;∥&lt;/mo&gt;&lt;mo separator=\&quot;true\&quot;&gt;,&lt;/mo&gt;&lt;msup&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;v&lt;/mi&gt;&lt;mi mathvariant=\&quot;sans-serif\&quot;&gt;T&lt;/mi&gt;&lt;/msup&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;u&lt;/mi&gt;&lt;mo stretchy=\&quot;false\&quot;&gt;)&lt;/mo&gt;&lt;/mrow&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;/mtr&gt;&lt;/mtable&gt;&lt;annotation encoding=\&quot;application/x-tex\&quot;&gt;\\begin{aligned}\\mathbf u&amp;amp;=R_{\\mathrm{pred}}^{\\mathsf T}\\mathbf k_W,\\quad\\mathbf v=\\mathbf a_S\\\\\\mathbf e&amp;amp;=\\mathbf v\\times\\mathbf u,\\quad\\mathbf n=\\frac{\\mathbf e}{\\lVert\\mathbf e\\rVert}\\\\\\theta&amp;amp;=\\operatorname{atan2}(\\lVert\\mathbf e\\rVert,\\mathbf v^{\\mathsf T}\\mathbf u)\\end{aligned}&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;&quot;,&quot;&lt;span class=\&quot;tg-math-block\&quot;&gt;&lt;span class=\&quot;katex\&quot;&gt;&lt;math xmlns=\&quot;http://www.w3.org/1998/Math/MathML\&quot; display=\&quot;block\&quot;&gt;&lt;semantics&gt;&lt;mtable rowspacing=\&quot;0.25em\&quot; columnalign=\&quot;right left\&quot; columnspacing=\&quot;0em\&quot;&gt;&lt;mtr&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=\&quot;0\&quot; displaystyle=\&quot;true\&quot;&gt;&lt;mi&gt;D&lt;/mi&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=\&quot;0\&quot; displaystyle=\&quot;true\&quot;&gt;&lt;mrow&gt;&lt;mrow&gt;&lt;/mrow&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;Exp&lt;/mi&gt;&lt;mo&gt;⁡&lt;/mo&gt;&lt;mo stretchy=\&quot;false\&quot;&gt;(&lt;/mo&gt;&lt;mo&gt;−&lt;/mo&gt;&lt;mi&gt;θ&lt;/mi&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;n&lt;/mi&gt;&lt;mo stretchy=\&quot;false\&quot;&gt;)&lt;/mo&gt;&lt;mo separator=\&quot;true\&quot;&gt;,&lt;/mo&gt;&lt;mspace width=\&quot;1em\&quot;/&gt;&lt;mi&gt;D&lt;/mi&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;u&lt;/mi&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;v&lt;/mi&gt;&lt;/mrow&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;/mtr&gt;&lt;mtr&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=\&quot;0\&quot; displaystyle=\&quot;true\&quot;&gt;&lt;mrow&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;Δ&lt;/mi&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;/mrow&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=\&quot;0\&quot; displaystyle=\&quot;true\&quot;&gt;&lt;mrow&gt;&lt;mrow&gt;&lt;/mrow&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;msup&gt;&lt;mi&gt;D&lt;/mi&gt;&lt;mi mathvariant=\&quot;sans-serif\&quot;&gt;T&lt;/mi&gt;&lt;/msup&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;Exp&lt;/mi&gt;&lt;mo&gt;⁡&lt;/mo&gt;&lt;mo stretchy=\&quot;false\&quot;&gt;(&lt;/mo&gt;&lt;mi&gt;θ&lt;/mi&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;n&lt;/mi&gt;&lt;mo stretchy=\&quot;false\&quot;&gt;)&lt;/mo&gt;&lt;/mrow&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;/mtr&gt;&lt;mtr&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=\&quot;0\&quot; displaystyle=\&quot;true\&quot;&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mi&gt;c&lt;/mi&gt;&lt;/msub&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=\&quot;0\&quot; displaystyle=\&quot;true\&quot;&gt;&lt;mrow&gt;&lt;mrow&gt;&lt;/mrow&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mrow&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;p&lt;/mi&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;r&lt;/mi&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;e&lt;/mi&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;d&lt;/mi&gt;&lt;/mrow&gt;&lt;/msub&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;Δ&lt;/mi&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;/mrow&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;/mtr&gt;&lt;/mtable&gt;&lt;annotation encoding=\&quot;application/x-tex\&quot;&gt;\\begin{aligned}D&amp;amp;=\\operatorname{Exp}(-\\theta\\mathbf n),\\quad D\\mathbf u=\\mathbf v\\\\\\Delta R&amp;amp;=D^{\\mathsf T}=\\operatorname{Exp}(\\theta\\mathbf n)\\\\R_c&amp;amp;=R_{\\mathrm{pred}}\\Delta R\\end{aligned}&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;&quot;,&quot;&lt;span class=\&quot;tg-math-block\&quot;&gt;&lt;span class=\&quot;katex\&quot;&gt;&lt;math xmlns=\&quot;http://www.w3.org/1998/Math/MathML\&quot; display=\&quot;block\&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;msubsup&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mi&gt;c&lt;/mi&gt;&lt;mi mathvariant=\&quot;sans-serif\&quot;&gt;T&lt;/mi&gt;&lt;/msubsup&gt;&lt;msub&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;msubsup&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mrow&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;t&lt;/mi&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;r&lt;/mi&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;u&lt;/mi&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;e&lt;/mi&gt;&lt;/mrow&gt;&lt;mi mathvariant=\&quot;sans-serif\&quot;&gt;T&lt;/mi&gt;&lt;/msubsup&gt;&lt;msub&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;msub&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;a&lt;/mi&gt;&lt;mi&gt;S&lt;/mi&gt;&lt;/msub&gt;&lt;/mrow&gt;&lt;annotation encoding=\&quot;application/x-tex\&quot;&gt;R_c^{\\mathsf T}\\mathbf k_W=R_{\\mathrm{true}}^{\\mathsf T}\\mathbf k_W=\\mathbf a_S&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;&quot;,&quot;&lt;span class=\&quot;tg-math-block\&quot;&gt;&lt;span class=\&quot;katex\&quot;&gt;&lt;math xmlns=\&quot;http://www.w3.org/1998/Math/MathML\&quot; display=\&quot;block\&quot;&gt;&lt;semantics&gt;&lt;mtable rowspacing=\&quot;0.25em\&quot; columnalign=\&quot;right left\&quot; columnspacing=\&quot;0em\&quot;&gt;&lt;mtr&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=\&quot;0\&quot; displaystyle=\&quot;true\&quot;&gt;&lt;mrow&gt;&lt;mi&gt;H&lt;/mi&gt;&lt;mo stretchy=\&quot;false\&quot;&gt;(&lt;/mo&gt;&lt;msub&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;mo separator=\&quot;true\&quot;&gt;,&lt;/mo&gt;&lt;mi&gt;ψ&lt;/mi&gt;&lt;mo stretchy=\&quot;false\&quot;&gt;)&lt;/mo&gt;&lt;/mrow&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=\&quot;0\&quot; displaystyle=\&quot;true\&quot;&gt;&lt;mrow&gt;&lt;mrow&gt;&lt;/mrow&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mi mathvariant=\&quot;normal\&quot;&gt;Exp&lt;/mi&gt;&lt;mo&gt;⁡&lt;/mo&gt;&lt;mo stretchy=\&quot;false\&quot;&gt;(&lt;/mo&gt;&lt;mi&gt;ψ&lt;/mi&gt;&lt;msub&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;mo stretchy=\&quot;false\&quot;&gt;)&lt;/mo&gt;&lt;/mrow&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;/mtr&gt;&lt;mtr&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=\&quot;0\&quot; displaystyle=\&quot;true\&quot;&gt;&lt;mrow&gt;&lt;mo stretchy=\&quot;false\&quot;&gt;(&lt;/mo&gt;&lt;mi&gt;H&lt;/mi&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mi&gt;c&lt;/mi&gt;&lt;/msub&gt;&lt;msup&gt;&lt;mo stretchy=\&quot;false\&quot;&gt;)&lt;/mo&gt;&lt;mi mathvariant=\&quot;sans-serif\&quot;&gt;T&lt;/mi&gt;&lt;/msup&gt;&lt;msub&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;/mrow&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=\&quot;0\&quot; displaystyle=\&quot;true\&quot;&gt;&lt;mrow&gt;&lt;mrow&gt;&lt;/mrow&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;msubsup&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mi&gt;c&lt;/mi&gt;&lt;mi mathvariant=\&quot;sans-serif\&quot;&gt;T&lt;/mi&gt;&lt;/msubsup&gt;&lt;msub&gt;&lt;mi mathvariant=\&quot;bold\&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;/mrow&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;/mtr&gt;&lt;/mtable&gt;&lt;annotation encoding=\&quot;application/x-tex\&quot;&gt;\\begin{aligned}H(\\mathbf k_W,\\psi)&amp;amp;=\\operatorname{Exp}(\\psi\\mathbf k_W)\\\\(HR_c)^{\\mathsf T}\\mathbf k_W&amp;amp;=R_c^{\\mathsf T}\\mathbf k_W\\end{aligned}&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;&quot;];
+ const k=unit([.35,-.25,.90]),R0=exp([.32,-.20,.18]),Rt=mm(exp(scale(k,.30)),mm(R0,exp([.65,.25,-.12]))),a0=mv(T(R0),k),v=mv(T(Rt),k);
+ // Project a seed axis onto the plane normal to the true body up direction.
+ // This keeps the synthetic tilt separate from the synthetic heading error.
+ function pureTiltAxis(up){const seed=Math.abs(up[0])&lt;.9?[1,0,0]:[0,1,0];return unit(sub(seed,scale(up,dot(seed,up))));}
+ function signedHeading(E){return Math.atan2(dot([E[2][1]-E[1][2],E[0][2]-E[2][0],E[1][0]-E[0][1]],k)/2,(E[0][0]+E[1][1]+E[2][2]-1)/2)/rad;}
+ const titles=[&#39;① t₀：静止建立重力参考&#39;,&#39;② t₁：陀螺传播到新姿态&#39;,&#39;③ 预测重力，与加计比较&#39;,&#39;④ 用本体系增量右乘修正&#39;,&#39;⑤ 倾斜对齐，不等于真值&#39;,&#39;⑥ 绕重力转动仍不可见&#39;];
+ const desc=[
+ &#39;软件参考系 W 保持固定。设备在 t₀ 已有姿态 R₀。静止加计给出 a₀，把其坐标乘 R₀，就得到固定的向上方向 k_W。&#39;,
+ &#39;设备真实转动到 t₁。陀螺积分得到 R_pred，可能带有倾斜与航向误差。青色真值只供讲解，实际程序并不知道它。&#39;,
+ &#39;同一个 k_W，经 R_pred 的转置转换成预测本体坐标 u。加计独立提供观测 v。它们不重合，说明估计的倾斜有误。&#39;,
+ &#39;先求 D，让 D u = v。姿态却必须右乘 ΔR = Dᵀ。动画逐渐施加这一最短修正，观察右图两个向量趋于重合。&#39;,
+ &#39;修正后 R_cᵀ k_W = a_S，方向约束已经满足。但橙色姿态与青色真值仍不同：重力对齐没有找回完整姿态。&#39;,
+ &#39;在 W 中，继续绕 k_W 转动整个姿态，右图预测向上坐标仍不变。试着调节航向滑杆：重力残差保持为零，姿态误差却改变。&#39;
+ ];
+ let time=0,playing=false,last=0;
+ const buttons=titles.map((t,i)=&gt;{let b=document.createElement(&#39;button&#39;);b.textContent=t.slice(0,2);b.title=t;b.type=&#39;button&#39;;b.onclick=()=&gt;{playing=false;time=i;update();};$(&#39;tgSteps&#39;).appendChild(b);return b;});
+ root.querySelectorAll(&#39;button&#39;).forEach(b=&gt;{b.style.cssText=&#39;background:#22334e;color:#e0f2fe;border:1px solid #557092;border-radius:7px;padding:8px 12px;cursor:pointer&#39;;});
+ function calc(){
+  const tilt=+$(&#39;tgTilt&#39;).value*rad,yaw=+$(&#39;tgYaw&#39;).value*rad;
+  const b=pureTiltAxis(v),Rp=mm(exp(scale(k,yaw)),mm(Rt,exp(scale(b,tilt)))),u=mv(T(Rp),k),e=cross(v,u),theta=Math.atan2(norm(e),dot(v,u)),n=norm(e)&gt;1e-12?unit(e):b;
+  const delta=exp(scale(n,theta)),Rc=mm(Rp,delta);
+  let R,q=0;if(time&lt;1)R=R0;else if(time&lt;2){let f=time-1;let truth=mm(exp(scale(k,.30*f)),mm(R0,exp(scale([.65,.25,-.12],f))));let bf=pureTiltAxis(mv(T(truth),k));R=mm(exp(scale(k,yaw*f)),mm(truth,exp(scale(bf,tilt*f))));}else if(time&lt;3)R=Rp;else if(time&lt;4){q=time-3;R=mm(Rp,exp(scale(n,theta*q)));}else if(time&lt;5)R=Rc;else R=mm(exp(scale(k,Math.sin((time-5)*Math.PI*2)*.5)),Rc);
+  const current=mv(T(R),k),E=mm(Rc,T(Rt));
+  return {Rp,u,e,theta,n,b,delta,Rc,R,current,E,q};
+ }
+ function setup(canvas){let dpr=window.devicePixelRatio||1,w=canvas.clientWidth,h=canvas.clientHeight;canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);let c=canvas.getContext(&#39;2d&#39;);c.scale(dpr,dpr);c.clearRect(0,0,w,h);return {c,w,h};}
+ // All geometry remains in 3D. Only the orbit camera and projection change.
+ const defaultCamera=()=&gt;({az:-Math.atan2(.8,.6),el:Math.asin(.6),zoom:1});
+ const cameras={tgWorld:defaultCamera(),tgBody:defaultCamera()};let activeView=&#39;tgWorld&#39;;
+ function cameraBasis(camera){let ca=Math.cos(camera.az),sa=Math.sin(camera.az),ce=Math.cos(camera.el),se=Math.sin(camera.el);return {right:[-sa,ca,0],up:[-se*ca,-se*sa,ce],near:[ce*ca,ce*sa,se]};}
+ function projection(x,camera,w,h){let b=cameraBasis(camera),z=dot(b.near,x),factor=$(&#39;tgPerspective&#39;).checked?4.5/(4.5-z):1,s=Math.min(w,h)*.22*camera.zoom;return [w*.48+s*factor*dot(b.right,x),h*.58-s*factor*dot(b.up,x),z];}
+ function changeCamera(id,action){activeView=id;action(cameras[id]);if($(&#39;tgLinkViews&#39;).checked){let other=id===&#39;tgWorld&#39;?&#39;tgBody&#39;:&#39;tgWorld&#39;;Object.assign(cameras[other],cameras[id]);}update();}
+ function setView(az,el){changeCamera(activeView,c=&gt;Object.assign(c,{az,el,zoom:1}));}
+ function scene(canvas,body,d){let {c,w,h}=setup(canvas),camera=cameras[canvas.id],geometry=[],labels=[];
+  const p=x=&gt;projection(x,camera,w,h);
+  function line(a,b,color,width=2,dash=[]){geometry.push({kind:&#39;line&#39;,a:p(a),b:p(b),color,width,dash,depth:(p(a)[2]+p(b)[2])/2});}
+  function arrow(a,b,color,label,width=3){line(a,b,color,width);let A=p(a),B=p(b),t=Math.atan2(B[1]-A[1],B[0]-A[0]);labels.push(()=&gt;{c.beginPath();c.fillStyle=color;c.moveTo(B[0],B[1]);if(Math.hypot(B[0]-A[0],B[1]-A[1])&gt;3){c.lineTo(B[0]-10*Math.cos(t-.4),B[1]-10*Math.sin(t-.4));c.lineTo(B[0]-10*Math.cos(t+.4),B[1]-10*Math.sin(t+.4));}else c.arc(B[0],B[1],3,0,2*Math.PI);c.closePath();c.fill();c.font=&#39;13px system-ui&#39;;let textWidth=c.measureText(label).width;c.fillText(label,Math.max(5,Math.min(w-textWidth-5,B[0]+7)),Math.max(66,Math.min(h-32,B[1]-7)));});}
+  function device(R,color,offset=[0,0,0],axes=false){let corners=[];for(let z of [-.10,.10])for(let y of [-.28,.28])for(let x of [-.42,.42])corners.push(mv(R,[x,y,z]).map((v,i)=&gt;v+offset[i]));for(let indices of [[0,1,3,2],[4,5,7,6],[0,1,5,4],[2,3,7,6],[0,2,6,4],[1,3,7,5]]){let points=indices.map(i=&gt;p(corners[i]));geometry.push({kind:&#39;face&#39;,points,color:axes?&#39;rgba(251,191,36,.16)&#39;:&#39;rgba(34,211,238,.07)&#39;,depth:points.reduce((s,a)=&gt;s+a[2],0)/4});}for(let i=0;i&lt;8;i++)for(let mask of [1,2,4])if(i&lt;(i^mask))line(corners[i],corners[i^mask],color,2);if(axes)T(R).forEach((a,i)=&gt;arrow(offset,mv(I,scale(a,.85)).map((v,j)=&gt;v+offset[j]),[&#39;#fb7185&#39;,&#39;#4ade80&#39;,&#39;#60a5fa&#39;][i],[&#39;X_S&#39;,&#39;Y_S&#39;,&#39;Z_S&#39;][i],2));}
+  // A faint reference XY grid supplies depth cues; it is not a gravity plane.
+  for(let a=-1;a&lt;=1.001;a+=.25){line([a,-1,0],[a,1,0],&#39;#23344c&#39;,1);line([-1,a,0],[1,a,0],&#39;#23344c&#39;,1);}
+  let colors=[&#39;#fb7185&#39;,&#39;#4ade80&#39;,&#39;#60a5fa&#39;];I.forEach((a,i)=&gt;arrow([0,0,0],scale(a,1.22),colors[i],[&#39;X&#39;,&#39;Y&#39;,&#39;Z&#39;][i]+(body?&#39;_S&#39;:&#39;_W&#39;),1.6));
+  if(!body){arrow([0,0,0],scale(k,1.65),&#39;#fff&#39;,&#39;k_W&#39;,3);device(d.R,&#39;#fbbf24&#39;,[0,0,0],true);if(time&gt;=1)device(Rt,&#39;#22d3ee&#39;);if(time&lt;1)arrow([0,0,0],scale(mv(R0,a0),1.65),&#39;#fff&#39;,&#39;R₀ a₀ = k_W&#39;,3);c.fillStyle=&#39;#fbbf24&#39;;c.fillText(time&lt;1?&#39;橙色：t₀ 姿态&#39;:&#39;橙色：当前估计姿态&#39;,12,26);if(time&gt;=1){c.fillStyle=&#39;#22d3ee&#39;;c.fillText(&#39;青色：教学真值（同一原点）&#39;,12,48);}if(time&gt;=4){let b=unit(cross(k,[1,0,0])),a=cross(k,b);for(let j=0;j&lt;70;j++){let f=j/70*2*Math.PI,g=(j+1)/70*2*Math.PI;line(b.map((x,i)=&gt;.8*(Math.cos(f)*x+Math.sin(f)*a[i])),b.map((x,i)=&gt;.8*(Math.cos(g)*x+Math.sin(g)*a[i])),&#39;#667891&#39;,1,[3,3]);}c.fillStyle=&#39;#a9bad2&#39;;c.fillText(&#39;虚线圆：绕 k_W 的不可观测转动&#39;,12,h-12);}}
+  else{let obs=time&lt;1?a0:v,pred=time&lt;1?a0:d.current;arrow([0,0,0],scale(obs,1.60),&#39;#22d3ee&#39;,time&lt;1?&#39;a₀（加计）&#39;:&#39;v = a_S（加计）&#39;,5);arrow([0,0,0],scale(pred,1.22),&#39;#fbbf24&#39;,time&lt;1?&#39;R₀ᵀ k_W&#39;:&#39;u_current = Rᵀ k_W&#39;,3);if(time&gt;=2&amp;&amp;time&lt;4&amp;&amp;norm(d.e)&gt;1e-10)arrow([0,0,0],scale(d.n,.9),&#39;#c4b5fd&#39;,&#39;n ∥ v × u&#39;,2);c.fillStyle=&#39;#a9bad2&#39;;c.fillText(&#39;两向量表达在同一组本体轴坐标中&#39;,12,26);c.fillText(&#39;向量长度错开，仅为避免重合遮挡&#39;,12,h-12);}
+  geometry.sort((a,b)=&gt;a.depth-b.depth);for(let g of geometry){c.beginPath();if(g.kind===&#39;face&#39;){c.fillStyle=g.color;c.moveTo(g.points[0][0],g.points[0][1]);g.points.slice(1).forEach(p=&gt;c.lineTo(p[0],p[1]));c.closePath();c.fill();}else{c.strokeStyle=g.color;c.lineWidth=g.width;c.setLineDash(g.dash);c.moveTo(g.a[0],g.a[1]);c.lineTo(g.b[0],g.b[1]);c.stroke();c.setLineDash([]);}}
+  labels.forEach(draw=&gt;draw());
+ }
+ function fmt(v){return &#39;[&#39;+v.map(x=&gt;x.toFixed(3)).join(&#39;, &#39;)+&#39;]&#39;;}
+ function matrix(R){return R.map(fmt).join(&#39;\n&#39;);}
+ function update(){let d=calc(),i=Math.min(5,Math.floor(time));$(&#39;tgTime&#39;).value=time;$(&#39;tgPlay&#39;).textContent=playing?&#39;Ⅱ 暂停&#39;:&#39;▶ 播放&#39;;buttons.forEach((b,j)=&gt;b.style.background=j===i?&#39;#0e7490&#39;:&#39;#22334e&#39;);$(&#39;tgTitle&#39;).textContent=titles[i];$(&#39;tgExplain&#39;).textContent=desc[i];$(&#39;tgTiltOut&#39;).textContent=$(&#39;tgTilt&#39;).value+&#39;°&#39;;$(&#39;tgYawOut&#39;).textContent=$(&#39;tgYaw&#39;).value+&#39;°&#39;;
+  const notes=[&#39;之后固定重力参考，不逐帧重新学习。&#39;,&#39;本体系角速度产生右乘增量。&#39;,&#39;同向时无需纠偏，不计算零向量的归一化。&#39;,&#39;向量修正与姿态右乘增量互为转置。&#39;,&#39;注意：真值姿态这里也必须取转置。&#39;,&#39;重力观测无法区分不同的航向。&#39;];
+  $(&#39;tgEquation&#39;).innerHTML=equationMathML[i];$(&#39;tgEquation&#39;).insertAdjacentHTML(&#39;beforeend&#39;,&#39;&lt;p style=&quot;font-size:14px;margin:12px 0 0&quot;&gt;&#39;+notes[i]+&#39;&lt;/p&gt;&#39;);let obs=time&lt;1?a0:v;
+  const currentError=mm(d.R,T(Rt));
+  $(&#39;tgValues&#39;).textContent=&#39;k_W = &#39;+fmt(k)+&#39; （固定）\n观测 a_S = &#39;+fmt(obs)+&#39;\n预测 Rᵀ k_W = &#39;+fmt(time&lt;1?a0:d.current)+&#39;\n当前重力方向误差 = &#39;+angle(time&lt;1?a0:d.current,obs).toFixed(2)+&#39;°&#39;+(time&gt;=4?&#39;；当前姿态与真值之差 = &#39;+(Math.acos(Math.max(-1,Math.min(1,(currentError[0][0]+currentError[1][1]+currentError[2][2]-1)/2)))/rad).toFixed(2)+&#39;°&#39;:&#39;&#39;);
+  const residual=norm(sub(mv(T(d.Rc),k),v)),axisResidual=norm(sub(mv(d.E,k),k));
+  $(&#39;tgMatrices&#39;).textContent=&#39;教学注入轴 b = &#39;+fmt(d.b)+&#39;，b·v = &#39;+dot(d.b,v).toExponential(3)+&#39;\n初始重力夹角 = &#39;+(d.theta/rad).toFixed(2)+&#39;°（应等于纯倾斜滑杆）\n完整纠偏后绕 k_W 的有符号误差 = &#39;+signedHeading(d.E).toFixed(2)+&#39;°（应等于航向滑杆）\nR₀:\n&#39;+matrix(R0)+&#39;\nR_pred:\n&#39;+matrix(d.Rp)+&#39;\nΔR（完整对齐）:\n&#39;+matrix(d.delta)+&#39;\nR_c:\n&#39;+matrix(d.Rc)+&#39;\nR_true:\n&#39;+matrix(Rt)+&#39;\n‖R_cᵀ k_W − a_S‖ = &#39;+residual.toExponential(3)+&#39;\n‖(R_c R_trueᵀ) k_W − k_W‖ = &#39;+axisResidual.toExponential(3);
+  scene($(&#39;tgWorld&#39;),false,d);scene($(&#39;tgBody&#39;),true,d);
+ }
+ $(&#39;tgPlay&#39;).onclick=()=&gt;{if(time&gt;=5.999)time=0;playing=!playing;last=performance.now();update();};$(&#39;tgPrev&#39;).onclick=()=&gt;{playing=false;time=Math.max(0,Math.floor(time)-1);update();};$(&#39;tgNext&#39;).onclick=()=&gt;{playing=false;time=Math.min(5,Math.floor(time)+1);update();};$(&#39;tgReset&#39;).onclick=()=&gt;{playing=false;time=0;$(&#39;tgTilt&#39;).value=28;$(&#39;tgYaw&#39;).value=42;update();};$(&#39;tgTime&#39;).oninput=()=&gt;{playing=false;time=+$(&#39;tgTime&#39;).value;update();};[&#39;tgTilt&#39;,&#39;tgYaw&#39;].forEach(id=&gt;$(id).oninput=update);
+ $(&#39;tgViewIso&#39;).onclick=()=&gt;setView(defaultCamera().az,defaultCamera().el);$(&#39;tgViewFront&#39;).onclick=()=&gt;setView(Math.PI/2,0);$(&#39;tgViewSide&#39;).onclick=()=&gt;setView(0,0);$(&#39;tgViewTop&#39;).onclick=()=&gt;setView(-Math.PI/2,Math.PI/2);$(&#39;tgViewReset&#39;).onclick=()=&gt;{Object.assign(cameras.tgWorld,defaultCamera());Object.assign(cameras.tgBody,defaultCamera());update();};
+ $(&#39;tgPerspective&#39;).onchange=update;$(&#39;tgLinkViews&#39;).onchange=()=&gt;{if($(&#39;tgLinkViews&#39;).checked)changeCamera(activeView,()=&gt;{});};
+ for(let id of [&#39;tgWorld&#39;,&#39;tgBody&#39;]){
+  let canvas=$(id),pointers=new Map();
+  const position=e=&gt;[e.clientX,e.clientY];
+  const distance=()=&gt;{let a=[...pointers.values()];return a.length&gt;=2?Math.hypot(a[0][0]-a[1][0],a[0][1]-a[1][1]):0;};
+  canvas.addEventListener(&#39;pointerdown&#39;,e=&gt;{if(e.pointerType===&#39;mouse&#39;&amp;&amp;e.button!==0)return;activeView=id;canvas.focus({preventScroll:true});canvas.setPointerCapture(e.pointerId);pointers.set(e.pointerId,position(e));canvas.style.cursor=&#39;grabbing&#39;;});
+  canvas.addEventListener(&#39;pointermove&#39;,e=&gt;{if(!pointers.has(e.pointerId))return;let previous=pointers.get(e.pointerId),before=distance();pointers.set(e.pointerId,position(e));if(pointers.size===1)changeCamera(id,c=&gt;{c.az-=(e.clientX-previous[0])*.009;c.el=Math.max(-Math.PI/2+.005,Math.min(Math.PI/2-.005,c.el+(e.clientY-previous[1])*.009));});else{let after=distance();if(before&gt;2&amp;&amp;after&gt;2)changeCamera(id,c=&gt;{c.zoom=Math.max(.55,Math.min(1.75,c.zoom*after/before));});}});
+  const release=e=&gt;{pointers.delete(e.pointerId);canvas.style.cursor=pointers.size?&#39;grabbing&#39;:&#39;grab&#39;;};
+  [&#39;pointerup&#39;,&#39;pointercancel&#39;,&#39;lostpointercapture&#39;].forEach(event=&gt;canvas.addEventListener(event,release));
+  canvas.addEventListener(&#39;wheel&#39;,e=&gt;{e.preventDefault();changeCamera(id,c=&gt;{c.zoom=Math.max(.55,Math.min(1.75,c.zoom*Math.exp(-Math.sign(e.deltaY)*.10)));});},{passive:false});
+  canvas.addEventListener(&#39;dblclick&#39;,()=&gt;changeCamera(id,c=&gt;Object.assign(c,defaultCamera())));
+  canvas.addEventListener(&#39;keydown&#39;,e=&gt;{let directions={ArrowLeft:[-.12,0],ArrowRight:[.12,0],ArrowUp:[0,.12],ArrowDown:[0,-.12]};if(directions[e.key]){e.preventDefault();changeCamera(id,c=&gt;{c.az+=directions[e.key][0];c.el=Math.max(-Math.PI/2+.005,Math.min(Math.PI/2-.005,c.el+directions[e.key][1]));});}else if([&#39;+&#39;,&#39;=&#39;,&#39;-&#39;].includes(e.key)){e.preventDefault();changeCamera(id,c=&gt;{c.zoom=Math.max(.55,Math.min(1.75,c.zoom*(e.key===&#39;-&#39;?.9:1.1)));});}else if(e.key===&#39;Home&#39;){e.preventDefault();changeCamera(id,c=&gt;Object.assign(c,defaultCamera()));}});
+ }
+ function tick(now){if(playing){time=Math.min(5.999,time+(now-last)/4500);if(time&gt;=5.999)playing=false;update();}last=now;requestAnimationFrame(tick);}window.addEventListener(&#39;resize&#39;,update);update();requestAnimationFrame(tick);
+ // Public read-only diagnostics for reproducible browser tests.
+ window.tiltLessonCheck=()=&gt;{let d=calc();return {alignmentResidual:norm(sub(mv(T(d.Rc),k),v)),headingAxisResidual:norm(sub(mv(d.E,k),k)),tiltAxisDotUp:dot(d.b,v),recoveredHeadingDegrees:signedHeading(d.E),thetaDegrees:d.theta/rad,stage:Math.floor(time),cameras:JSON.parse(JSON.stringify(cameras)),projectedWorldAxes:I.map(x=&gt;projection(x,cameras.tgWorld,$(&#39;tgWorld&#39;).clientWidth,$(&#39;tgWorld&#39;).clientHeight))};};
+})();
+&lt;/script&gt;
+```
+
+## C 为什么修正要右乘逆矩阵？
+
+使用列向量，定义预测与观测方向：
+
+&lt;span class=&quot;tg-math-block&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot; display=&quot;block&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;u&lt;/mi&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;msubsup&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;p&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;r&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;e&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;d&lt;/mi&gt;&lt;/mrow&gt;&lt;mi mathvariant=&quot;sans-serif&quot;&gt;T&lt;/mi&gt;&lt;/msubsup&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;mo separator=&quot;true&quot;&gt;,&lt;/mo&gt;&lt;mspace width=&quot;2em&quot;/&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;v&lt;/mi&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;a&lt;/mi&gt;&lt;mi&gt;S&lt;/mi&gt;&lt;/msub&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;.&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\mathbf u=R_{\mathrm{pred}}^{\mathsf T}\mathbf k_W,
+\qquad \mathbf v=\mathbf a_S.&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;
+
+在本体坐标中寻找向量修正 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi&gt;D&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;D&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;，再逐步代入并取转置：
+
+&lt;span class=&quot;tg-math-block&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot; display=&quot;block&quot;&gt;&lt;semantics&gt;&lt;mtable rowspacing=&quot;0.25em&quot; columnalign=&quot;right left&quot; columnspacing=&quot;0em&quot;&gt;&lt;mtr&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=&quot;0&quot; displaystyle=&quot;true&quot;&gt;&lt;mrow&gt;&lt;mi&gt;D&lt;/mi&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;u&lt;/mi&gt;&lt;/mrow&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=&quot;0&quot; displaystyle=&quot;true&quot;&gt;&lt;mrow&gt;&lt;mrow&gt;&lt;/mrow&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;v&lt;/mi&gt;&lt;mo separator=&quot;true&quot;&gt;,&lt;/mo&gt;&lt;/mrow&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;/mtr&gt;&lt;mtr&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=&quot;0&quot; displaystyle=&quot;true&quot;&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;v&lt;/mi&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=&quot;0&quot; displaystyle=&quot;true&quot;&gt;&lt;mrow&gt;&lt;mrow&gt;&lt;/mrow&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mi&gt;D&lt;/mi&gt;&lt;msubsup&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;p&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;r&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;e&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;d&lt;/mi&gt;&lt;/mrow&gt;&lt;mi mathvariant=&quot;sans-serif&quot;&gt;T&lt;/mi&gt;&lt;/msubsup&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;mo separator=&quot;true&quot;&gt;,&lt;/mo&gt;&lt;/mrow&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;/mtr&gt;&lt;mtr&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=&quot;0&quot; displaystyle=&quot;true&quot;&gt;&lt;msubsup&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mi&gt;c&lt;/mi&gt;&lt;mi mathvariant=&quot;sans-serif&quot;&gt;T&lt;/mi&gt;&lt;/msubsup&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=&quot;0&quot; displaystyle=&quot;true&quot;&gt;&lt;mrow&gt;&lt;mrow&gt;&lt;/mrow&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mi&gt;D&lt;/mi&gt;&lt;msubsup&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;p&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;r&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;e&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;d&lt;/mi&gt;&lt;/mrow&gt;&lt;mi mathvariant=&quot;sans-serif&quot;&gt;T&lt;/mi&gt;&lt;/msubsup&gt;&lt;mo separator=&quot;true&quot;&gt;,&lt;/mo&gt;&lt;/mrow&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;/mtr&gt;&lt;mtr&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=&quot;0&quot; displaystyle=&quot;true&quot;&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mi&gt;c&lt;/mi&gt;&lt;/msub&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;mtd&gt;&lt;mstyle scriptlevel=&quot;0&quot; displaystyle=&quot;true&quot;&gt;&lt;mrow&gt;&lt;mrow&gt;&lt;/mrow&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;p&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;r&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;e&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;d&lt;/mi&gt;&lt;/mrow&gt;&lt;/msub&gt;&lt;msup&gt;&lt;mi&gt;D&lt;/mi&gt;&lt;mi mathvariant=&quot;sans-serif&quot;&gt;T&lt;/mi&gt;&lt;/msup&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;.&lt;/mi&gt;&lt;/mrow&gt;&lt;/mstyle&gt;&lt;/mtd&gt;&lt;/mtr&gt;&lt;/mtable&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\begin{aligned}
+D\mathbf u&amp;amp;=\mathbf v,\\
+\mathbf v&amp;amp;=D R_{\mathrm{pred}}^{\mathsf T}\mathbf k_W,\\
+R_c^{\mathsf T}&amp;amp;=D R_{\mathrm{pred}}^{\mathsf T},\\
+R_c&amp;amp;=R_{\mathrm{pred}}D^{\mathsf T}.
+\end{aligned}&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;
+
+所以，作用于向量的 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi&gt;D&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;D&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; 与右乘姿态的 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;Δ&lt;/mi&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\Delta R&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; 不是同一个矩阵。右乘 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;Δ&lt;/mi&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\Delta R&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; 表示在当前本体系轴坐标中的姿态增量。
+
+动画使用观测方向叉乘预测方向：
+
+&lt;span class=&quot;tg-math-block&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot; display=&quot;block&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;e&lt;/mi&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;v&lt;/mi&gt;&lt;mo&gt;×&lt;/mo&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;u&lt;/mi&gt;&lt;mo separator=&quot;true&quot;&gt;,&lt;/mo&gt;&lt;mspace width=&quot;2em&quot;/&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;n&lt;/mi&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mfrac&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;e&lt;/mi&gt;&lt;mrow&gt;&lt;mo stretchy=&quot;false&quot;&gt;∥&lt;/mo&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;e&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;∥&lt;/mo&gt;&lt;/mrow&gt;&lt;/mfrac&gt;&lt;mo separator=&quot;true&quot;&gt;,&lt;/mo&gt;&lt;mspace width=&quot;2em&quot;/&gt;&lt;mi&gt;θ&lt;/mi&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;atan2&lt;/mi&gt;&lt;mo&gt;⁡&lt;/mo&gt;&lt;mtext&gt; ⁣&lt;/mtext&gt;&lt;mrow&gt;&lt;mo fence=&quot;true&quot;&gt;(&lt;/mo&gt;&lt;mo stretchy=&quot;false&quot;&gt;∥&lt;/mo&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;e&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;∥&lt;/mo&gt;&lt;mo separator=&quot;true&quot;&gt;,&lt;/mo&gt;&lt;msup&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;v&lt;/mi&gt;&lt;mi mathvariant=&quot;sans-serif&quot;&gt;T&lt;/mi&gt;&lt;/msup&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;u&lt;/mi&gt;&lt;mo fence=&quot;true&quot;&gt;)&lt;/mo&gt;&lt;/mrow&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;.&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\mathbf e=\mathbf v\times\mathbf u,\qquad
+\mathbf n=\frac{\mathbf e}{\lVert\mathbf e\rVert},\qquad
+\theta=\operatorname{atan2}\!\left(\lVert\mathbf e\rVert,\mathbf v^{\mathsf T}\mathbf u\right).&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;
+
+&lt;span class=&quot;tg-math-block&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot; display=&quot;block&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;menclose notation=&quot;box&quot;&gt;&lt;mstyle scriptlevel=&quot;0&quot; displaystyle=&quot;false&quot;&gt;&lt;mstyle scriptlevel=&quot;0&quot; displaystyle=&quot;false&quot;&gt;&lt;mstyle scriptlevel=&quot;0&quot; displaystyle=&quot;true&quot;&gt;&lt;mrow&gt;&lt;mi&gt;D&lt;/mi&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;Exp&lt;/mi&gt;&lt;mo&gt;⁡&lt;/mo&gt;&lt;mo stretchy=&quot;false&quot;&gt;(&lt;/mo&gt;&lt;mo&gt;−&lt;/mo&gt;&lt;mi&gt;θ&lt;/mi&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;n&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;)&lt;/mo&gt;&lt;mo separator=&quot;true&quot;&gt;,&lt;/mo&gt;&lt;mspace width=&quot;2em&quot;/&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;Δ&lt;/mi&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;msup&gt;&lt;mi&gt;D&lt;/mi&gt;&lt;mi mathvariant=&quot;sans-serif&quot;&gt;T&lt;/mi&gt;&lt;/msup&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;Exp&lt;/mi&gt;&lt;mo&gt;⁡&lt;/mo&gt;&lt;mo stretchy=&quot;false&quot;&gt;(&lt;/mo&gt;&lt;mi&gt;θ&lt;/mi&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;n&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;)&lt;/mo&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;.&lt;/mi&gt;&lt;/mrow&gt;&lt;/mstyle&gt;&lt;/mstyle&gt;&lt;/mstyle&gt;&lt;/menclose&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\boxed{D=\operatorname{Exp}(-\theta\mathbf n),\qquad
+\Delta R=D^{\mathsf T}=\operatorname{Exp}(\theta\mathbf n).}&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;
+
+同向时取单位矩阵，不归一化零叉积；反向时最短轴不唯一。本演示限制误差范围，避开反向退化。这里 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;Exp&lt;/mi&gt;&lt;mo&gt;⁡&lt;/mo&gt;&lt;mo stretchy=&quot;false&quot;&gt;(&lt;/mo&gt;&lt;mi mathvariant=&quot;bold-italic&quot;&gt;ϕ&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;)&lt;/mo&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mi&gt;exp&lt;/mi&gt;&lt;mo&gt;⁡&lt;/mo&gt;&lt;mo stretchy=&quot;false&quot;&gt;(&lt;/mo&gt;&lt;mo stretchy=&quot;false&quot;&gt;[&lt;/mo&gt;&lt;mi mathvariant=&quot;bold-italic&quot;&gt;ϕ&lt;/mi&gt;&lt;msub&gt;&lt;mo stretchy=&quot;false&quot;&gt;]&lt;/mo&gt;&lt;mo&gt;×&lt;/mo&gt;&lt;/msub&gt;&lt;mo stretchy=&quot;false&quot;&gt;)&lt;/mo&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\operatorname{Exp}(\boldsymbol\phi)=\exp([\boldsymbol\phi]_\times)&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; 是旋转向量的指数映射。
+
+### 两个误差滑杆怎样独立？
+
+设教学真值的本体向上方向为 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;v&lt;/mi&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;msubsup&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;t&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;r&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;u&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;e&lt;/mi&gt;&lt;/mrow&gt;&lt;mi mathvariant=&quot;sans-serif&quot;&gt;T&lt;/mi&gt;&lt;/msubsup&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\mathbf v=R_{\mathrm{true}}^{\mathsf T}\mathbf k_W&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;。将候选轴投影到 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;v&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\mathbf v&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; 的垂直平面，得到单位注入轴 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;b&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\mathbf b&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;：
+
+&lt;span class=&quot;tg-math-block&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot; display=&quot;block&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;menclose notation=&quot;box&quot;&gt;&lt;mstyle scriptlevel=&quot;0&quot; displaystyle=&quot;false&quot;&gt;&lt;mstyle scriptlevel=&quot;0&quot; displaystyle=&quot;false&quot;&gt;&lt;mstyle scriptlevel=&quot;0&quot; displaystyle=&quot;true&quot;&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;b&lt;/mi&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mfrac&gt;&lt;mrow&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;e&lt;/mi&gt;&lt;mi&gt;x&lt;/mi&gt;&lt;/msub&gt;&lt;mo&gt;−&lt;/mo&gt;&lt;mo stretchy=&quot;false&quot;&gt;(&lt;/mo&gt;&lt;msubsup&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;e&lt;/mi&gt;&lt;mi&gt;x&lt;/mi&gt;&lt;mi mathvariant=&quot;sans-serif&quot;&gt;T&lt;/mi&gt;&lt;/msubsup&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;v&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;)&lt;/mo&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;v&lt;/mi&gt;&lt;/mrow&gt;&lt;mrow&gt;&lt;mo fence=&quot;true&quot;&gt;∥&lt;/mo&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;e&lt;/mi&gt;&lt;mi&gt;x&lt;/mi&gt;&lt;/msub&gt;&lt;mo&gt;−&lt;/mo&gt;&lt;mo stretchy=&quot;false&quot;&gt;(&lt;/mo&gt;&lt;msubsup&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;e&lt;/mi&gt;&lt;mi&gt;x&lt;/mi&gt;&lt;mi mathvariant=&quot;sans-serif&quot;&gt;T&lt;/mi&gt;&lt;/msubsup&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;v&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;)&lt;/mo&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;v&lt;/mi&gt;&lt;mo fence=&quot;true&quot;&gt;∥&lt;/mo&gt;&lt;/mrow&gt;&lt;/mfrac&gt;&lt;mo separator=&quot;true&quot;&gt;,&lt;/mo&gt;&lt;mspace width=&quot;2em&quot;/&gt;&lt;msup&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;b&lt;/mi&gt;&lt;mi mathvariant=&quot;sans-serif&quot;&gt;T&lt;/mi&gt;&lt;/msup&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;v&lt;/mi&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mn&gt;0.&lt;/mn&gt;&lt;/mrow&gt;&lt;/mstyle&gt;&lt;/mstyle&gt;&lt;/mstyle&gt;&lt;/menclose&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\boxed{\mathbf b=
+\frac{\mathbf e_x-(\mathbf e_x^{\mathsf T}\mathbf v)\mathbf v}
+{\left\lVert\mathbf e_x-(\mathbf e_x^{\mathsf T}\mathbf v)\mathbf v\right\rVert},
+\qquad \mathbf b^{\mathsf T}\mathbf v=0.}&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;
+
+如果候选轴接近 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;v&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\mathbf v&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;，就换用 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;e&lt;/mi&gt;&lt;mi&gt;y&lt;/mi&gt;&lt;/msub&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\mathbf e_y&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;。这只是教学构造，真实滤波器不需要知道真值或 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;b&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\mathbf b&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;。
+
+构造带误差的教学估计：
+
+&lt;span class=&quot;tg-math-block&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot; display=&quot;block&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;p&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;r&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;e&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;d&lt;/mi&gt;&lt;/mrow&gt;&lt;/msub&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mi&gt;H&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;(&lt;/mo&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;mo separator=&quot;true&quot;&gt;,&lt;/mo&gt;&lt;mi&gt;ψ&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;)&lt;/mo&gt;&lt;mtext&gt; &lt;/mtext&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;t&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;r&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;u&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;e&lt;/mi&gt;&lt;/mrow&gt;&lt;/msub&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;Exp&lt;/mi&gt;&lt;mo&gt;⁡&lt;/mo&gt;&lt;mo stretchy=&quot;false&quot;&gt;(&lt;/mo&gt;&lt;mi&gt;θ&lt;/mi&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;b&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;)&lt;/mo&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;.&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;R_{\mathrm{pred}}=H(\mathbf k_W,\psi)\,R_{\mathrm{true}}\operatorname{Exp}(\theta\mathbf b).&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;
+
+因为 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi&gt;H&lt;/mi&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;H\mathbf k_W=\mathbf k_W&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;，有 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;u&lt;/mi&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;Exp&lt;/mi&gt;&lt;mo&gt;⁡&lt;/mo&gt;&lt;mo stretchy=&quot;false&quot;&gt;(&lt;/mo&gt;&lt;mo&gt;−&lt;/mo&gt;&lt;mi&gt;θ&lt;/mi&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;b&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;)&lt;/mo&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;v&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\mathbf u=\operatorname{Exp}(-\theta\mathbf b)\mathbf v&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;。又因为 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;msup&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;b&lt;/mi&gt;&lt;mi mathvariant=&quot;sans-serif&quot;&gt;T&lt;/mi&gt;&lt;/msup&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;v&lt;/mi&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mn&gt;0&lt;/mn&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\mathbf b^{\mathsf T}\mathbf v=0&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;，在本页 0–65° 范围内，两方向的夹角恰好为 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi&gt;θ&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\theta&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;。
+
+完整最短修正及其结果为：
+
+&lt;span class=&quot;tg-math-block&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot; display=&quot;block&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;Δ&lt;/mi&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;Exp&lt;/mi&gt;&lt;mo&gt;⁡&lt;/mo&gt;&lt;mo stretchy=&quot;false&quot;&gt;(&lt;/mo&gt;&lt;mo&gt;−&lt;/mo&gt;&lt;mi&gt;θ&lt;/mi&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;b&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;)&lt;/mo&gt;&lt;mo separator=&quot;true&quot;&gt;,&lt;/mo&gt;&lt;mspace width=&quot;2em&quot;/&gt;&lt;menclose notation=&quot;box&quot;&gt;&lt;mstyle scriptlevel=&quot;0&quot; displaystyle=&quot;false&quot;&gt;&lt;mstyle scriptlevel=&quot;0&quot; displaystyle=&quot;false&quot;&gt;&lt;mstyle scriptlevel=&quot;0&quot; displaystyle=&quot;true&quot;&gt;&lt;mrow&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mi&gt;c&lt;/mi&gt;&lt;/msub&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mi&gt;H&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;(&lt;/mo&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;mo separator=&quot;true&quot;&gt;,&lt;/mo&gt;&lt;mi&gt;ψ&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;)&lt;/mo&gt;&lt;mtext&gt; &lt;/mtext&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;t&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;r&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;u&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;e&lt;/mi&gt;&lt;/mrow&gt;&lt;/msub&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;.&lt;/mi&gt;&lt;/mrow&gt;&lt;/mstyle&gt;&lt;/mstyle&gt;&lt;/mstyle&gt;&lt;/menclose&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\Delta R=\operatorname{Exp}(-\theta\mathbf b),\qquad
+\boxed{R_c=H(\mathbf k_W,\psi)\,R_{\mathrm{true}}.}&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;
+
+注入倾斜被消除，&lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi&gt;ψ&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\psi&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; 原样保留。&lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;b&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\mathbf b&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; 是注入轴，&lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;n&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\mathbf n&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; 是纠偏轴；非零倾斜时 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;n&lt;/mi&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mo&gt;−&lt;/mo&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;b&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\mathbf n=-\mathbf b&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;，两者不要混淆。
+
+## D 数学上的对齐，和代码的小步反馈
+
+| 教学用精确对齐 | 当前代码 |
+| --- | --- |
+| &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mi&gt;c&lt;/mi&gt;&lt;/msub&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;p&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;r&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;e&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;d&lt;/mi&gt;&lt;/mrow&gt;&lt;/msub&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;Exp&lt;/mi&gt;&lt;mo&gt;⁡&lt;/mo&gt;&lt;mo stretchy=&quot;false&quot;&gt;(&lt;/mo&gt;&lt;mi&gt;θ&lt;/mi&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;n&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;)&lt;/mo&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;R_c=R_{\mathrm{pred}}\operatorname{Exp}(\theta\mathbf n)&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; | &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mi&gt;n&lt;/mi&gt;&lt;/msub&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;p&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;r&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;e&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;d&lt;/mi&gt;&lt;/mrow&gt;&lt;/msub&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;Exp&lt;/mi&gt;&lt;mo&gt;⁡&lt;/mo&gt;&lt;mo stretchy=&quot;false&quot;&gt;(&lt;/mo&gt;&lt;mi&gt;γ&lt;/mi&gt;&lt;mi&gt;w&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;Δ&lt;/mi&gt;&lt;mi&gt;t&lt;/mi&gt;&lt;mtext&gt; &lt;/mtext&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;e&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;)&lt;/mo&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;R_n=R_{\mathrm{pred}}\operatorname{Exp}(\gamma w\Delta t\,\mathbf e)&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; |
+| 一次消除理想方向误差 | 每帧只修正一小步 |
+| &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi&gt;θ&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\theta&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; 是完整夹角 | 单步角为 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi&gt;γ&lt;/mi&gt;&lt;mi&gt;w&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;Δ&lt;/mi&gt;&lt;mi&gt;t&lt;/mi&gt;&lt;mi&gt;sin&lt;/mi&gt;&lt;mo&gt;⁡&lt;/mo&gt;&lt;mi&gt;θ&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\gamma w\Delta t\sin\theta&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; |
+
+默认 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi&gt;γ&lt;/mi&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mn&gt;0.8&lt;/mn&gt;&lt;mtext&gt; &lt;/mtext&gt;&lt;msup&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;s&lt;/mi&gt;&lt;mrow&gt;&lt;mo&gt;−&lt;/mo&gt;&lt;mn&gt;1&lt;/mn&gt;&lt;/mrow&gt;&lt;/msup&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\gamma=0.8\,\mathrm{s}^{-1}&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;，&lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi&gt;w&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;w&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; 是加计可靠性权重。&lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;Δ&lt;/mi&gt;&lt;mi&gt;t&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\Delta t&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; 来自设备包内时间链路，不是画面刷新间隔。动画中缓慢施加完整 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi&gt;θ&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\theta&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;，是教学插值，不代表代码实际迭代过程。
+
+当加计受明显平移加速度影响时，方向不再等于真实向上方向。代码降低权重，但不能保证完全分离运动加速度。本讲先在理想、低动态条件下解释几何关系。
+
+## E 为什么航向仍然未知？
+
+假设修正与真值已经满足同一重力约束：
+
+&lt;span class=&quot;tg-math-block&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot; display=&quot;block&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;msubsup&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mi&gt;c&lt;/mi&gt;&lt;mi mathvariant=&quot;sans-serif&quot;&gt;T&lt;/mi&gt;&lt;/msubsup&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;msubsup&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;t&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;r&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;u&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;e&lt;/mi&gt;&lt;/mrow&gt;&lt;mi mathvariant=&quot;sans-serif&quot;&gt;T&lt;/mi&gt;&lt;/msubsup&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;.&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;R_c^{\mathsf T}\mathbf k_W=R_{\mathrm{true}}^{\mathsf T}\mathbf k_W.&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;
+
+定义相对误差 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi&gt;E&lt;/mi&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mi&gt;c&lt;/mi&gt;&lt;/msub&gt;&lt;msubsup&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;t&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;r&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;u&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;e&lt;/mi&gt;&lt;/mrow&gt;&lt;mi mathvariant=&quot;sans-serif&quot;&gt;T&lt;/mi&gt;&lt;/msubsup&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;E=R_c R_{\mathrm{true}}^{\mathsf T}&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;。两边左乘 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mi&gt;c&lt;/mi&gt;&lt;/msub&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;R_c&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;，可得：
+
+&lt;span class=&quot;tg-math-block&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot; display=&quot;block&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mi&gt;c&lt;/mi&gt;&lt;/msub&gt;&lt;msubsup&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;t&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;r&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;u&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;e&lt;/mi&gt;&lt;/mrow&gt;&lt;mi mathvariant=&quot;sans-serif&quot;&gt;T&lt;/mi&gt;&lt;/msubsup&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mi&gt;E&lt;/mi&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;.&lt;/mi&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\mathbf k_W=R_c R_{\mathrm{true}}^{\mathsf T}\mathbf k_W=E\mathbf k_W.&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;
+
+&lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;mi&gt;E&lt;/mi&gt;&lt;mo&gt;∈&lt;/mo&gt;&lt;mi&gt;S&lt;/mi&gt;&lt;mi&gt;O&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;(&lt;/mo&gt;&lt;mn&gt;3&lt;/mn&gt;&lt;mo stretchy=&quot;false&quot;&gt;)&lt;/mo&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;E\in SO(3)&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; 又保持 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\mathbf k_W&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; 不变，因此它是绕 &lt;span class=&quot;tg-math-inline&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\mathbf k_W&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt; 的旋转：
+
+&lt;span class=&quot;tg-math-block&quot;&gt;&lt;span class=&quot;katex&quot;&gt;&lt;math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot; display=&quot;block&quot;&gt;&lt;semantics&gt;&lt;mrow&gt;&lt;menclose notation=&quot;box&quot;&gt;&lt;mstyle scriptlevel=&quot;0&quot; displaystyle=&quot;false&quot;&gt;&lt;mstyle scriptlevel=&quot;0&quot; displaystyle=&quot;false&quot;&gt;&lt;mstyle scriptlevel=&quot;0&quot; displaystyle=&quot;true&quot;&gt;&lt;mrow&gt;&lt;mi&gt;E&lt;/mi&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;Exp&lt;/mi&gt;&lt;mo&gt;⁡&lt;/mo&gt;&lt;mo stretchy=&quot;false&quot;&gt;(&lt;/mo&gt;&lt;mi&gt;ψ&lt;/mi&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;mo stretchy=&quot;false&quot;&gt;)&lt;/mo&gt;&lt;mo separator=&quot;true&quot;&gt;,&lt;/mo&gt;&lt;mspace width=&quot;2em&quot;/&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mi&gt;c&lt;/mi&gt;&lt;/msub&gt;&lt;mo&gt;=&lt;/mo&gt;&lt;mi&gt;H&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;(&lt;/mo&gt;&lt;msub&gt;&lt;mi mathvariant=&quot;bold&quot;&gt;k&lt;/mi&gt;&lt;mi&gt;W&lt;/mi&gt;&lt;/msub&gt;&lt;mo separator=&quot;true&quot;&gt;,&lt;/mo&gt;&lt;mi&gt;ψ&lt;/mi&gt;&lt;mo stretchy=&quot;false&quot;&gt;)&lt;/mo&gt;&lt;msub&gt;&lt;mi&gt;R&lt;/mi&gt;&lt;mrow&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;t&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;r&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;u&lt;/mi&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;e&lt;/mi&gt;&lt;/mrow&gt;&lt;/msub&gt;&lt;mi mathvariant=&quot;normal&quot;&gt;.&lt;/mi&gt;&lt;/mrow&gt;&lt;/mstyle&gt;&lt;/mstyle&gt;&lt;/mstyle&gt;&lt;/menclose&gt;&lt;/mrow&gt;&lt;annotation encoding=&quot;application/x-tex&quot;&gt;\boxed{E=\operatorname{Exp}(\psi\mathbf k_W),\qquad
+R_c=H(\mathbf k_W,\psi)R_{\mathrm{true}}.}&lt;/annotation&gt;&lt;/semantics&gt;&lt;/math&gt;&lt;/span&gt;&lt;/span&gt;
+
+```callout warn 这是一条有条件的结论
+“仅剩绕重力转动”要求理想重力观测，且倾斜已完全对齐。实际噪声、动态加速度和有限反馈增益会留下倾斜残差。$\mathbf k_W$ 在 $t_0$ 建立的是软件坐标中的参考方向，不能据此宣称初始绝对姿态已知。
+```
+
+一个向量给出两个独立约束，无法确定三自由度姿态。即使重力方向误差为零，航向误差也可以很大。这正是下一讲引入相机方向观测的原因；本页尚未演示相机标定。
+
+## F 文档和代码依据
+
+- 数学文档：`docs/GYRO_GRAVITY_TILT_MATH.md`，第 3–7、10 节。
+- 滤波实现：`wt901_viz/so3_filter.py`，`AdaptiveTiltFilter.update()`。
+- 时间和人体姿态入口：`OptUSBProj-ubuntu/optusbproj_ubuntu/pose.py`。
+
+本页只解释第一步。后续可分别扩展：重力不可观测性的完整证明、相机换基共轭、相机标定与航向补偿。
+</textarea>
+<script>
+(() => {
+  const root = document.documentElement;
+  const cycle = (list, cur) => list[(list.indexOf(cur) + 1) % list.length];
+  const label = (btn, value) => {
+    const map = JSON.parse(btn.dataset.labels || '{}');
+    btn.textContent = map[value] || value;
+  };
+  const bind = (name, attr, values) => {
+    const btn = document.querySelector(`[data-am="${name}"]`);
+    if (!btn) return;
+    label(btn, root.getAttribute(attr));
+    btn.addEventListener('click', () => {
+      const next = cycle(values, root.getAttribute(attr));
+      root.setAttribute(attr, next);
+      label(btn, next);
+    });
+  };
+  bind('theme', 'data-theme', ['blueprint', 'shadcn']);
+  bind('mode', 'data-mode', ['auto', 'light', 'dark']);
+
+  const copyBtn = document.querySelector('[data-am="copy"]');
+  copyBtn?.addEventListener('click', async () => {
+    const nodes = document.querySelectorAll('#am-source');
+    const text = nodes[nodes.length - 1]?.value ?? '';
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = Object.assign(document.createElement('textarea'), { value: text });
+      document.body.append(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    const original = copyBtn.textContent;
+    copyBtn.textContent = copyBtn.dataset.done;
+    setTimeout(() => { copyBtn.textContent = original; }, 1400);
+  });
+})();
+(() => {
+// Pure planner for justified ("photo wall") rows on sheet pages. No DOM access.
+//
+// This file must stay inlinable into the page script: top-level declarations only, no imports, and the exports are
+// `planLayout` and the constants the DOM adapter shares (STEP, MAX_SCALE, MIN_SCALE). The page build strips the `export ` keyword,
+// and test/layout-plan.test.js checks that this still works.
+//
+// planLayout({ width, gap, cols, panels }) -> { rows: [{ columns: [{ panels: [index, ...], width }], height }] }
+//
+// Input (all lengths in px):
+//   width   container width
+//   gap     space between columns, and between two panels stacked in one column
+//   cols    most columns in one row (the planner never uses more than MAX_COLUMNS, but spans stay shares of `cols`)
+//   panels  one entry per panel, in reading order:
+//     samples   [{ w, h }] panel height at sampled widths, ascending by w (heights between samples are interpolated)
+//     minWidth  narrowest feasible width (clamped to `width`)
+//     maxWidth  widest useful width; beyond it the panel only gains empty space (default: no limit)
+//     natural   natural diagram width for a diagram-only panel (default: none)
+//     pad       panel width not used by the diagram (padding and border; default 0)
+//     span      the author's width hint in grid columns (default 1); span >= cols keeps the panel alone in its row
+//
+// Output: { rows, maxScale }. Rows are in reading order; a row is a list of columns (at most `cols`); a column holds one panel or two
+// consecutive panels, stacked. For integer inputs the column widths plus the gaps between them equal `width`.
+// Rows are chosen by dynamic programming over break points; widths by a search in STEP px steps. Cost per row:
+//   H = tallest column; waste = sum((H - columnHeight) * columnWidth) + sum over diagrams wider than maxWidth of (w - maxWidth) * h
+//   dev = sum(((w - preferred) / oneColumn)^2) + SCALE_WEIGHT * sum over diagrams of (ln(scale) / ln(MAX_SCALE))^2
+//   cost = waste / 1000 + PREF_WEIGHT * dev * H
+// Scale band: diagrams on one page stay at similar sizes. With the result's `maxScale` as the diagram size limit, a diagram is
+// shown at scale min(maxScale, (width - pad) / natural). The planner tries a few bands [lo, lo * BAND_RATIO] (lo in BAND_LOS) and
+// keeps the cheapest plan in which no diagram is narrower than scale lo and none is shown above the band's top, so the largest and
+// smallest diagram scale on the page differ by at most BAND_RATIO. A panel wider than its diagram's top size keeps the diagram at
+// that size, and the page script must set the diagram's max-width to natural * maxScale. The band starts no higher than the
+// largest scale the page allows the least roomy diagram, so one wide diagram lowers the band for the others.
+// If no band is feasible the plan is made without a band (maxScale = MAX_SCALE); if no plan fits (or the input is unusable) the
+// result is a single column: one panel per row at the full width.
+
+const STEP = 10;
+const MAX_SCALE = 1.25;
+const MIN_SCALE = 0.75; // the narrowest a diagram is shown, as a share of its natural width
+const MAX_COLUMNS = 6; // rows with more columns are unreadable, and the search grows steeply with the column count
+const BAND_RATIO = 1.25; // the largest and smallest diagram scale on a page differ by at most this
+const BAND_LOS = [MIN_SCALE, 0.85, 0.95, 1]; // lower ends tried for the band; lo * BAND_RATIO is the upper end (1.25 means no upper limit)
+const SCALE_WEIGHT = 3;
+const PREF_WEIGHT = 0.15;
+
+function heightAt(samples, w) {
+  const i = samples.findIndex((s) => s.w >= w);
+  if (i === -1) return samples[samples.length - 1].h;
+  if (i === 0) return samples[0].h;
+  const a = samples[i - 1];
+  const b = samples[i];
+  return a.h + ((b.h - a.h) * (w - a.w)) / (b.w - a.w);
+}
+
+// Every way to split `len` consecutive panels into columns of 1 or 2 panels, as lists of column sizes.
+function splits(len) {
+  if (len === 0) return [[]];
+  return [1, 2].filter((k) => k <= len).flatMap((k) => splits(len - k).map((rest) => [k, ...rest]));
+}
+
+function singleColumn(width, panels) {
+  return { rows: panels.map((_, i) => ({ columns: [{ panels: [i], width }], height: 0 })) };
+}
+
+function planLayout({ width, gap = 0, cols = 3, panels }) {
+  const usable = Number.isFinite(width) && width > 0 && panels.every((p) => Array.isArray(p.samples) && p.samples.length > 0);
+  if (!usable) return singleColumn(width, panels);
+
+  // `cols` stays the unit of the author's spans; no row gets more than MAX_COLUMNS columns however large `cols` is.
+  const maxColumns = Math.min(cols, MAX_COLUMNS);
+  const oneColumn = Math.max(1, (width - gap * (cols - 1)) / cols);
+  // Per-panel limits. With a band [lo, lo * BAND_RATIO], a diagram is no narrower than scale lo and shown at most at the top of the
+  // band: a wider panel keeps it at that size and gains empty space, which the cost counts as waste.
+  const prepare = (lo) => panels.map((p) => {
+    const pad = p.pad ?? 0;
+    const diagram = lo > 0 && p.natural > 0;
+    const scaleCap = diagram ? Math.min(MAX_SCALE, lo * BAND_RATIO) : MAX_SCALE;
+    return {
+      ...p,
+      minWidth: Math.min(width, Math.max(Math.ceil(p.minWidth || 0), diagram ? Math.ceil(p.natural * lo + pad) : 0)),
+      maxWidth: Math.min(p.maxWidth ?? Infinity, diagram ? p.natural * scaleCap + pad : Infinity),
+      scaleCap,
+      pad,
+      preferred: Math.min(width, (p.span ?? 1) * oneColumn + ((p.span ?? 1) - 1) * gap),
+      alone: (p.span ?? 1) >= cols,
+    };
+  });
+  let info = prepare(0);
+  // Beyond its maxWidth a panel only gains empty space, so its height stops changing there (matters when a band lowers maxWidth).
+  const heightOf = (p, w) => heightAt(p.samples, Math.min(w, p.maxWidth));
+  const columnHeight = (col, w) => col.reduce((h, k) => h + heightOf(info[k], w), 0) + gap * (col.length - 1);
+
+  function bestColumns(columns) {
+    const avail = width - gap * (columns.length - 1);
+    const mins = columns.map((c) => Math.max(...c.map((k) => info[k].minWidth)));
+    const minsFrom = mins.map((_, n) => mins.slice(n).reduce((s, w) => s + w, 0));
+    if (minsFrom[0] > avail) return null;
+    let best = null;
+    const evaluate = (ws) => {
+      const hs = ws.map((w, n) => columnHeight(columns[n], w));
+      const H = Math.max(...hs);
+      let waste = 0;
+      let dev = 0;
+      ws.forEach((w, n) => {
+        waste += (H - hs[n]) * w;
+        for (const k of columns[n]) {
+          const p = info[k];
+          if (w > p.maxWidth) waste += (w - p.maxWidth) * heightOf(p, w);
+          dev += ((w - p.preferred) / oneColumn) ** 2;
+          if (p.natural > 0) {
+            const scale = Math.min(p.scaleCap, Math.max(w - p.pad, 1) / p.natural);
+            dev += SCALE_WEIGHT * (Math.log(scale) / Math.log(MAX_SCALE)) ** 2;
+          }
+        }
+      });
+      const cost = waste / 1000 + PREF_WEIGHT * dev * H;
+      if (!best || cost < best.cost) best = { cost, ws, height: H, columns };
+    };
+    const choose = (n, used, ws) => {
+      if (n === columns.length - 1) {
+        const w = avail - used;
+        if (w >= mins[n]) evaluate([...ws, w]);
+        return;
+      }
+      for (let w = mins[n]; used + w + minsFrom[n + 1] <= avail; w += STEP) choose(n + 1, used + w, [...ws, w]);
+    };
+    choose(0, 0, []);
+    return best;
+  }
+
+  // Best columns for one row of panels i..j.
+  function bestRow(i, j) {
+    if (j > i && info.slice(i, j + 1).some((p) => p.alone)) return null;
+    let best = null;
+    for (const split of splits(j - i + 1)) {
+      if (split.length > maxColumns) continue;
+      let next = i;
+      const columns = split.map((size) => Array.from({ length: size }, () => next++));
+      const r = bestColumns(columns);
+      if (r && (!best || r.cost < best.cost)) best = r;
+    }
+    return best;
+  }
+
+  // Row breaks in reading order, for the band set up in `info`. A row holds at most 2 * maxColumns panels. Null if nothing fits.
+  function solve() {
+    const n = panels.length;
+    const total = Array(n + 1).fill(Infinity);
+    const from = Array(n + 1).fill(-1);
+    const chosen = Array(n + 1).fill(null);
+    total[0] = 0;
+    for (let j = 1; j <= n; j++) {
+      for (let i = Math.max(0, j - 2 * maxColumns); i < j; i++) {
+        if (total[i] === Infinity) continue;
+        const r = bestRow(i, j - 1);
+        if (r && total[i] + r.cost < total[j]) {
+          total[j] = total[i] + r.cost;
+          from[j] = i;
+          chosen[j] = r;
+        }
+      }
+    }
+    if (total[n] === Infinity) return null;
+    const rows = [];
+    for (let j = n; j > 0; j = from[j]) {
+      const r = chosen[j];
+      rows.unshift({ columns: r.columns.map((panelsInColumn, c) => ({ panels: panelsInColumn, width: r.ws[c] })), height: r.height });
+    }
+    return { rows, cost: total[n] };
+  }
+
+  let best = null;
+  const diagrams = panels.filter((p) => p.natural > 0);
+  if (diagrams.length > 1) {
+    // No diagram can be shown larger than the page allows, so the band cannot start above the smallest of those limits.
+    const reach = Math.min(...diagrams.map((p) => Math.min(MAX_SCALE, Math.max(width - (p.pad ?? 0), 1) / p.natural)));
+    for (const lo of new Set([...BAND_LOS.filter((x) => x < reach), reach])) {
+      info = prepare(lo);
+      const r = solve();
+      if (r && (!best || r.cost < best.cost)) best = { ...r, maxScale: Math.min(MAX_SCALE, lo * BAND_RATIO) };
+    }
+    info = prepare(0);
+  }
+  best ??= solve();
+  return best ? { rows: best.rows, maxScale: best.maxScale ?? MAX_SCALE } : singleColumn(width, panels);
+}
+
+// DOM adapter for the sheet's justified ("photo wall") layout. Not a module: compose.js puts it after src/runtime/layout-plan.js
+// (which defines planLayout and the shared STEP, MAX_SCALE, MIN_SCALE) inside one function scope of the page script.
+//
+// It measures every panel at sampled widths, asks planLayout for rows and column widths, and applies them with flexbox.
+// The rendered HTML keeps the plain CSS grid: with JavaScript off, at the single-column breakpoint, or while printing, the grid is what
+// shows (the planned widths belong to the screen width, so print never gets a mix of the two); after printing the layout comes back.
+
+const grid = document.querySelector('.am-grid');
+const panels = grid ? [...grid.children].filter((el) => el.classList.contains('am-panel')) : [];
+
+if (panels.length > 1) {
+  const SINGLE_COLUMN = '(max-width: 760px)'; // the single-column breakpoint in src/themes/base.css
+  const TWO_COLUMNS = '(max-width: 1100px)'; // below this the CSS grid has two columns
+  const SAMPLE_STEP = 20; // width sampling step, px; the planner interpolates between samples
+  const TEXT_MIN = 260; // text keeps at least about 16 CJK characters per line
+  const TABLE_COL_MIN = 96; // per table column, px
+  const DIAGRAM_MIN = 160;
+  const RESIZE_DELAY = 150;
+  const OVERFLOWING = '.am-table-wrap, .am-diagram, .am-annot-scroll, pre';
+
+  const original = new Map([grid, ...panels, ...grid.querySelectorAll('.am-diagram > svg')].map((el) => [el, el.getAttribute('style')]));
+  const restoreStyle = (el) => (original.get(el) === null ? el.removeAttribute('style') : el.setAttribute('style', original.get(el)));
+
+  // Back to the plain grid markup and styles.
+  const restore = () => {
+    for (const box of grid.querySelectorAll(':scope > .am-col')) box.replaceWith(...box.children);
+    for (const el of original.keys()) restoreStyle(el);
+  };
+
+  // The author's width hint, rendered as data-span only when the author wrote one. The inline grid-column is the no-JavaScript fallback
+  // and may hold spans the server added, so it is never read here.
+  const spanHint = (el) => Number(el.dataset.span) || 1;
+  const diagramOnly = (el) => {
+    const body = el.querySelector(':scope > .am-panel-body');
+    return body && body.children.length === 1 ? body.querySelector(':scope > .am-diagram > svg') : null;
+  };
+  const naturalWidth = (svg) => Number(svg.getAttribute('width')) || 0;
+
+  // Height (and, for panels with tables or code, the narrowest width without sideways scrolling) at sampled widths.
+  // Only one panel is displayed while it is measured, so each width change lays out that panel alone.
+  function measure(width) {
+    grid.style.display = 'block';
+    for (const el of panels) {
+      el.style.display = 'none';
+      el.style.boxSizing = 'border-box';
+      for (const svg of el.querySelectorAll('.am-diagram > svg')) {
+        svg.style.width = '100%';
+        svg.style.maxWidth = `${naturalWidth(svg) * MAX_SCALE}px`;
+      }
+    }
+    const info = panels.map((el) => {
+      const svg = diagramOnly(el);
+      const svgs = [...el.querySelectorAll('.am-diagram > svg')];
+      const scrollers = el.querySelectorAll(OVERFLOWING);
+      const tableCols = Math.max(0, ...[...el.querySelectorAll('table tr:first-child')].map((tr) => tr.children.length));
+      el.style.display = '';
+      el.style.width = `${width}px`;
+      const pad = svg ? el.offsetWidth - svg.parentElement.clientWidth : 0;
+      const natural = svg ? naturalWidth(svg) : 0;
+      const shrunk = Math.max(0, ...svgs.map((s) => naturalWidth(s) * MIN_SCALE)) + (svg ? pad : 34);
+      const floor = svg ? Math.max(DIAGRAM_MIN, natural * MIN_SCALE + pad) : Math.max(TEXT_MIN, shrunk, tableCols * TABLE_COL_MIN + 34);
+      const from = Math.min(width, Math.floor(floor / STEP) * STEP);
+      const samples = [];
+      let fits = null;
+      for (let w = from; ; w += SAMPLE_STEP) {
+        w = Math.min(w, width);
+        el.style.width = `${w}px`;
+        if (fits === null && !svg && scrollers.length && ![...scrollers].some((s) => s.scrollWidth > s.clientWidth + 1)) fits = w;
+        samples.push({ w, h: el.offsetHeight });
+        if (w === width) break;
+      }
+      el.style.display = 'none';
+      return {
+        samples,
+        minWidth: svg ? floor : Math.max(floor, fits ?? (scrollers.length ? width : 0)),
+        maxWidth: svg ? natural * MAX_SCALE + pad : Infinity,
+        natural,
+        pad,
+        span: spanHint(el),
+      };
+    });
+    for (const el of panels) {
+      el.style.display = '';
+      el.style.width = '';
+    }
+    return info;
+  }
+
+  // Each column gets a fixed width. A row adds up to the full width, so flex-wrap breaks rows by itself.
+  // Stacked panels go into a column wrapper whose last panel absorbs the extra height.
+  function apply(plan, gap) {
+    grid.style.display = 'flex';
+    grid.style.flexWrap = 'wrap';
+    grid.style.alignItems = 'stretch';
+    grid.style.gap = `${gap}px`;
+    for (const el of panels) {
+      el.style.gridColumn = '';
+      el.style.gridRow = '';
+      el.style.flex = '0 0 auto';
+    }
+    for (const row of plan.rows) {
+      for (const col of row.columns) {
+        const width = `${col.width}px`;
+        if (col.panels.length === 1) {
+          panels[col.panels[0]].style.width = width;
+          continue;
+        }
+        const box = document.createElement('div');
+        box.className = 'am-col';
+        box.style.cssText = `width:${width};flex:0 0 auto;display:flex;flex-direction:column;gap:${gap}px`;
+        panels[col.panels[0]].before(box);
+        for (const k of col.panels) {
+          panels[k].style.width = '';
+          box.append(panels[k]);
+        }
+        panels[col.panels[col.panels.length - 1]].style.flex = '1 1 auto';
+      }
+    }
+  }
+
+  // Diagram-only panels show their diagram at most at the top of the page's scale band; a wider panel gains empty space instead.
+  function capDiagrams(maxScale) {
+    for (const el of panels) {
+      const svg = diagramOnly(el);
+      if (svg) svg.style.maxWidth = `${naturalWidth(svg) * maxScale}px`;
+    }
+  }
+
+  const containerWidth = () => Math.floor(grid.getBoundingClientRect().width);
+
+  function justify() {
+    if (printing || printQuery.matches) return;
+    try {
+      // A vertical scrollbar can appear or vanish once the rows change height; plan again if the width moved.
+      let planned = -1;
+      for (let pass = 0; pass < 3 && planned !== containerWidth(); pass++) {
+        restore();
+        if (matchMedia(SINGLE_COLUMN).matches) return;
+        planned = containerWidth();
+        const gap = parseFloat(getComputedStyle(grid).columnGap) || 0;
+        const cols = Math.max(1, Number(getComputedStyle(grid).getPropertyValue('--cols')) || 3);
+        const plan = planLayout({ width: planned, gap, cols: matchMedia(TWO_COLUMNS).matches ? Math.min(cols, 2) : cols, panels: measure(planned) });
+        apply(plan, gap);
+        capDiagrams(plan.maxScale);
+      }
+      // The width never settled: columns planned for another width would overflow or leave gaps, so show the plain grid.
+      if (planned !== containerWidth()) restore();
+    } catch {
+      restore();
+    }
+  }
+
+  // Printing: back to the plain grid (spans and all), and the layout again afterwards. Browsers disagree on which of the
+  // `beforeprint` event and the print media query change fires first, or at all, so listen to both; both are idempotent.
+  // While `printing` is set (beforeprint to afterprint) justify() does nothing, so a late resize cannot bring flex widths into the print layout.
+  let printing = false;
+  const printQuery = matchMedia('print');
+  let timer = 0;
+  const later = () => {
+    clearTimeout(timer);
+    timer = setTimeout(justify, RESIZE_DELAY);
+  };
+  const toPrint = () => {
+    clearTimeout(timer);
+    restore();
+  };
+  justify();
+  addEventListener('resize', later);
+  addEventListener('beforeprint', () => {
+    printing = true;
+    toPrint();
+  });
+  addEventListener('afterprint', () => {
+    printing = false;
+    later();
+  });
+  printQuery.addEventListener('change', (e) => (e.matches ? toPrint() : later()));
+  // Late changes to panel heights: web fonts arriving, and images inside the grid finishing their load (load does not bubble, so capture it).
+  document.fonts?.ready.then(later);
+  grid.addEventListener('load', later, true);
+  // Switching theme changes paddings and fonts, hence panel heights.
+  document.querySelector('[data-am="theme"]')?.addEventListener('click', later);
+}
+})();
+</script>
+</body>
+</html>
