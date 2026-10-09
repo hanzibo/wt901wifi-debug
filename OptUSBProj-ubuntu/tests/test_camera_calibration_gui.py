@@ -129,6 +129,19 @@ class GuideTests(unittest.TestCase):
         self.assertEqual(steps[-2][0],'validation')
         self.assertIn('forward_repeat',[s[0] for s in steps])
 
+    def test_zero_validation_omits_window_but_retains_checks_and_tail(self):
+        steps=calibration_steps(4,4,5,0,'bilateral')
+        keys=[s[0] for s in steps]
+        self.assertNotIn('validation',keys)
+        for key in ('forward_repeat','lateral_repeat','neutral_return','tail'):
+            self.assertIn(key,keys)
+        with TemporaryDirectory() as folder:
+            owner=Owner(Path(folder)/'record',[100.]);dialog=CameraCalibrationDialog(owner)
+            self.assertEqual(dialog.validation.minimum(),0)
+            dialog.validation.setValue(0)
+            self.assertNotIn('validation',[s[0] for s in dialog.capture_steps()])
+            dialog.close();owner.close()
+
     def test_live_feedback_counts_only_unique_synced_hold_frames(self):
         with TemporaryDirectory() as folder:
             clock=[100.];owner=Owner(Path(folder)/'record',clock);dialog=CameraCalibrationDialog(owner)

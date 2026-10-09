@@ -30,6 +30,8 @@ def calibration_steps(preparation, hold, neutral, validation, scope='right'):
         ('validation','独立验证','重复前举、侧举、屈肘、轻微转身；水平/斜向姿态停留2–3秒。',0,validation),
         ('tail','结束保护','动作已完成，请保持静止，等待自动结束。末尾3秒会剔除。',0,4),
     ]
+    if validation == 0:
+        steps = [step for step in steps if step[0] != 'validation']
     arm = {'right': '右臂', 'left': '左臂', 'bilateral': '双臂'}[scope]
     result = [(key, title.replace('右臂', arm), instruction.replace('右臂', arm), prep, duration)
               for key, title, instruction, prep, duration in steps]
@@ -68,7 +70,8 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
         self.preparation=self.spin(form,'每个动作准备时间',2,30,4)
         self.hold=self.spin(form,'每个动作静止保持',3,20,4)
         self.neutral=self.spin(form,'中立位静止保持',5,30,8)
-        self.validation=self.spin(form,'独立验证录制时长',10,600,90)
+        self.validation=self.spin(form,'独立验证录制时长',0,600,90)
+        self.validation.setToolTip('0 秒跳过独立自由动作验证；重复举臂和回中立位检查仍保留。')
         layout.addLayout(form)
         self.auto_analyze=QtWidgets.QCheckBox('完成后自动计算离线标定与融合对比（不应用到实时模型）')
         self.auto_analyze.setChecked(True);layout.addWidget(self.auto_analyze)
@@ -104,6 +107,8 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
         steps=self.capture_steps()
         total=sum(s[3]+s[4] for s in steps)
         self.plan.setText('流程：'+' → '.join(s[1] for s in steps)+f'。录制约 {total} 秒，另有开始前 {self.delay.value()} 秒倒计时。')
+        if self.validation.value() == 0:
+            self.plan.setText(self.plan.text()+' 独立自由动作验证已跳过；重复动作和回中立复测仍保留。')
         if hasattr(self,'instruction') and self.state=='idle':
             arm={'right':'右臂','left':'左臂','bilateral':'双臂'}[self.scope_combo.currentData()]
             self.instruction.setText(f'先启动 Gemini 和三维观测，确认{arm}上臂、前臂设备在线且均选择陀螺＋加计。')

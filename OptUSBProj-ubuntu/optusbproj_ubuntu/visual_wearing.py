@@ -271,6 +271,7 @@ def analyze_wearing(session: Path, *, prior_weight=None, context=None):
     context.check_session(session)
     manifest = context.manifest
     guide = context.guide
+    validation_skipped = guide.get('settings', {}).get('validation_s') == 0
     from .calibration_options import capture_prior_weight
     prior_weight = capture_prior_weight(guide, prior_weight)
     if manifest.get('error') or not manifest.get('camera_epoch'):
@@ -306,6 +307,7 @@ def analyze_wearing(session: Path, *, prior_weight=None, context=None):
               'acceptance_revision': 2, 'participants': participants,
               'capture_scope': guide.get('capture_scope', 'legacy_right'),
               'train_steps': list(TRAIN_STEPS), 'check_steps': list(CHECK_STEPS),
+              'free_validation_skipped': validation_skipped,
               'windows_ns': {name: list(win) for name, win in windows.items()},
               'measurement_note': 'RGB-D surface directions, not joint-centre GT; no axial twist validation',
               'neutral_policy': 'shortest per-segment neutral normalization to model -Z',
@@ -381,7 +383,9 @@ def analyze_wearing(session: Path, *, prior_weight=None, context=None):
                 metrics = checks[step]
                 if metrics['median_deg'] >= 12 or metrics['p90_deg'] >= 25:
                     warnings.append(f"{step} 独立方向复测未通过")
-            if checks['validation'] is None or checks['validation']['frames'] < 10:
+            if validation_skipped:
+                notes.append('独立自由动作验证已按设置跳过（0秒）；重复动作和回中立复测仍执行')
+            elif checks['validation'] is None or checks['validation']['frames'] < 10:
                 warnings.append("独立自由动作至少需要10帧可信观测")
             elif checks['validation']['median_deg'] >= 15 or checks['validation']['p90_deg'] >= 30:
                 warnings.append("独立自由动作方向误差过大")

@@ -123,6 +123,31 @@ def fixture(path, *, corrupt_repeat=False, bilateral=False, corrupt_left_repeat=
 
 
 class VisualWearingTests(unittest.TestCase):
+    def test_zero_validation_is_explicit_skip_not_automatic_pass_for_missing_data(self):
+        with TemporaryDirectory() as folder:
+            path=Path(folder);fixture(path)
+            guide=json.loads((path/'camera_guide.json').read_text())
+            guide['events']=[e for e in guide['events'] if e['step']!='validation']
+            (path/'camera_guide.json').write_text(json.dumps(guide))
+            missing=analyze_wearing(path)
+            self.assertTrue(any('至少需要10帧' in w for w in missing['parts']['right_upper_arm']['warnings']))
+            guide['settings']={'validation_s':0}
+            (path/'camera_guide.json').write_text(json.dumps(guide))
+            skipped=analyze_wearing(path)
+            self.assertTrue(skipped['free_validation_skipped'])
+            for result in skipped['parts'].values():
+                self.assertEqual(result['status'],PASS,result['warnings'])
+                self.assertIsNone(result['checks']['validation'])
+                self.assertTrue(any('跳过' in n for n in result['notes']))
+            fixture(path,corrupt_repeat=True)
+            guide=json.loads((path/'camera_guide.json').read_text())
+            guide['events']=[e for e in guide['events'] if e['step']!='validation']
+            guide['settings']={'validation_s':0}
+            (path/'camera_guide.json').write_text(json.dumps(guide))
+            failed=analyze_wearing(path)
+            self.assertTrue(any('独立方向复测未通过' in w
+                                for w in failed['parts']['right_upper_arm']['warnings']))
+
     def test_bilateral_independent_bases_and_left_side_sign(self):
         with TemporaryDirectory() as folder:
             path = Path(folder); fixture(path, bilateral=True)
