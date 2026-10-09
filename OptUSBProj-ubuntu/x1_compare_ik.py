@@ -1,4 +1,4 @@
-"""Replay one v2 X1 diagnostic target trace through all four IK combinations."""
+"""Replay one v2/v3 X1 diagnostic target trace through four IK combinations."""
 from __future__ import annotations
 import argparse
 import csv
@@ -23,8 +23,8 @@ def matrix(row, prefix, size):
 
 def compare(session, output, urdf=DEFAULT_URDF):
     manifest = json.loads((session / "manifest.json").read_text())
-    if manifest.get("format") != "x1-live-diagnostic-v2":
-        raise ValueError("需新版 v2 诊断记录，旧记录缺少统一完整位姿目标；请启用双手后录制")
+    if manifest.get("format") not in ("x1-live-diagnostic-v2", "x1-live-diagnostic-v3"):
+        raise ValueError("需 v2/v3 诊断记录，旧记录缺少统一完整位姿目标；请启用双手后录制")
     if manifest["urdf_sha256"] != hashlib.sha256(urdf.read_bytes()).hexdigest():
         raise ValueError("URDF 与录制时不一致，不能公平比较")
     with (session / "frames.csv").open() as file:

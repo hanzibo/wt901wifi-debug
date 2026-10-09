@@ -11,6 +11,7 @@ import signal
 import socket
 import sys
 import time
+from uuid import uuid4
 from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -45,6 +46,12 @@ class X1PreviewDialog(QtWidgets.QDialog):
         self.gripper_socket.bind(('127.0.0.1', 0))
         self.gripper_socket.setblocking(False)
         self.gripper_feedback_at = 0.
+        self._policy_id = None
+        self._policy_ack = False
+        self._policy_started = 0.
+        self._policy_error = None
+        self._safety = None
+        self._bridge_has_safety = None
         outer = QtWidgets.QVBoxLayout(self)
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
@@ -126,6 +133,15 @@ class X1PreviewDialog(QtWidgets.QDialog):
         self.precise_pose = QtWidgets.QCheckBox("优先精确末端位姿（不约束肘部模仿）")
         self.precise_pose.toggled.connect(self._refresh_readiness)
         layout.addWidget(self.precise_pose)
+        self.collision_protection = QtWidgets.QCheckBox('启用自碰撞检测与拦截（实验）')
+        self.collision_protection.setToolTip(
+            '默认关闭。启用后在 ROS 最终合并双臂和夹爪之后检查完整构型及运动区间；'
+            '危险、超时或未知构型保持最后安全角度。仅 RViz 自碰撞实验，不是硬件安全保证。'
+            '停止双臂和夹爪输入后切换；其他 JointState 发布器会绕过本桥。')
+        layout.addWidget(self.collision_protection)
+        self.collision_status = QtWidgets.QLabel('防碰撞：关闭（保留原预览限位和限速）')
+        self.collision_status.setWordWrap(True)
+        layout.addWidget(self.collision_status)
         mode_note = QtWidgets.QLabel(
             "默认保留动作模仿。完整位姿模式需要两侧手背在线；末端定义为 L6/R56，"
             "不是夹爪尖端。不直接指定腕关节角，允许肘部与人体不同；"
@@ -191,6 +207,10 @@ class X1PreviewDialog(QtWidgets.QDialog):
 
     def _poll_gripper_status(self) -> None:
         try:
+            if self._policy_id is not None and not self._policy_ack:
+                config = dict(version=1, type='collision_config', request_id=self._policy_id,
+                    enabled=self.collision_protection.isChecked(), sent_mono_ns=time.monotonic_ns())
+                self.gripper_socket.sendto(json.dumps(config).encode(), ('127.0.0.1', 13991))
             query = dict(version=1, type='gripper_status_query', sent_mono_ns=time.monotonic_ns())
             self.gripper_socket.sendto(json.dumps(query).encode(), ('127.0.0.1', 13991))
             while True:
@@ -199,8 +219,19 @@ class X1PreviewDialog(QtWidgets.QDialog):
                 except BlockingIOError:
                     break
                 data = json.loads(raw)
-                if peer != ('127.0.0.1', 13991) or data.get('type') != 'gripper_status':
+                if peer != ('127.0.0.1', 13991):
                     continue
+                if data.get('type') == 'collision_config_ack':
+                    if data.get('request_id') == self._policy_id:
+                        self._policy_ack = True
+                        self._policy_error = data.get('error')
+                        self._safety = data.get('safety')
+                    continue
+                if data.get('type') != 'gripper_status':
+                    continue
+                self._bridge_has_safety = bool(data.get('safety', {}).get('supported'))
+                if data.get('safety', {}).get('configuration_id') == self._policy_id:
+                    self._safety = data['safety']
                 self.gripper_feedback_at = time.monotonic()
                 rows = []
                 for joint, label in (('7', '左'), ('57', '右')):
@@ -218,6 +249,70 @@ class X1PreviewDialog(QtWidgets.QDialog):
                 self.gripper_status_label.setText("手机夹爪：无 ROS 回报；接收进程未运行或版本较旧，请停止后重新启动")
         except (OSError, ValueError, KeyError, TypeError):
             self.gripper_status_label.setText("手机夹爪：ROS 状态读取失败")
+        self._show_collision_status()
+
+    def _begin_collision_policy(self) -> None:
+        self._policy_id = uuid4().hex
+        self._policy_ack = False
+        self._policy_error = None
+        self._policy_started = time.monotonic()
+        self._safety = None
+        self._bridge_has_safety = None
+        self.collision_protection.setEnabled(False)
+
+    def _show_collision_status(self) -> None:
+        if self._policy_error:
+            self.collision_status.setText('防碰撞设置失败：'+self._policy_error)
+            return
+        if self._safety is None:
+            self.collision_status.setText('防碰撞：等待 ROS 能力与配置回报' if self._policy_id else
+                                         '防碰撞：尚未配置；下次启动时应用复选框')
+            return
+        data = self._safety
+        result = data.get('result', {})
+        detail = ''
+        if result.get('pair'):
+            detail += ' · '+' ↔ '.join(result['pair'])
+        if result.get('distance_m') is not None:
+            distance = result['distance_m']
+            detail += (f" · 最近采样距离 {distance*1000:.2f} mm" if distance >= 0
+                       else ' · 检测几何相交（此值不是穿透深度）')
+        categories = dict(collision='几何相交', clearance='安全余量不足',
+                          timeout='超时未确认', unverified='路径未认证', invalid='无效配置')
+        if result.get('category') in categories:
+            detail += ' · 判定：'+categories[result['category']]
+        original = result.get('requested_result', {})
+        if original.get('category') and original.get('category') != result.get('category'):
+            detail += ' · 原目标：'+categories.get(original['category'], original.get('reason', ''))
+        if result.get('total_elapsed_ms', result.get('elapsed_ms')) is not None:
+            elapsed = result.get('total_elapsed_ms', result.get('elapsed_ms'))
+            detail += f" · 检查 {elapsed:.1f} ms"
+        if result.get('alpha', 1) < 1:
+            detail += f" · 本次步长 {result['alpha']*100:.1f}%"
+        self.collision_status.setText('防碰撞：'+data.get('state', '未知')+
+            (' · '+data['reason'] if data.get('reason') else '')+detail)
+
+    def _collision_ready(self) -> bool:
+        if self._policy_error:
+            raise ValueError(self._policy_error)
+        elapsed = time.monotonic()-self._policy_started
+        if not self._policy_ack:
+            if (not self.collision_protection.isChecked() and elapsed > 1 and
+                    self._bridge_has_safety is False):
+                # A legacy bridge has no safety feature; OFF remains compatible.
+                self._policy_ack = True
+                self.collision_status.setText('防碰撞：关闭（旧 ROS 桥无安全能力）')
+                return True
+            if elapsed > 18:
+                raise ValueError('ROS 桥未确认防碰撞能力；停止并升级/重启接收进程')
+            return False
+        if self._safety is None:
+            return not self.collision_protection.isChecked()
+        if self._safety.get('enabled') != self.collision_protection.isChecked():
+            raise ValueError('GUI 与 ROS 防碰撞开关不一致')
+        if self._safety.get('state') == '故障':
+            raise ValueError('防碰撞故障：'+self._safety.get('reason', '未知'))
+        return self._safety.get('state') != '初始化'
 
     def _preconditions(self) -> list[str]:
         reasons = readiness(self.host.engine,
@@ -257,6 +352,7 @@ class X1PreviewDialog(QtWidgets.QDialog):
                 scale_mode=self.scale_combo.currentData())
             self.sender = PreviewSender()
             self._start_ros_receiver()
+            self._begin_collision_policy()
             self.recorder = X1DiagnosticRecorder(RECORDINGS, self.retargeter, URDF)
         except (OSError, ValueError, KeyError) as exc:
             self._stop_ros_receiver()
@@ -302,6 +398,9 @@ class X1PreviewDialog(QtWidgets.QDialog):
         self.backend_combo.setEnabled(True)
         self.scale_combo.setEnabled(True)
         self.precise_pose.setEnabled(True)
+        self.collision_protection.setEnabled(True)
+        self._policy_id = None
+        self._policy_ack = False
         self.left_status.setText("左臂：未启动")
         self.right_status.setText("右臂：未启动")
         self.hand_status.setText("左手掌朝向：未启用")
@@ -311,8 +410,11 @@ class X1PreviewDialog(QtWidgets.QDialog):
         self._update_host_button()
 
     def _start_gripper_receiver(self) -> None:
+        if self._policy_id is not None:
+            return
         try:
             self._start_ros_receiver()
+            self._begin_collision_policy()
             self.ros_status.setText("ROS 接收已启动或复用；手机夹爪监听本机 UDP 13991")
             self.stop_button.setEnabled(True)
         except (OSError, ValueError) as exc:
@@ -345,7 +447,9 @@ class X1PreviewDialog(QtWidgets.QDialog):
                    "conda activate x1_ros2_py && "
                    f"source {shlex.quote(str(ROS_SETUP))} && "
                    "source install/setup.bash && "
-                   "exec python -u script_python/x1_imu_live.py")
+                   "exec python -u script_python/x1_imu_live.py --collision-python " +
+                   shlex.quote(str(conda_base / 'envs/OptUSBProj-yolo/bin/python')) +
+                   (' --collision-start-enabled' if self.collision_protection.isChecked() else ''))
         process = QtCore.QProcess(self)
         process.setWorkingDirectory(str(ROS_WORKSPACE))
         process.setProcessChannelMode(QtCore.QProcess.ProcessChannelMode.MergedChannels)
@@ -508,8 +612,20 @@ class X1PreviewDialog(QtWidgets.QDialog):
             self.stop("标定或设备参数窗口已打开，X1 预览已停止")
             return
         try:
+            if not self._collision_ready():
+                return
             tick_ns = time.monotonic_ns()
-            q, status = self.retargeter.step(now=tick_ns / 1e9)
+            self.sender.poll_ack()
+            if self.collision_protection.isChecked():
+                choices = [s for s in (self.sender.safety, self._safety) if s and
+                           s.get('configuration_id') == self._policy_id]
+                safety = max(choices, key=lambda s:s.get('revision', -1)) if choices else None
+                if (safety and safety.get('configuration_id') == self._policy_id and
+                        safety.get('accepted')):
+                    self.retargeter.accept_published(tuple(safety['accepted'][name]
+                        for name in ('1','2','3','4','5','6','51','52','53','54','55','56')))
+            q, status = self.retargeter.step(now=tick_ns / 1e9,
+                                           commit=not self.collision_protection.isChecked())
             self.sender.send(q)
             self.sender.poll_ack()
             if self.recorder is not None:
@@ -518,13 +634,15 @@ class X1PreviewDialog(QtWidgets.QDialog):
                     send_seq=self.sender.sequence,
                     ack_seq=self.sender.last_ack_seq,
                     ack_recv_mono_ns=self.sender.last_ros_recv_mono_ns,
-                    ros_subscribers=self.sender.subscribers)
+                    ros_subscribers=self.sender.subscribers,
+                    safety=safety if self.collision_protection.isChecked() else self._safety)
         except (OSError, ValueError, RuntimeError) as exc:
             self.stop(f"X1 预览已停止：{exc}")
             return
         for side, label in (("left", self.left_status), ("right", self.right_status)):
             state = status[side]
-            label.setText(f"{'左' if side == 'left' else '右'}臂：{state['state']}"
+            candidate_note = '（IK 候选，实际输出见防碰撞状态）' if self.collision_protection.isChecked() else ''
+            label.setText(f"{'左' if side == 'left' else '右'}臂{candidate_note}：{state['state']}"
                           f" · 数据延迟 {1000 * state['age_s']:.0f} ms"
                           f" · 腕点误差 {state['wrist_error_m'] * 100:.1f} cm")
             if state["world_orientation_error_deg"] is not None:

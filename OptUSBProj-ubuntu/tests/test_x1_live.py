@@ -510,7 +510,8 @@ class X1LiveTests(unittest.TestCase):
         host.x1_preview_button = QtWidgets.QPushButton()
         with tempfile.TemporaryDirectory() as directory, patch.object(
                 x1_live_gui, "RECORDINGS", Path(directory)), patch.object(
-                x1_live_gui.X1PreviewDialog, "_start_ros_receiver"):
+                x1_live_gui.X1PreviewDialog, "_start_ros_receiver"), patch.object(
+                x1_live_gui.X1PreviewDialog, '_collision_ready', return_value=True):
             dialog = x1_live_gui.X1PreviewDialog(host)
             self.assertTrue(dialog.launch_rviz_button.isEnabled())
             self.assertFalse(dialog.close_rviz_button.isEnabled())
@@ -565,7 +566,8 @@ class X1LiveTests(unittest.TestCase):
         host.x1_preview_button = QtWidgets.QPushButton()
         with tempfile.TemporaryDirectory() as directory, patch.object(
                 x1_live_gui, "RECORDINGS", Path(directory)), patch.object(
-                x1_live_gui.X1PreviewDialog, "_start_ros_receiver"):
+                x1_live_gui.X1PreviewDialog, "_start_ros_receiver"), patch.object(
+                x1_live_gui.X1PreviewDialog, '_collision_ready', return_value=True):
             dialog = x1_live_gui.X1PreviewDialog(host)
             dialog.follow_left_hand.setChecked(True)
             dialog.follow_right_hand.setChecked(both)

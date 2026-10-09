@@ -253,7 +253,15 @@ class LiveRetargeter:
         z /= np.linalg.norm(z)
         return np.column_stack((x, np.cross(z, x), z))
 
-    def step(self, *, now: float | None = None) -> tuple[tuple[float, ...], dict]:
+    def accept_published(self, positions) -> None:
+        """Synchronize IK start with the bridge's validated output, not ACK."""
+        values = np.asarray(positions, dtype=float)
+        if values.shape != (12,) or not np.isfinite(values).all():
+            raise ValueError('无效安全接受角度')
+        for i, side in enumerate(SIDES):
+            self.previous[side] = values[6*i:6*i+6].copy()
+
+    def step(self, *, now: float | None = None, commit: bool = True) -> tuple[tuple[float, ...], dict]:
         if self.calibration_changed():
             raise ValueError("设备分配、穿戴标定或中立位已改变；请停止并重新启动 X1 预览")
         moment = time.monotonic() if now is None else now
@@ -332,7 +340,8 @@ class LiveRetargeter:
                 fit_wrist_error = error
                 if success and (error <= 0.08 or self.task_mode == "pose"):
                     q = fitted
-                    self.previous[side] = q
+                    if commit:
+                        self.previous[side] = q
                     state = "跟随"
                 else:
                     q = self.previous[side]
@@ -398,6 +407,8 @@ class PreviewSender:
         self.last_ack_seq: int | None = None
         self.last_ros_recv_mono_ns: int | None = None
         self.subscribers = 0
+        self.safety = None
+        self.safety_revision = -1
 
     def send(self, positions: tuple[float, ...]) -> None:
         self.sequence += 1
@@ -409,13 +420,21 @@ class PreviewSender:
     def poll_ack(self) -> None:
         while True:
             try:
-                packet, peer = self.socket.recvfrom(1024)
+                packet, peer = self.socket.recvfrom(8192)
             except BlockingIOError:
                 return
             if peer != self.target:
                 continue
             try:
                 reply = json.loads(packet)
+                if reply.get('version') == 1 and reply.get('type') == 'safety_status':
+                    data = reply.get('safety', {})
+                    revision = data.get('revision')
+                    if (type(revision) is int and revision >= self.safety_revision and
+                            type(reply.get('sent_mono_ns')) is int and
+                            abs(time.monotonic_ns()-reply['sent_mono_ns']) < 500_000_000):
+                        self.safety, self.safety_revision = data, revision
+                    continue
                 if reply.get("version") != 1 or reply.get("type") != "ack":
                     continue
                 self.subscribers = int(reply.get("subscribers", 0))

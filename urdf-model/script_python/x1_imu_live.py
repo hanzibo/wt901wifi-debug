@@ -14,6 +14,7 @@ import socket
 import time
 
 from x1_common import JOINT_NAMES
+from x1_collision_gate import CollisionGate
 
 
 LEFT = ("1", "2", "3", "4", "5", "6")
@@ -100,6 +101,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument('--gripper-port', type=int, default=GRIPPER_PORT)
+    parser.add_argument('--collision-python', default=None,
+                        help='Python executable for isolated optional collision worker')
+    parser.add_argument('--collision-start-enabled', action='store_true',
+                        help='Start fail-closed BEFORE accepting any gripper/arm input')
     args = parser.parse_args()
     if (not 1024 <= args.port <= 65535 or not 1024 <= args.gripper_port <= 65535 or
             args.port == args.gripper_port):
@@ -132,6 +137,48 @@ def main() -> None:
     last_sequence = 0
     peer_address = None
     published_count = 0
+    gate = CollisionGate(args.collision_python)
+    if args.collision_start_enabled:
+        gate.configure(True, dict(zip(names, positions)))
+    configuration_id = None
+    configuration_peer = None
+    feedback_seq = 0
+
+    def safety_status():
+        return dict(gate.status(), configuration_id=configuration_id,
+                    published_count=published_count, accepted_arm_seq=feedback_seq)
+
+    def configure(raw, peer, sock):
+        nonlocal configuration_id, configuration_peer
+        payload = json.loads(raw)
+        if not isinstance(payload, dict) or payload.get('type') != 'collision_config':
+            return False
+        stamp, request_id = payload.get('sent_mono_ns'), payload.get('request_id')
+        if (payload.get('version') != 1 or type(stamp) is not int or
+                abs(time.monotonic_ns()-stamp) > 500_000_000 or
+                type(payload.get('enabled')) is not bool or
+                not isinstance(request_id, str) or not 1 <= len(request_id) <= 100):
+            raise ValueError('Invalid collision configuration')
+        same = (configuration_id == request_id and configuration_peer == peer)
+        busy = ((current is not None and time.monotonic()-last_received <= .3) or
+                any(0 <= time.monotonic()-t <= .3 for t in grippers.received.values()))
+        error = None
+        adopt_startup = configuration_id is None and gate.enabled == payload['enabled']
+        if not same and busy and not adopt_startup:
+            error = '请先停止双臂和夹爪输入，再切换保护'
+        elif not same:
+            configuration_id, configuration_peer = request_id, peer
+            if not adopt_startup:
+                gate.configure(payload['enabled'], dict(zip(names, positions)))
+        sock.sendto(json.dumps(dict(version=1, type='collision_config_ack',
+            request_id=request_id, error=error, safety=safety_status())).encode(), peer)
+        return True
+
+    def safety_feedback(seq):
+        if peer_address is not None:
+            receiver.sendto(json.dumps(dict(version=1, type='safety_status',
+                seq=seq, safety=safety_status(), published_count=published_count,
+                sent_mono_ns=time.monotonic_ns())).encode(), peer_address)
 
     def gripper_status():
         now = time.monotonic()
@@ -140,20 +187,40 @@ def main() -> None:
                                     age_s=None if grippers.received[j] < 0 else now-grippers.received[j])
                             for j in grippers.positions},
                     subscribers=publisher.get_subscription_count(), published_count=published_count,
-                    arms_fresh=current is not None and now-last_received <= .3)
+                    arms_fresh=current is not None and now-last_received <= .3,
+                    safety=safety_status())
 
     def publish_latest() -> None:
-        nonlocal published_count
+        nonlocal published_count, feedback_seq
         now = time.monotonic()
+        commit = gate.poll()
+        if commit is not None:
+            accepted, metadata = commit
+            positions[:] = [accepted[name] for name in names]
+            for joint in grippers.positions:
+                grippers.positions[joint] = accepted[joint]
+            feedback_seq = metadata if type(metadata) is int else 0
         fresh_grippers = grippers.step(now)
         arms_fresh = current is not None and now-last_received <= .3
-        if not arms_fresh and not fresh_grippers:
+        if not arms_fresh and not fresh_grippers and commit is None:
             return
+        candidate = positions.copy()
         if arms_fresh:
             for index, value in zip(indices, current):
-                positions[index] = value
+                candidate[index] = value
         for joint, angle in grippers.positions.items():
-            positions[names.index(joint)] = angle
+            candidate[names.index(joint)] = angle
+        if gate.enabled:
+            # GripperPreview integrates from accepted positions only.
+            for joint in grippers.positions:
+                grippers.positions[joint] = positions[names.index(joint)]
+            if gate.validated and gate.state != '故障' and (arms_fresh or fresh_grippers):
+                gate.submit(dict(zip(names, candidate)), last_sequence if arms_fresh else 0)
+            if not gate.validated:
+                safety_feedback(0)
+                return
+        else:
+            positions[:] = candidate
         message = JointState()
         message.header.stamp = node.get_clock().now().to_msg()
         # Refresh the complete TF chain even for gripper-only preview. Arm
@@ -162,6 +229,8 @@ def main() -> None:
         message.position = positions.copy()
         publisher.publish(message)
         published_count += 1
+        if gate.enabled:
+            safety_feedback(feedback_seq)
 
     node.create_timer(1 / 30, publish_latest)
     print(f"仅 RViz 预览：双臂 127.0.0.1:{args.port}；手机夹爪 {args.gripper_port}；不连接 X1 硬件。", flush=True)
@@ -174,6 +243,8 @@ def main() -> None:
                     break
                 try:
                     payload = json.loads(raw)
+                    if isinstance(payload, dict) and configure(raw, peer, gripper_receiver):
+                        continue
                     if isinstance(payload, dict) and payload.get('type') == 'gripper_status_query':
                         stamp = payload.get('sent_mono_ns')
                         if (payload.get('version') == 1 and type(stamp) is int and
@@ -189,6 +260,8 @@ def main() -> None:
                 except BlockingIOError:
                     break
                 try:
+                    if configure(raw, peer, receiver):
+                        continue
                     sequence, angles = parse_frame(raw)
                 except (ValueError, TypeError, UnicodeDecodeError):
                     continue
@@ -208,6 +281,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("实时预览结束；RViz 保持末次姿态。", flush=True)
     finally:
+        gate.close()
         receiver.close()
         gripper_receiver.close()
         node.destroy_node()

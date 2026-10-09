@@ -41,7 +41,8 @@ SIDE_FIELDS = (
 FRAME_FIELDS = (
     "frame", "tick_mono_ns", "wall_ns", "elapsed_s", "dt_s", "send_seq",
     "ack_seq", "ack_recv_mono_ns", "ros_subscribers",
-) + tuple(f"{part}_{name}" for part in (*PARTS, *HAND_PARTS)
+    "collision_status_json",
+) + tuple(f"published_joint_{name}" for name in JOINT_NAMES) + tuple(f"{part}_{name}" for part in (*PARTS, *HAND_PARTS)
           for name in DEVICE_FIELDS) + (
     tuple(f"joint_{name}" for name in JOINT_NAMES)
 ) + tuple(f"{side}_{name}" for side in SIDES for name in SIDE_FIELDS) + tuple(
@@ -52,7 +53,7 @@ FRAME_FIELDS = (
 
 
 class X1DiagnosticRecorder:
-    """Write exact pose/IK inputs and accepted output from each GUI solver tick.
+    """Write solver snapshots and separately sampled bridge-accepted output.
 
     This is a sampled diagnostic trace, not a lossless raw WT901 packet capture.
     Packet count and receive timestamp reveal whether a tick reused old data.
@@ -68,12 +69,14 @@ class X1DiagnosticRecorder:
         self.count = 0
         self._closed = False
         self.manifest = {
-            "format": "x1-live-diagnostic-v2",
+            "format": "x1-live-diagnostic-v3",
             "purpose": "RViz preview diagnostics only; not robot control commands",
             "started_wall_ns": self.started_wall_ns,
             "started_mono_ns": self.started_mono_ns,
             "imu_sampling": "latest packet snapshot at each IK tick; not lossless raw stream",
             "joint_order": list(JOINT_NAMES),
+            "joint_columns": "IK output/proposal; published_joint_* are bridge feedback only",
+            "collision_feedback": "sampled latest matching bridge revision; not lossless ROS capture",
             "parts": {part: {
                 "device_id": retargeter.ids[part],
                 "basis_matrix": retargeter.bases[part].tolist(),
@@ -118,7 +121,7 @@ class X1DiagnosticRecorder:
     def write_frame(self, retargeter: LiveRetargeter, positions: tuple[float, ...],
                     status: dict, *, tick_mono_ns: int, send_seq: int,
                     ack_seq: int | None, ack_recv_mono_ns: int | None,
-                    ros_subscribers: int) -> None:
+                    ros_subscribers: int, safety: dict | None = None) -> None:
         if self._closed:
             raise RuntimeError("诊断录制已结束")
         if len(positions) != len(JOINT_NAMES):
@@ -134,6 +137,7 @@ class X1DiagnosticRecorder:
             "ack_seq": "" if ack_seq is None else ack_seq,
             "ack_recv_mono_ns": "" if ack_recv_mono_ns is None else ack_recv_mono_ns,
             "ros_subscribers": ros_subscribers,
+            "collision_status_json": json.dumps(safety, ensure_ascii=False) if safety else '',
         }
         engine = retargeter.engine
         for part in (*PARTS, *HAND_PARTS):
@@ -162,6 +166,9 @@ class X1DiagnosticRecorder:
                 row[prefix + name] = getattr(packet, name) if packet is not None else ""
         for name, value in zip(JOINT_NAMES, positions):
             row[f"joint_{name}"] = value
+        if safety and safety.get('accepted'):
+            for name in JOINT_NAMES:
+                row[f'published_joint_{name}'] = safety['accepted'].get(name, '')
         for side in SIDES:
             item = status[side]
             prefix = side + "_"
