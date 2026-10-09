@@ -27,7 +27,7 @@
 - X1 支持双臂位置随动、可选双手朝向、统一／分段长度比例，以及数值最小二乘／PoE 雅可比两种 IK 后端。完整末端位姿优先模式保留用于对比，可能产生较大关节转动。
 - 手部自然掌面参考、视觉估计 C0、历史标定快速恢复、视觉辅助穿戴标定及不限累计纠偏角等仍属实验功能。手腕尚无与四臂段同等的长期 RGB-D 航向纠偏。
 
-**X1 链路只发布 RViz 预览关节状态，不是实体机器人控制方案。** 当前未完成真机安全限位、碰撞约束、执行器闭环或急停。GUI 的速度／角度限制不能当作真机安全保证。
+**X1 链路只发布 RViz 预览关节状态，不是实体机器人控制方案。** 现提供默认关闭的实验性自碰撞检查与拦截；它依赖 CAD 几何、接触排除及预览状态，不能作为真机安全保证。当前未完成真机安全限位、执行器闭环或急停。
 
 ## 主路线快速启动
 
@@ -77,6 +77,7 @@ conda run --no-capture-output -n OptUSBProj python -u OptUSBProj-ubuntu/run.py
 | 一次动作完成穿戴＋相机标定 | [一体标定流程及诊断](OptUSBProj-ubuntu/docs/COMBINED_ARM_CAMERA_CALIBRATION.md) |
 | 实时航向纠偏及失效规则 | [RGB-D 实时融合](OptUSBProj-ubuntu/docs/RGBD_LIVE_FUSION.md) |
 | 后端选择与同录像比较 | [RTMW / YOLO26](OptUSBProj-ubuntu/docs/YOLO_RGBD_BACKEND.md) |
+| 多人画面的目标选择、丢失保护与 OSNet 外观验证恢复 | [人物选择与锁定](OptUSBProj-ubuntu/docs/RGBD_PERSON_TARGET.md) |
 | 标准穿戴与视觉辅助穿戴 | [穿戴标定](OptUSBProj-ubuntu/docs/WEARING_CALIBRATION.md)、[视觉辅助](OptUSBProj-ubuntu/docs/VISUAL_ASSISTED_WEARING.md) |
 | 设备姿态、归零和运动换基 | [SO(3) 与李代数](docs/SO3_IMU_MODEL.md) |
 | 连续映射 B、弱先验与拟合验收 | [连续穿戴标定数学](docs/CONTINUOUS_ARM_CALIBRATION.md) |
@@ -84,6 +85,7 @@ conda run --no-capture-output -n OptUSBProj python -u OptUSBProj-ubuntu/run.py
 | 相机 Q、骨轴及航向纠偏 | [相机标定与融合数学](docs/RGBD_CAMERA_CALIBRATION_FUSION_MATH.md) |
 | 人体 → 机器人目标、优化与 FK | [重定向数学](docs/HUMAN_TO_X1_RETARGETING_MATH.md)、[URDF / PoE 等价关系](docs/URDF_POE_EQUIVALENCE.md) |
 | X1 启动、诊断及 IK 对比 | [双臂实时预览](urdf-model/docs/IMU双臂实时预览.md)、[IK 后端](OptUSBProj-ubuntu/docs/X1_IK_BACKENDS.md) |
+| X1 可开关自碰撞检查与拦截 | [实验性保护说明](docs/X1_COLLISION_PREVIEW.md) |
 | 自然掌面与历史复用 | [自然掌面数学](docs/NATURAL_PALM_C0_MATH.md)、[快速恢复](OptUSBProj-ubuntu/docs/CALIBRATION_REUSE.md) |
 | 项目总览 | [总览 HTML](docs/PROJECT_PIPELINE_OVERVIEW.html)、[图像讲解源文件及复现](docs/project-explainer/README.md) |
 

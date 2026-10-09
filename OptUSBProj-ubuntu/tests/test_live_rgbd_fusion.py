@@ -10,12 +10,107 @@ from scipy.spatial.transform import Rotation
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]));sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
 from test_fusion_capture import packet
 from optusbproj_ubuntu.pose import PoseEngine,GYRO_TILT,GYRO_RGBD
-from optusbproj_ubuntu.live_rgbd_fusion import LiveRGBDFusion
+from optusbproj_ubuntu.live_rgbd_fusion import LiveRGBDFusion,PERSON_SELECTION_INVALIDATION,MODEL_SELECTION_INVALIDATION
 from optusbproj_ubuntu.fusion_recording import FusionSessionRecorder
 from optusbproj_ubuntu.fusion_replay import FusionSessionReplay
 
 
 class LiveTests(unittest.TestCase):
+    def test_model_recheck_preserves_offset_and_requires_consistent_unique_frames(self):
+        from unittest.mock import patch
+        for error,passed in ((0,True),(40,False)):
+            engine,service,device,q,_=self.setup_system()
+            service.bindings['right_upper_arm'][1].offset_rad=np.radians(10)
+            correction=engine.fusion_corrections[device].copy()
+            service.invalidate(MODEL_SELECTION_INVALIDATION)
+            with patch('optusbproj_ubuntu.live_rgbd_fusion.time.monotonic_ns',return_value=1_000_000_000):
+                service.begin_model_recheck()
+            service.at=lambda *_:np.eye(3)
+            for i in range(21):
+                stamp=1_100_000_000+i*50_000_000
+                obs=self.observation(q,stamp)
+                if error:
+                    row=obs.to_record();xyz=np.array(row['points_camera_m'])
+                    up=q@np.array([0,0,1])
+                    xyz[3]=xyz[1]+Rotation.from_rotvec(up*np.radians(error)).apply(xyz[3]-xyz[1])
+                    row['points_camera_m']=xyz.tolist();obs.to_record=lambda:row
+                service.observe(obs,now_ns=stamp)
+                if i==0:
+                    service.observe(obs,now_ns=stamp)
+                    self.assertEqual(len(service.model_rechecks['right_upper_arm']['samples']),1)
+                    self.assertNotIn(device,engine.fusion_ready)
+            self.assertEqual(device in engine.fusion_ready,passed)
+            self.assertFalse(service.model_rechecks)
+            self.assertAlmostEqual(service.bindings['right_upper_arm'][1].offset_rad,np.radians(10))
+            np.testing.assert_equal(engine.fusion_corrections[device],correction)
+
+    def test_model_change_does_not_bypass_hard_invalidation_and_recheck_timeout(self):
+        from unittest.mock import patch
+        engine,service,device,q,_=self.setup_system()
+        service.invalidate('相机重启')
+        service.invalidate(MODEL_SELECTION_INVALIDATION)
+        with self.assertRaises(ValueError):service.begin_model_recheck()
+        engine,service,device,q,_=self.setup_system()
+        service.invalidate(MODEL_SELECTION_INVALIDATION)
+        with patch('optusbproj_ubuntu.live_rgbd_fusion.time.monotonic_ns',return_value=1_000_000_000):service.begin_model_recheck()
+        service.observe(self.observation(q,17_000_000_000),now_ns=17_000_000_000)
+        self.assertNotIn(device,engine.fusion_ready)
+        self.assertIn('超时',service.states['right_upper_arm']['reason'])
+
+    def test_model_recheck_rejects_frozen_stale_invalid_and_vertical_observations(self):
+        from unittest.mock import patch
+        engine,service,device,q,_=self.setup_system()
+        service.invalidate(MODEL_SELECTION_INVALIDATION)
+        with patch('optusbproj_ubuntu.live_rgbd_fusion.time.monotonic_ns',return_value=1_000_000_000):service.begin_model_recheck()
+        service.at=lambda *_:np.eye(3)
+        obs=self.observation(q)
+        service.observe(obs,allow=False,now_ns=1_400_000_000)
+        service.observe(obs,now_ns=2_000_000_000)
+        row=obs.to_record();row['valid'][3]=False
+        service.observe(SimpleNamespace(captured_mono_ns=2_100_000_000,to_record=lambda:row),now_ns=2_100_000_000)
+        row['valid'][3]=True
+        xyz=np.array(row['points_camera_m']);xyz[3]=xyz[1]+.25*(q@np.array([0,0,1]))
+        row['points_camera_m']=xyz.tolist()
+        service.observe(SimpleNamespace(captured_mono_ns=2_200_000_000,to_record=lambda:row),now_ns=2_200_000_000)
+        self.assertFalse(service.model_rechecks['right_upper_arm']['samples'])
+        self.assertNotIn(device,engine.fusion_ready)
+
+    def test_original_person_restore_keeps_correction_and_resumes_observations(self):
+        engine,service,device,q,_=self.setup_system();engine.set_algorithm_mode('right_upper_arm',GYRO_RGBD)
+        service.observe(self.observation(q),now_ns=1_440_000_000)
+        correction=engine.fusion_corrections[device].copy()
+        offset=service.bindings['right_upper_arm'][1].offset_rad
+        pure=engine.current_for(device,GYRO_TILT).copy()
+        service.invalidate(PERSON_SELECTION_INVALIDATION)
+        self.assertNotIn(device,engine.fusion_ready)
+        self.assertEqual(service.restore_original_person(),['right_upper_arm'])
+        self.assertIn(device,engine.fusion_ready)
+        self.assertEqual(service.bindings['right_upper_arm'][1].offset_rad,offset)
+        np.testing.assert_equal(engine.fusion_corrections[device],correction)
+        np.testing.assert_equal(engine.current_for(device,GYRO_TILT),pure)
+        service.observe(self.observation(q,1_500_000_000),now_ns=1_540_000_000)
+        self.assertTrue(service.states['right_upper_arm']['applied'])
+
+    def test_hard_invalidation_cannot_be_overridden_by_person_reselection(self):
+        engine,service,device,_,_=self.setup_system()
+        service.invalidate('相机/穿戴改变，需重标定')
+        service.invalidate(PERSON_SELECTION_INVALIDATION)
+        with self.assertRaises(ValueError):service.restore_original_person()
+        self.assertNotIn(device,engine.fusion_ready)
+
+    def test_changed_epoch_or_mounting_rejects_restore_without_writes(self):
+        for changed in ('epoch','basis','mapping','gravity'):
+            engine,service,device,_,_=self.setup_system()
+            service.invalidate(PERSON_SELECTION_INVALIDATION)
+            correction=engine.fusion_corrections[device].copy()
+            if changed=='epoch':engine.epochs[device]='new'
+            elif changed=='basis':engine.continuous_basis['right_upper_arm']=np.eye(3)
+            elif changed=='mapping':engine.axis_mappings['right_upper_arm']=('y','x','-z')
+            else:engine._tilt_filters[device].neutral_up=np.array([1.,0,0])
+            with self.assertRaises(ValueError):service.restore_original_person()
+            self.assertNotIn(device,engine.fusion_ready)
+            np.testing.assert_equal(engine.fusion_corrections[device],correction)
+
     def setup_system(self):
         device=packet().device_id
         engine=PoseEngine({'right_upper_arm':device},algorithm_modes={'right_upper_arm':GYRO_TILT})

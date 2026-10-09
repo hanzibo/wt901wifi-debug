@@ -90,6 +90,7 @@ class FusionSessionRecorder:
         self.calibration_references_at_start = {}
         self.camera_epoch=None
         self.vision_config=None;self.vision_epoch=None
+        self.person_target_at_start=None
         self.heading_max_offset_deg=30.
         self.fusion_at_start={}
         self._closed = False
@@ -268,6 +269,7 @@ class FusionSessionRecorder:
             "runtime_pose_records":self.runtime_count,
             "camera_epoch":self.camera_epoch,
             "vision_config":self.vision_config,"vision_epoch":self.vision_epoch,
+            "person_target_at_start":self.person_target_at_start,
             "heading_max_offset_deg":self.heading_max_offset_deg,
             "fusion_at_start":self.fusion_at_start,
             "rgbd_frames": self.rgbd_count,

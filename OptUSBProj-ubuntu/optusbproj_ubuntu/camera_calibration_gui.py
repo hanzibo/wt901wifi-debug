@@ -134,6 +134,9 @@ class CameraCalibrationDialog(QtWidgets.QDialog):
         if o.session is not None or o._record_start_deadline is not None:return '已有录制/预约，请先结束或取消。'
         if o.last_rgbd_observation is None or time.monotonic_ns()-o.last_rgbd_observation.captured_mono_ns>1e9:return '相机尚未就绪或帧已过期。'
         if not o.rgbd_pose_enabled.isChecked() or o.last_pose_estimate is None or time.monotonic_ns()-o.last_pose_estimate.captured_mono_ns>1e9:return '请开启三维观测并等待模型就绪。'
+        target=getattr(o.last_pose_estimate,'diagnostics',{})
+        if 'target_state' in target and target.get('selected_index') is None:
+            return '视觉目标尚未锁定；请先在彩色预览或人物列表选择佩戴 IMU 的人。'
         for part in self.capture_parts():
             device=o.engine.assignments.get(part)
             if not device or not o.engine.is_live(device,max_age=1):return f'{part} 未分配在线设备；请检查电源、热点和部位分配。'

@@ -45,7 +45,7 @@ class Pose2DConfig:
                 'person_conf':.25 if self.backend=='yolo26' else None,
                 'native_keypoints':17 if self.backend=='yolo26' else 133,
                 'output_layout':'coco133-compatible; absent points NaN/zero',
-                'identity_policy':'exactly_one_person'}
+                'identity_policy':'single_person_default; optional_user_target_geometry_v1'}
         config['signature']=hashlib.sha256(json.dumps(config,sort_keys=True).encode()).hexdigest()
         return config
 
@@ -54,13 +54,17 @@ def empty_keypoints():
     return np.full((133,2),np.nan),np.zeros(133)
 
 
-def infer_rtmw(model,bgr):
+def infer_rtmw(model,bgr,*,target=None,observation=None):
     boxes=model.det_model(bgr);xy,scores=empty_keypoints()
     info={'people_detected':len(boxes),'inference_backend':'RTMW3D 2D outputs / CUDA'}
-    if len(boxes)==1:
-        _xyz,score_batch,_simcc,points=model.pose_model(bgr,bboxes=boxes)
+    selected = 0 if len(boxes)==1 else None
+    if target is not None:
+        selected,selection=target.choose(boxes,observation)
+        info.update(selection)
+    if selected is not None:
+        _xyz,score_batch,_simcc,points=model.pose_model(bgr,bboxes=np.asarray(boxes)[selected:selected+1])
         xy,scores=np.asarray(points[0]),np.asarray(score_batch[0])
-    else:info['reject_reason']='未检测到人' if len(boxes)==0 else '多人画面：暂不自动选择身份'
+    elif 'reject_reason' not in info:info['reject_reason']='未检测到人' if len(boxes)==0 else '多人画面：暂不自动选择身份'
     return xy,scores,info
 
 
@@ -81,7 +85,8 @@ class RTMWBackend:
         for part in (self.model.det_model,self.model.pose_model):
             if 'CUDAExecutionProvider' not in part.session.get_providers():raise RuntimeError('RTMW未使用CUDA')
 
-    def infer(self,bgr):return infer_rtmw(self.model,bgr)
+    def infer(self,bgr,*,target=None,observation=None):
+        return infer_rtmw(self.model,bgr,target=target,observation=observation)
 
 
 class YOLOBackend:
@@ -100,19 +105,24 @@ class YOLOBackend:
         # Warm-up is excluded from per-frame timings.
         self.model.predict(np.zeros((480,640,3),np.uint8),device=0,imgsz=config.imgsz,conf=.25,verbose=False)
 
-    def infer(self,bgr):
+    def infer(self,bgr,*,target=None,observation=None):
         result=self.model.predict(bgr,device=0,imgsz=self.config.imgsz,conf=.25,verbose=False)[0]
         count=len(result.boxes) if result.boxes is not None else 0
         xy,scores=empty_keypoints()
         info={'people_detected':count,'inference_backend':'YOLO26 Pose / CUDA'}
-        if count!=1:
-            info['reject_reason']='未检测到人' if count==0 else '多人画面：暂不自动选择身份'
+        selected = 0 if count==1 else None
+        if target is not None:
+            boxes=_numpy(result.boxes.xyxy) if count else np.empty((0,4))
+            selected,selection=target.choose(boxes,observation)
+            info.update(selection)
+        if selected is None:
+            if 'reject_reason' not in info:info['reject_reason']='未检测到人' if count==0 else '多人画面：暂不自动选择身份'
         elif result.keypoints is None or result.keypoints.conf is None:
             info['reject_reason']='YOLO没有关键点或置信度'
         else:
             points=_numpy(result.keypoints.xy);confidence=_numpy(result.keypoints.conf)
-            if points.shape!=(1,17,2) or confidence.shape!=(1,17):raise ValueError('YOLO输出应为17个COCO关键点')
-            xy[:17]=points[0];scores[:17]=confidence[0]
+            if points.shape!=(count,17,2) or confidence.shape!=(count,17):raise ValueError('YOLO输出应为17个COCO关键点')
+            xy[:17]=points[selected];scores[:17]=confidence[selected]
         return xy,scores,info
 
 

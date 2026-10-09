@@ -12,6 +12,13 @@ LABELS = ("左肩", "右肩", "左肘", "右肘", "左腕", "右腕", "左髋", 
 def draw_pose_rgb(estimate):
     import cv2
     image = estimate.frame_rgb.copy()
+    selected=estimate.diagnostics.get('selected_index')
+    for person in estimate.diagnostics.get('person_candidates',[]):
+        x1,y1,x2,y2=np.rint(person['box']).astype(int)
+        color=(70,230,120) if person['index']==selected else (255,180,70)
+        cv2.rectangle(image,(x1,y1),(x2,y2),color,2)
+        cv2.putText(image,f"#{person['index']+1}"+(' TARGET' if person['index']==selected else ''),
+                    (x1,max(18,y1+18)),cv2.FONT_HERSHEY_SIMPLEX,.65,color,2)
     xy = estimate.keypoints_xy[INDICES]
     for a, b in EDGES:
         if estimate.valid[a] and estimate.valid[b]:

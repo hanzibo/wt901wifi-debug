@@ -16,6 +16,7 @@ from .camera_calibration_gui import CameraCalibrationDialog
 from .orbbec_worker import OrbbecWorker, DEFAULT_PYTHON
 from .rgbd_pose_worker import RGBDPoseWorker
 from .pose_2d import Pose2DConfig,DEFAULT_YOLO
+from .person_target import PersonTarget
 from .rgbd_pose_gui import RGBDPoseDialog, draw_pose_rgb
 from .fusion_capture import CameraObservation
 from .fusion_recording import FusionSessionRecorder
@@ -51,6 +52,10 @@ class FusionWindow(BodyWindow):
         self.rgbd_fps, self.rgbd_warmup = rgbd_fps, rgbd_warmup
         self.last_rgbd_observation = None
         self.pose_worker = None
+        self.person_target=PersonTarget()
+        self._person_candidates=[]
+        self._person_frame_ns=None
+        self._person_preview_frame_ns=None
         import uuid
         self.vision_config=Pose2DConfig(pose_backend,Path(yolo_model),pose_imgsz)
         self.vision_metadata=self.vision_config.metadata()
@@ -70,6 +75,7 @@ class FusionWindow(BodyWindow):
         self.live_fusion = LiveRGBDFusion(self.engine)
         self._fusion_events_file = None
         self._live_camera_epoch = None
+        self._person_restore_vision_signature = None
         self.last_pose_estimate = None
         self.palm_visual_dialog = None
         self._bridge_skipped_start = 0
@@ -207,6 +213,32 @@ class FusionWindow(BodyWindow):
         self.pose_status.setWordWrap(True)
         self.pose_status.setMinimumHeight(52)
         group_layout.addWidget(self.pose_status)
+        person_row=QtWidgets.QHBoxLayout()
+        self.person_combo=QtWidgets.QComboBox()
+        self.person_combo.setToolTip('编号仅用于当前帧；确认选择的人佩戴当前分配的 IMU。')
+        person_row.addWidget(self.person_combo,1)
+        self.person_select=QtWidgets.QPushButton('锁定所选人物')
+        self.person_select.clicked.connect(lambda:self._select_person(self.person_combo.currentData()))
+        self.person_combo.activated.connect(lambda _index:self._select_person(self.person_combo.currentData()))
+        person_row.addWidget(self.person_select)
+        group_layout.addLayout(person_row)
+        person_actions=QtWidgets.QHBoxLayout()
+        self.person_auto=QtWidgets.QPushButton('单人自动（重新锁定）')
+        self.person_auto.clicked.connect(lambda:self._apply_person_target(None,'auto'))
+        person_actions.addWidget(self.person_auto)
+        self.person_cancel=QtWidgets.QPushButton('取消选择 / 暂停视觉')
+        self.person_cancel.clicked.connect(lambda:self._apply_person_target(None,'paused'))
+        person_actions.addWidget(self.person_cancel)
+        group_layout.addLayout(person_actions)
+        self.person_restore_ack=QtWidgets.QCheckBox('确认所选为原标定者，相机和设备绑带未移动')
+        group_layout.addWidget(self.person_restore_ack)
+        self.person_restore=QtWidgets.QPushButton('确认原标定者 · 保留标定并恢复纠偏')
+        self.person_restore.clicked.connect(self._restore_original_person)
+        self.person_restore_ack.toggled.connect(self._sync_pose_controls)
+        group_layout.addWidget(self.person_restore)
+        self.person_status=QtWidgets.QLabel('人物：单人首次自动锁定；多人请点击彩色画面中的人物框。切换目标需重新相机标定。')
+        self.person_status.setWordWrap(True)
+        group_layout.addWidget(self.person_status)
         self._sync_pose_controls()
         limit_row=QtWidgets.QHBoxLayout()
         limit_row.addWidget(QtWidgets.QLabel('累计纠偏范围 ±'))
@@ -228,6 +260,7 @@ class FusionWindow(BodyWindow):
             self.live_fusion.set_max_offset(recorded_limit)
         self._sync_pose_controls()
         self.camera_preview = CameraPreview()
+        self.camera_preview.image_clicked.connect(self._click_person)
         self.camera_preview.setMinimumWidth(240)
         self.camera_preview.setFixedHeight(120)
         self.camera_preview.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
@@ -647,10 +680,9 @@ class FusionWindow(BodyWindow):
             self.pose_status.setText("三维观测需要 Gemini RGB-D 数据")
             return
         if self.pose_worker is None:
-            worker = RGBDPoseWorker(self,config=self.vision_config,vision_epoch=self.vision_epoch)
-            epoch=self.vision_epoch
-            worker.error.connect(lambda message: self._on_pose_error(message) if epoch==self.vision_epoch else None)
-            worker.status.connect(lambda message: self.pose_status.setText(message) if epoch==self.vision_epoch else None)
+            worker = RGBDPoseWorker(self,config=self.vision_config,vision_epoch=self.vision_epoch,target=self.person_target)
+            worker.error.connect(lambda message: self._on_pose_error(message) if worker is self.pose_worker else None)
+            worker.status.connect(lambda message: self.pose_status.setText(message) if worker is self.pose_worker else None)
             worker.finished.connect(self._on_pose_finished)
             self.pose_worker = worker
             worker.start()
@@ -660,7 +692,8 @@ class FusionWindow(BodyWindow):
         if self.engine.natural_hand_previews or (self.natural_hand_dialog is not None and self.natural_hand_dialog.active):return '请先结束自然掌面采样/临时预览'
         if self.replay_mode:return '回放显示录制时的模型结果，不能切换推理后端'
         if self.session is not None or self._record_start_deadline is not None:return '录制或预约期间不能切换二维模型'
-        for dialog in (self.camera_calibration_dialog,self._heading_calibration_dialog,self._visual_wearing_dialog):
+        for dialog in (self.camera_calibration_dialog,self._heading_calibration_dialog,self._visual_wearing_dialog,
+                       self._combined_calibration_dialog,self._reuse_calibration_dialog):
             if dialog is not None and (dialog.active or dialog.state=='analyzing'):return '标定或分析期间不能切换二维模型'
         if self.x1_preview_dialog is not None and self.x1_preview_dialog.sender is not None:return '请先停止X1随动再切换二维模型'
         if self.calibration_dialog is not None and self.calibration_dialog.isVisible():return '请先关闭IMU穿戴标定窗口'
@@ -677,6 +710,15 @@ class FusionWindow(BodyWindow):
         self.pose_imgsz_combo.setEnabled(permitted and self.vision_config.backend=='yolo26')
         self.pose_model_button.setEnabled(permitted and self.vision_config.backend=='yolo26')
         self.pose_model_button.setToolTip(str(self.vision_config.model))
+        if hasattr(self,'person_select'):
+            enabled=permitted and self.camera_source=='orbbec'
+            self.person_combo.setEnabled(enabled)
+            self.person_select.setEnabled(enabled and self.rgbd_pose_enabled.isChecked() and bool(self._person_candidates))
+            self.person_auto.setEnabled(enabled);self.person_cancel.setEnabled(enabled)
+            if hasattr(self,'person_restore'):
+                error=self._person_restore_error()
+                self.person_restore.setEnabled(error is None and self.person_restore_ack.isChecked())
+                self.person_restore.setToolTip(error or '仅恢复已确认的原穿戴者；不重置补偿角，不自动切换算法或启动机器人')
         if hasattr(self,'heading_limit_apply'):
             self.heading_limit.setEnabled(permitted and not self.heading_unlimited.isChecked())
             self.heading_unlimited.setEnabled(permitted);self.heading_limit_apply.setEnabled(permitted)
@@ -705,6 +747,98 @@ class FusionWindow(BodyWindow):
         path,_=QtWidgets.QFileDialog.getOpenFileName(self,'选择已下载的YOLO26 Pose权重',str(self.vision_config.model.parent),'模型 (*.pt)')
         if path:self._change_pose_config(model=Path(path))
 
+    def _select_person(self,item):
+        if item is None:return
+        age=time.monotonic_ns()-item['captured_mono_ns']
+        if not self.rgbd_pose_enabled.isChecked() or not 0<=age<=1_000_000_000:
+            self.person_status.setText('人物框已过期，请等待新的检测画面再选择');return
+        self._apply_person_target(item,'manual')
+
+    def _click_person(self,x,y):
+        if self.depth_preview.isChecked():
+            self.person_status.setText('请切回彩色画面后点击人物框，或使用人物下拉列表');return
+        if not self.rgbd_pose_enabled.isChecked() or self._person_preview_frame_ns!=self._person_frame_ns:
+            self.person_status.setText('等待带人物框的当前彩色检测画面再选择');return
+        hits=[p for p in self._person_candidates if p['box'][0]<=x<=p['box'][2] and p['box'][1]<=y<=p['box'][3]]
+        if len(hits)==1:self._select_person(hits[0])
+        elif len(hits)>1:self.person_status.setText('点击处有重叠人物框，请使用下拉列表明确选择；有歧义时仍会暂停跟踪')
+
+    def _apply_person_target(self,anchor,mode):
+        error=self._pose_change_error()
+        if error:self.person_status.setText('人物未切换：'+error);return
+        if self.camera_source!='orbbec':return
+        import uuid
+        self.vision_epoch=uuid.uuid4().hex;self._vision_changed=True
+        from .live_rgbd_fusion import PERSON_SELECTION_INVALIDATION
+        self.live_fusion.invalidate(PERSON_SELECTION_INVALIDATION)
+        self.person_restore_ack.setChecked(False)
+        if self.pose_worker is not None:
+            self.pose_worker.select_target(anchor,mode,self.vision_epoch)
+        else:self.person_target.reset(anchor,mode=mode,selection_id=self.vision_epoch)
+        self.last_pose_estimate=None;self._person_candidates=[];self._person_frame_ns=None
+        self.person_combo.clear()
+        if self.pose_dialog is not None:
+            self.pose_dialog.canvas.estimate=None;self.pose_dialog.canvas.update()
+        self.person_status.setText('人物选择已更新；等待新帧。穿戴映射保留，原相机纠偏停用，请重新相机标定。')
+        self._sync_pose_controls();self._update_live_fusion_status()
+
+    def _person_restore_error(self):
+        error=self._pose_change_error()
+        if error:return error
+        if self.camera_source!='orbbec' or self.camera_worker is None:return '请先启动原相机采集会话'
+        if getattr(self.camera_worker,'capture_epoch',None)!=self._live_camera_epoch:return '相机采集会话已改变，需重新标定'
+        if not self.rgbd_pose_enabled.isChecked() or self.pose_worker is None:return '请先开启三维视觉观测'
+        item=self.person_combo.currentData()
+        if item is None or not 0<=time.monotonic_ns()-item['captured_mono_ns']<=1_000_000_000:return '请选择当前彩色画面中的原标定者，等待新人物框'
+        try:
+            parts=self.live_fusion.validate_person_restore()
+            if any(not self.engine.is_live(self.live_fusion.bindings[p][0]['device_id'],max_age=1.) for p in parts):
+                return '原标定设备数据不新鲜，请先恢复连接'
+        except (ValueError,KeyError) as exc:return str(exc)
+        return None
+
+    def _restore_original_person(self):
+        error=self._person_restore_error()
+        if error or not self.person_restore_ack.isChecked():
+            self.person_status.setText('未恢复：'+(error or '请先确认原标定者与安装未移动'));return
+        item=self.person_combo.currentData().copy()
+        recheck=(self.live_fusion.model_changed or self.vision_metadata.get('signature')!=self._person_restore_vision_signature)
+        parts=self.live_fusion.begin_model_recheck() if recheck else self.live_fusion.restore_original_person()
+        # Keep the camera calibration but create a new visual selection epoch:
+        # pending frames from the prior person must never enter feedback.
+        import uuid
+        self.vision_epoch=uuid.uuid4().hex;self._vision_changed=True
+        self.pose_worker.select_target(item,'manual',self.vision_epoch)
+        self.last_pose_estimate=None;self._person_candidates=[];self._person_frame_ns=None
+        self.person_combo.clear();self.person_restore_ack.setChecked(False)
+        if self.pose_dialog is not None:
+            self.pose_dialog.canvas.estimate=None;self.pose_dialog.canvas.update()
+        self.person_status.setText(f'已确认原标定者，恢复 {len(parts)} 个部位的标定资格；补偿角保持，等待新骨架后按原质量门控继续纠偏。')
+        if recheck:self.person_status.setText('已确认原标定者；请在15秒内斜前举/侧举，使参与骨段清晰可见。逐部位检查新模型方向一致性，通过后恢复纠偏；未通过项保持停用。')
+        self._sync_pose_controls();self._update_live_fusion_status()
+
+    def _update_person_candidates(self,estimate):
+        info=estimate.diagnostics
+        self._person_candidates=info.get('person_candidates',[])
+        self._person_frame_ns=estimate.captured_mono_ns
+        chosen=info.get('selected_index')
+        # Freeze entries while the popup is open. Each entry carries its source
+        # frame/box, not an index to look up again in a reordered future frame.
+        if not self.person_combo.view().isVisible():
+            self.person_combo.blockSignals(True);self.person_combo.clear()
+            for person in self._person_candidates:
+                depth=person.get('depth_m')
+                suffix=f' · 表面深度 {depth:.2f} m' if depth is not None else ' · 深度不可用'
+                self.person_combo.addItem(f"本帧人物 #{person['index']+1}"+suffix,person.copy())
+                if person['index']==chosen:self.person_combo.setCurrentIndex(self.person_combo.count()-1)
+            self.person_combo.blockSignals(False)
+        self.person_status.setText('人物：'+info.get('target_state','历史记录未保存人物选择')+
+            (f" · 当前框 #{chosen+1}" if chosen is not None else '')+
+            (' · OSNet 恢复已启用' if info.get('reid_enabled') else ' · 外观恢复未启用')+
+            (f" · 外观相似度 {info['reid_similarity']:.2f} / 候选间隔 {info['reid_margin']:.2f}"
+             if 'reid_similarity' in info else '')+
+            '。编号不是永久身份；须选择佩戴当前 IMU 的人。')
+
     def _change_pose_config(self,_index=None,*,model=None):
         error=self._pose_change_error()
         if error:self._sync_pose_controls();self.pose_status.setText(error);return
@@ -713,7 +847,10 @@ class FusionWindow(BodyWindow):
         if metadata['signature']==self.vision_metadata['signature']:
             self.vision_config=new;self._sync_pose_controls();return
         import uuid
-        self.live_fusion.invalidate('二维模型/参数已改变，保留修正；需重新相机标定')
+        from .live_rgbd_fusion import MODEL_SELECTION_INVALIDATION
+        self.live_fusion.invalidate(MODEL_SELECTION_INVALIDATION)
+        self.person_restore_ack.setChecked(False)
+        self._person_candidates=[];self.person_combo.clear()
         self.vision_config=new;self.vision_metadata=metadata;self.vision_epoch=uuid.uuid4().hex;self._vision_changed=True
         self.last_pose_estimate=None
         if self.pose_dialog is not None:
@@ -722,7 +859,7 @@ class FusionWindow(BodyWindow):
         if self.pose_worker is not None:self.pose_worker.stop()
         elif self.rgbd_pose_enabled.isChecked():self._set_rgbd_pose(True)
         self._sync_pose_controls()
-        self.pose_status.setText('模型已切换：旧相机纠偏停用，穿戴映射保留；加载完成后请重新相机标定')
+        self.pose_status.setText('模型已切换：保留标定与修正，暂停纠偏；加载完成后请选择原标定者并确认恢复，进行短时方向一致性检查')
 
     def _on_pose_error(self, message):
         self.rgbd_pose_enabled.blockSignals(True)
@@ -770,7 +907,9 @@ class FusionWindow(BodyWindow):
                 self.pose_dialog.status.setText("观测过期；表格是最后一次历史结果")
 
     def _on_pose_estimate(self, estimate):
+        if not self.replay_mode and 'vision_epoch' in estimate.diagnostics and estimate.diagnostics['vision_epoch']!=self.vision_epoch:return
         self.last_pose_estimate = estimate
+        self._update_person_candidates(estimate)
         if self.palm_visual_dialog is not None:self.palm_visual_dialog.on_body(estimate)
         if self.visual_wearing_candidates:
             self._render_dirty = True
@@ -801,7 +940,8 @@ class FusionWindow(BodyWindow):
                 from .palm_worker import draw_palm_diagnostics
                 rgb=draw_palm_diagnostics(rgb,palm.latest)
             h, w = rgb.shape[:2]
-            self._display_image(QtGui.QImage(rgb.data, w, h, rgb.strides[0], QtGui.QImage.Format.Format_RGB888).copy())
+            self._display_image(QtGui.QImage(rgb.data, w, h, rgb.strides[0], QtGui.QImage.Format.Format_RGB888).copy(),
+                                person_frame_ns=estimate.captured_mono_ns)
         if self.pose_dialog is not None:
             self.pose_dialog.update_estimate(estimate)
             if not fresh:
@@ -877,7 +1017,9 @@ class FusionWindow(BodyWindow):
         if self.x1_preview_dialog is not None and self.x1_preview_dialog.sender is not None:raise ValueError('请先停止X1随动，再应用标定')
         if self.camera_worker is None or report.get('camera_epoch') is None or report['camera_epoch']!=getattr(self.camera_worker,'capture_epoch',None):raise ValueError('相机采集会话已变化，需重新标定')
         self._check_vision_report(report)
-        self.live_fusion.install(report);self._live_camera_epoch=report['camera_epoch'];self._update_live_fusion_status()
+        self.live_fusion.install(report);self._live_camera_epoch=report['camera_epoch']
+        self._person_restore_vision_signature=self.vision_metadata.get('signature')
+        self._update_live_fusion_status()
 
     def prepare_camera_gravity(self,devices,start_ns,end_ns):
         return self.live_fusion.lock_gravity(devices,start_ns,end_ns)
@@ -984,7 +1126,8 @@ class FusionWindow(BodyWindow):
             f"{self.backend} · {fps:.1f} 帧/秒 · 已收到 {self.camera_count} 帧"
             f" · 可信关键点 {self.visible_points}")
 
-    def _display_image(self, frame: QtGui.QImage) -> None:
+    def _display_image(self, frame: QtGui.QImage, *, person_frame_ns=None) -> None:
+        self._person_preview_frame_ns=person_frame_ns
         self.camera_preview.display_image(frame)
 
     def _toggle_camera_preview_window(self):
@@ -1200,6 +1343,9 @@ class FusionWindow(BodyWindow):
         self.session.calibration_references_at_start=deepcopy(self.engine.calibration_references)
         self.session.camera_epoch=getattr(self.camera_worker,'capture_epoch',None)
         self.session.vision_config=self.vision_metadata;self.session.vision_epoch=self.vision_epoch
+        self.session.person_target_at_start=(None if self.last_pose_estimate is None else
+            {k:self.last_pose_estimate.diagnostics.get(k) for k in
+             ('target_id','target_mode','target_state','selected_index')})
         self.session.heading_max_offset_deg=self.live_fusion.max_offset_deg
         self.session.fusion_at_start={part:{'calibration':data,'offset_deg':float(np.degrees(corrector.offset_rad))} for part,(data,corrector) in self.live_fusion.bindings.items()}
         self._fusion_events_file=(self.session.path/'fusion_events.jsonl').open('w',encoding='utf-8')

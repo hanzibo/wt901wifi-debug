@@ -121,6 +121,9 @@ class GuideTests(unittest.TestCase):
             owner.rgbd_pose_enabled.setChecked(False)
             with patch('optusbproj_ubuntu.camera_calibration_gui.time.monotonic_ns',return_value=100_000_000_000):
                 self.assertIn('三维',dialog.readiness_error())
+                owner.rgbd_pose_enabled.setChecked(True)
+                owner.last_pose_estimate.diagnostics={'target_state':'多人画面','selected_index':None}
+                self.assertIn('目标尚未锁定',dialog.readiness_error())
             dialog.close();owner.close()
 
     def test_protocol_has_tail_beyond_cutoff_and_repeated_actions(self):

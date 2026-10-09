@@ -6,6 +6,9 @@ from scipy.spatial.transform import Rotation,Slerp
 from .pose import GYRO_TILT,GYRO_RGBD
 from .rgbd_fusion import ARM_SEGMENTS,HeadingCorrector,visual_direction,unit,angle_deg
 
+PERSON_SELECTION_INVALIDATION='人物选择已改变；保留当前修正，需重新相机标定'
+MODEL_SELECTION_INVALIDATION='二维模型/参数已改变；保留标定和修正，等待原人物确认与一致性检查'
+
 
 class LiveRGBDFusion:
     def __init__(self,engine):
@@ -13,6 +16,11 @@ class LiveRGBDFusion:
         self.gravity_history={}
         self.events=deque()
         self.max_offset_deg=30.
+        self.person_restore_blocked=set()
+        self.person_restore_mounting={}
+        self.model_rechecks={}
+        self.model_recheck_failures={}
+        self.model_changed=False
 
     def set_max_offset(self,degrees):
         # Validate ALL parts before changing any limit. Never clamp a pose.
@@ -92,15 +100,20 @@ class LiveRGBDFusion:
             if bone.shape!=(3,) or not np.isfinite(bone).all() or not np.isclose(np.linalg.norm(bone),1,atol=1e-5):raise ValueError('标定骨轴无效')
             proposed[part]=(data,HeadingCorrector(report['camera_up'],min_innovation_deg=1.,max_offset_deg=self.max_offset_deg))
         if not proposed:raise ValueError('没有通过的部位标定')
+        self.model_rechecks.clear();self.model_recheck_failures.clear();self.model_changed=False
         for part,data in report['parts'].items():
             if part in ARM_SEGMENTS and not data.get('accepted') and part in self.bindings:
                 old_device=self.bindings[part][0]['device_id']
                 self.engine.fusion_ready.discard(old_device)
+                self.person_restore_blocked.add(part)
                 self.states[part]={'reason':'本轮标定未通过，原纠偏已停用','offset_deg':0.}
         for part,(data,corrector) in proposed.items():
             device=data['device_id'];estimator=self.engine._tilt_filters[device]
             if estimator.neutral_up is None:estimator.neutral_up=unit(data['up_world'])
             self.bindings[part]=(data,corrector);self.last_stamp.pop(part,None)
+            basis=self.engine.continuous_basis.get(part)
+            self.person_restore_mounting[part]=(None if basis is None else basis.copy(),tuple(self.engine.axis_mappings[part]))
+            self.person_restore_blocked.discard(part)
             self.engine.fusion_ready.add(device);self.engine.set_fusion_correction(device,np.eye(3))
             neutral=self.engine.neutral_for(device,GYRO_TILT)
             if neutral is not None:self.engine.set_neutral_for_mode(device,GYRO_RGBD,neutral)
@@ -121,7 +134,11 @@ class LiveRGBDFusion:
             device=data['device_id'];reason=None;innovation=None;applied=False
             if self.engine.assignments.get(part)!=device or self.engine.epochs.get(device)!=data['reference_epoch']:
                 self.engine.fusion_ready.discard(device);reason='绑定/参考系已失效，需重标定'
-            elif device not in self.engine.fusion_ready:reason='标定已停用：保留修正，需重新标定'
+                self.person_restore_blocked.add(part)
+                self.model_rechecks.pop(part,None)
+            elif part in self.model_rechecks:
+                reason=self._check_new_model(part,row,stamp,now,allow)
+            elif device not in self.engine.fusion_ready:reason=self.model_recheck_failures.get(part,'标定已停用：保留修正，需重新标定')
             elif not allow:reason='标定/相机停用：冻结纠偏'
             elif now-stamp>500_000_000 or stamp>now:reason='源帧过期/未来时间，冻结纠偏'
             elif stamp<=self.last_stamp.get(part,-1):reason='重复或乱序观测'
@@ -144,7 +161,87 @@ class LiveRGBDFusion:
         rows=list(self.events);self.events.clear();return rows
 
     def invalidate(self,reason):
+        self.model_rechecks.clear()
+        self.model_recheck_failures.clear()
+        if reason==MODEL_SELECTION_INVALIDATION:self.model_changed=True
         for part,(data,corrector) in self.bindings.items():
+            if reason not in (PERSON_SELECTION_INVALIDATION,MODEL_SELECTION_INVALIDATION):self.person_restore_blocked.add(part)
             self.engine.fusion_ready.discard(data['device_id'])
             self.states[part]={'reason':reason,'offset_deg':float(np.degrees(corrector.offset_rad))}
         self.events.append({'time_ns':time.monotonic_ns(),'type':'invalidate','reason':reason})
+
+    def begin_model_recheck(self):
+        parts=self.validate_person_restore();now=time.monotonic_ns()
+        for part in parts:
+            data,corrector=self.bindings[part]
+            self.engine.fusion_ready.discard(data['device_id'])
+            self.model_recheck_failures.pop(part,None)
+            self.model_rechecks[part]={'started_ns':now,'last_ns':-1,'samples':[]}
+            self.states[part]={'reason':'新模型一致性检查：请斜前举/侧举，保持骨段可见，至少1秒20帧',
+                              'offset_deg':float(np.degrees(corrector.offset_rad))}
+        self.events.append({'time_ns':now,'type':'model_recheck_started','parts':parts})
+        return parts
+
+    def _check_new_model(self,part,row,stamp,now,allow):
+        check=self.model_rechecks[part];data,corrector=self.bindings[part]
+        def fail(reason):
+            self.model_rechecks.pop(part,None)
+            self.events.append({'time_ns':now,'type':'model_recheck_failed','part':part,'reason':reason})
+            self.model_recheck_failures[part]=reason+'；纠偏仍停用，可重新确认重试或重标定'
+            return self.model_recheck_failures[part]
+        if now-check['started_ns']>15_000_000_000:return fail('新模型检查超时（15秒）')
+        try:self.validate_person_restore()
+        except ValueError as exc:return fail(str(exc))
+        if not allow or not 0<=now-stamp<=500_000_000:return '新模型检查等待新鲜、未冻结观测'
+        if stamp<=check['last_ns']:return '新模型检查忽略重复/乱序帧'
+        check['last_ns']=stamp
+        base=self.at(data['device_id'],stamp)
+        direction,reason=visual_direction(row,part,data['bone_length_m'])
+        if base is None or direction is None:return '新模型检查：'+('无同期IMU' if base is None else reason)
+        q=np.asarray(data['Q_camera_from_imu_world'])
+        predicted=corrector.rotation()@q@base@np.asarray(data['bone_axis_sensor'])
+        up=unit(q@np.asarray(data['up_world']))
+        if min(np.linalg.norm(np.cross(up,predicted)),np.linalg.norm(np.cross(up,direction)))<.3:
+            return '新模型检查：骨段近竖直，请斜前举或侧举'
+        samples=check['samples']
+        if samples and stamp-samples[-1][0]>500_000_000:samples.clear()
+        samples.append((stamp,angle_deg(predicted,direction)))
+        if len(samples)<20 or stamp-samples[0][0]<1_000_000_000:return f'新模型一致性采样 {len(samples)}/20 帧（至少1秒）'
+        median,p90=np.percentile([v for _,v in samples],[50,90])
+        metrics={'samples':len(samples),'median_deg':float(median),'p90_deg':float(p90)}
+        if median>=12 or p90>=25:return fail(f'新模型方向不一致：中位{median:.1f}° / P90 {p90:.1f}°')
+        self.model_rechecks.pop(part,None);self.engine.fusion_ready.add(data['device_id'])
+        self.events.append({'time_ns':now,'type':'model_recheck_passed','part':part,**metrics})
+        return f'新模型检查通过：中位{median:.1f}° / P90 {p90:.1f}°；下帧继续纠偏'
+
+    def validate_person_restore(self):
+        parts=[p for p in self.bindings if p not in self.person_restore_blocked]
+        if not parts:raise ValueError('无可恢复的原相机标定；相机/穿戴改变或标定失效后需重标定')
+        for part in parts:
+            data,_=self.bindings[part];device=data['device_id']
+            if self.engine.assignments.get(part)!=device or self.engine.epochs.get(device)!=data['reference_epoch']:
+                raise ValueError(f'{part} 设备绑定/积分参考系已改变，不能恢复')
+            basis,mapping=self.person_restore_mounting[part]
+            current=self.engine.continuous_basis.get(part)
+            if ((basis is None)!=(current is None) or (basis is not None and not np.allclose(basis,current,atol=1e-8,rtol=0))
+                    or mapping!=tuple(self.engine.axis_mappings[part])):
+                raise ValueError(f'{part} 穿戴映射已改变，不能恢复')
+            estimator=self.engine._tilt_filters.get(device)
+            if estimator is None or estimator.neutral_up is None or angle_deg(estimator.neutral_up,data['up_world'])>5:
+                raise ValueError(f'{part} 重力参考已改变，不能恢复')
+        return parts
+
+    def restore_original_person(self):
+        """Caller must verify camera/model session and explicitly confirm wearer.
+
+        Atomic across eligible parts; never reset offsets or IMU orientations.
+        Hard invalidations remain sticky until a fresh calibration installation.
+        """
+        parts=self.validate_person_restore()
+        for part in parts:
+            data,corrector=self.bindings[part]
+            self.engine.fusion_ready.add(data['device_id'])
+            self.states[part]={'reason':'已确认原标定者；保留修正，等待新视觉观测',
+                              'offset_deg':float(np.degrees(corrector.offset_rad))}
+        self.events.append({'time_ns':time.monotonic_ns(),'type':'original_person_restored','parts':parts})
+        return parts

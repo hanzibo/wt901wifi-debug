@@ -6,18 +6,23 @@ from PySide6 import QtCore
 
 from .rgbd_pose import DepthPoseEstimator
 from .pose_2d import Pose2DConfig,load_backend,infer_rtmw
+from .person_target import PersonTarget
 
 
 def load_detector(config=None):
     return load_backend(config or Pose2DConfig())
 
 
-def infer_observation(detector, estimator, observation):
+def infer_observation(detector, estimator, observation, *, target=None):
     """Shared live/offline path; RTMW predicted 3D coordinates are discarded."""
     import cv2
     started = time.perf_counter()
     bgr = cv2.cvtColor(observation.frame_rgb, cv2.COLOR_RGB2BGR)
-    xy,scores,diagnostics=(detector.infer(bgr) if hasattr(detector,'infer') else infer_rtmw(detector,bgr))
+    if target is None:
+        xy,scores,diagnostics=(detector.infer(bgr) if hasattr(detector,'infer') else infer_rtmw(detector,bgr))
+    else:
+        xy,scores,diagnostics=(detector.infer(bgr,target=target,observation=observation)
+            if hasattr(detector,'infer') else infer_rtmw(detector,bgr,target=target,observation=observation))
     if 'reject_reason' in diagnostics:
         estimator.reset()
     if hasattr(detector,'metadata'):diagnostics['vision_config']=detector.metadata
@@ -30,13 +35,22 @@ class RGBDPoseWorker(QtCore.QThread):
     error = QtCore.Signal(str)
     status = QtCore.Signal(str)
 
-    def __init__(self, parent=None, *, config=None, vision_epoch=None):
+    def __init__(self, parent=None, *, config=None, vision_epoch=None, target=None):
         super().__init__(parent)
         self._condition = Condition()
         self._input = self._result = None
         self._running = True
         self.input_skipped = self.result_skipped = 0
         self.config=config or Pose2DConfig();self.vision_epoch=vision_epoch
+        self.target=target if target is not None else PersonTarget()
+        self._target_command=None
+
+    def select_target(self, anchor, mode, epoch):
+        with self._condition:
+            self._target_command=(anchor,mode,epoch)
+            self.vision_epoch=epoch
+            self._result=None
+            self._condition.notify()
 
     def submit(self, observation):
         with self._condition:
@@ -62,8 +76,16 @@ class RGBDPoseWorker(QtCore.QThread):
         try:
             self.status.emit(f"正在加载本地 {self.config.backend} 模型…RGB-D 原始采集仍继续")
             detector = load_detector(self.config)
+            from .person_reid import OSNetEncoder
+            reid_status=''
+            try:
+                self.target.encoder=OSNetEncoder()
+                reid_status='；OSNet 身份恢复就绪'
+            except (ImportError,RuntimeError,FileNotFoundError) as exc:
+                self.target.encoder=None
+                reid_status=f'；人物重识别未启用：{exc}，不自动恢复'
             estimator = DepthPoseEstimator()
-            self.status.emit("模型就绪；只取二维关键点，三维距离来自相机")
+            self.status.emit("模型就绪；只取二维关键点，三维距离来自相机"+reid_status)
             while True:
                 with self._condition:
                     while self._running and self._input is None:
@@ -71,8 +93,16 @@ class RGBDPoseWorker(QtCore.QThread):
                     if not self._running:
                         break
                     observation, self._input = self._input, None
-                estimate = infer_observation(detector, estimator, observation)
-                estimate.diagnostics['vision_epoch']=self.vision_epoch
+                    epoch=self.vision_epoch
+                    command,self._target_command=self._target_command,None
+                if command is not None:
+                    anchor,mode,epoch=command
+                    self.target.reset(anchor,mode=mode,selection_id=epoch)
+                    estimator.reset()
+                    if anchor is not None and observation.captured_mono_ns<=anchor['captured_mono_ns']:
+                        continue
+                estimate = infer_observation(detector, estimator, observation,target=self.target)
+                estimate.diagnostics['vision_epoch']=epoch
                 with self._condition:
                     if self._result is not None:
                         self.result_skipped += 1
