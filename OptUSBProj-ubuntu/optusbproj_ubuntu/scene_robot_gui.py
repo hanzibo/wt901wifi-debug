@@ -10,10 +10,20 @@ from .scene_robot_model import SceneArm, body_axes, position_targets, segment_ta
 from .skeleton import PART_BY_KEY
 from .pose import PoseEngine
 from .x1_live import MAX_JOINT_SPEED_DEG_S,MAX_JOINT_STEP_DEG,NOMINAL_TICK_S
+from .scene_environment import DEFAULT_INSTALL,DEFAULT_SCENE,EnvironmentAction,launch_environment,port_in_use
+from .wrist_diagnostics import WristDiagnostics
 
 
 def joint_step(speed,dt):
     return np.deg2rad(min(MAX_JOINT_STEP_DEG,speed*max(0.,dt)))
+
+
+def joint_steps(arm_speed,wrist_speed,dt):
+    # Scale the wrist increment ceiling too: a fixed 9-degree ceiling would
+    # otherwise silently cap a 240 deg/s wrist at 180 deg/s at 20 Hz.
+    wrist_cap=MAX_JOINT_STEP_DEG*wrist_speed/MAX_JOINT_SPEED_DEG_S
+    wrist_step=np.deg2rad(min(wrist_cap,wrist_speed*max(0.,dt)))
+    return np.r_[np.full(4,joint_step(arm_speed,dt)),np.full(2,wrist_step)]
 
 
 def cycle_wait_ms(start,now):
@@ -58,10 +68,11 @@ def dispatch_reason(enabled,generation,current_generation,current,sample,now):
 class SceneWorker(QtCore.QThread):
     report=QtCore.Signal(object)
     failed=QtCore.Signal(str)
-    def __init__(self,port,mailbox,speed,angle,logging=False,parent=None):
+    def __init__(self,port,mailbox,speed,angle,logging=False,parent=None,*,wrist_speed=None):
         super().__init__(parent)
         self.port,self.mailbox,self.speed,self.angle=port,mailbox,speed,angle
         self.logging=logging
+        self.wrist_speed=speed if wrist_speed is None else wrist_speed
     def run(self):
         bridge=None
         logfile=None
@@ -117,7 +128,10 @@ class SceneWorker(QtCore.QThread):
                     raise RuntimeError('通信超时：两次重连未恢复，请检查 CoppeliaSim 弹窗或繁忙状态')
             config={'scene':bridge.data,'axes':C.tolist(),'neutral':{s:m.neutral.tolist() for s,m in models.items()},
                     'preview_limits':{s:[m.lower.tolist(),m.upper.tolist()] for s,m in models.items()},
-                    'speed_deg_s':self.speed,'version':1}
+                    'speed_deg_s':self.speed,'wrist_speed_deg_s':self.wrist_speed,
+                    'joint_speed_limits_deg_s':[self.speed]*4+[self.wrist_speed]*2,
+                    'joint_step_caps_deg':[MAX_JOINT_STEP_DEG]*4+
+                        [MAX_JOINT_STEP_DEG*self.wrist_speed/MAX_JOINT_SPEED_DEG_S]*2,'version':2}
             log_path=None
             if self.logging:
                 folder=Path(__file__).resolve().parents[1]/'recordings/coppeliasim'
@@ -127,6 +141,7 @@ class SceneWorker(QtCore.QThread):
                 logfile.write(json.dumps({'config':config},ensure_ascii=False)+'\n')
             self.report.emit({'connected':True,'angles':previous,'axes':C,'config':config,'log':str(log_path) if log_path else None})
             last=time.monotonic(); last_read=last
+            wrist_tracker=WristDiagnostics()
             was_enabled=False
             last_diagnostic=None;last_diagnostic_at=0.
             def diagnose(event,message,**values):
@@ -141,7 +156,8 @@ class SceneWorker(QtCore.QThread):
                 enabled,sample,generation=self.mailbox.get()
                 if enabled and sample and now-sample['at']<.25:
                     solve_start=time.monotonic();side_ms={}
-                    targets={};errors={};segment_errors={}
+                    targets={};errors={};segment_errors={};palm_targets={};relative_targets={}
+                    step=joint_steps(self.speed,self.wrist_speed,dt)
                     for side,human in sample['sides'].items():
                         side_start=time.monotonic()
                         directions=[C@v for v in human['directions']]
@@ -158,8 +174,11 @@ class SceneWorker(QtCore.QThread):
                             human_zero={p:human_rest[PART_BY_KEY[f'{side}_{p}']][:3,:3]
                                         for p in ('upper_arm','forearm')}
                             segment_rotations=segment_targets(models[side],C,human['rotations'],human_zero)
+                        palm_targets[side]=rotation
+                        relative_targets[side]=(segment_rotations['forearm'].T@rotation
+                            if rotation is not None and segment_rotations is not None else None)
                         q,err,orient=models[side].fit(directions,previous[side],
-                            joint_step(self.speed,dt),rotation,positions=positions,
+                            step,rotation,positions=positions,
                             segment_rotations=segment_rotations,segment_weight=sample.get('segment_weight',.15),
                             solver_mode=sample.get('solver_mode','staged'))
                         targets[side]=q
@@ -181,21 +200,28 @@ class SceneWorker(QtCore.QThread):
                         if actual is None:break
                         if self.mailbox.get()[2]!=generation:
                             previous=actual
+                            wrist_tracker.reset()
                             continue
                         if any(np.max(np.abs(actual[s]-q))>1e-5 for s,q in targets.items()):
                             raise ValueError('场景未应用目标角度，请检查其他控制器')
+                        readback_at=time.monotonic()
+                        wrist={side:wrist_tracker.measure(side,sample['at'],readback_at,palm_targets[side],
+                            models[side].tool_frame(actual[side])[:3,:3],actual[side],previous[side],step,
+                            models[side].lower,models[side].upper,relative_targets[side]) for side in targets}
                         previous=actual
                         if logfile:
-                            logfile.write(json.dumps({'mono_s':time.monotonic(),'input_mono_s':sample['at'],
+                            logfile.write(json.dumps({'mono_s':readback_at,'input_mono_s':sample['at'],
                                 'target':{s:q.tolist() for s,q in targets.items()},
                                 'actual':{s:q.tolist() for s,q in actual.items()},'errors':errors,
                                 'task':sample.get('task','positions'),'scale':sample.get('scale','uniform'),
                                 'segment_orientation':sample.get('segment_orientation',False),
                                 'segment_weight':sample.get('segment_weight',.15),'segment_errors_deg':segment_errors,'timing':timing,
-                                'palm_offsets':sample.get('palm_offsets',{}),'solver_mode':sample.get('solver_mode','staged')})+'\n')
+                                'palm_offsets':sample.get('palm_offsets',{}),'solver_mode':sample.get('solver_mode','staged'),
+                                'wrist_diagnostics':wrist})+'\n')
                         diagnose('sent','正在发送：IK %.0f ms；通信 %.0f ms；快照 %.0f ms'%(timing['ik_ms'],timing['rpc_ms'],timing['snapshot_age_ms']),**timing)
                         self.report.emit({'angles':actual,'errors':errors,'following':True,'task':sample.get('task','positions'),
-                                          'segment_errors':segment_errors,'solver_mode':sample.get('solver_mode','staged')})
+                                          'segment_errors':segment_errors,'solver_mode':sample.get('solver_mode','staged'),
+                                          'wrist_diagnostics':wrist})
                     else:
                         messages={'sending_stopped':'发送已停止：'+self.mailbox.stop_reason,
                                   'generation_changed':'授权已改变：丢弃旧求解结果',
@@ -206,6 +232,7 @@ class SceneWorker(QtCore.QThread):
                         diagnose(reason,messages[reason],**timing)
                     was_enabled=True
                 else:
+                    wrist_tracker.reset()
                     if now-last_read>.2:
                         actual=exchange()
                         if actual is None:break
@@ -284,6 +311,7 @@ class SceneRobotDialog(QtWidgets.QDialog):
         self.viewer=viewer;self.worker=None;self.mailbox=Mailbox();self.signature=None
         self.connected=False
         self.config=None
+        self.environment_action=None;self.environment_process=None
         self.setWindowTitle('新机器人 · CoppeliaSim 双臂实时预览')
         self.resize(750,600)
         layout=QtWidgets.QVBoxLayout(self)
@@ -291,12 +319,32 @@ class SceneRobotDialog(QtWidgets.QDialog):
             '请先打开已确认中立位的新场景并停止仿真；勿同时使用关节 demo。\n'
             '零角为屈肘姿态；参考中立位两侧关节4为 −90°。手指暂不控制。')
         info.setWordWrap(True);layout.addWidget(info)
+        self.install_path=QtWidgets.QLineEdit(str(DEFAULT_INSTALL))
+        self.scene_path=QtWidgets.QLineEdit(str(DEFAULT_SCENE))
+        for label,field,is_dir in (('安装目录',self.install_path,True),('启动场景',self.scene_path,False)):
+            row=QtWidgets.QHBoxLayout();row.addWidget(QtWidgets.QLabel(label));row.addWidget(field)
+            choose=QtWidgets.QPushButton('选择…')
+            choose.clicked.connect(lambda checked=False,f=field,d=is_dir:self.choose_environment_path(f,d))
+            row.addWidget(choose);layout.addLayout(row)
+        row=QtWidgets.QHBoxLayout()
+        self.open_environment_button=QtWidgets.QPushButton('打开 CoppeliaSim 环境')
+        self.close_environment_button=QtWidgets.QPushButton('关闭 CoppeliaSim 环境')
+        row.addWidget(self.open_environment_button);row.addWidget(self.close_environment_button);layout.addLayout(row)
+        self.environment_status=QtWidgets.QLabel('环境：可复用手动打开的实例；关闭前请保存场景。')
+        self.environment_status.setWordWrap(True);layout.addWidget(self.environment_status)
+        self.environment_gpu=QtWidgets.QCheckBox('新启动环境使用 NVIDIA GPU 渲染（默认开启；已有实例需重启才生效）')
+        self.environment_gpu.setChecked(True);layout.addWidget(self.environment_gpu)
+        self.open_environment_button.clicked.connect(self.open_environment)
+        self.close_environment_button.clicked.connect(self.close_environment)
         form=QtWidgets.QFormLayout();layout.addLayout(form)
         self.port=QtWidgets.QSpinBox();self.port.setRange(1024,65535);self.port.setValue(23000)
         self.speed=QtWidgets.QSpinBox();self.speed.setRange(5,120);self.speed.setValue(int(MAX_JOINT_SPEED_DEG_S));self.speed.setSuffix(' °/s')
+        self.wrist_speed=QtWidgets.QSpinBox();self.wrist_speed.setRange(5,720);self.wrist_speed.setValue(240);self.wrist_speed.setSuffix(' °/s')
+        self.wrist_speed.setToolTip('左右手关节 5、6 共用；连接前设置。肩肘 1–4 限速不变。仅仿真预览，不是真机安全参数。')
         self.angle=QtWidgets.QSpinBox();self.angle.setRange(100,170);self.angle.setValue(150);self.angle.setSuffix(' °')
         form.addRow('本机 ZeroMQ 端口',self.port)
-        form.addRow('预览关节限速',self.speed)
+        form.addRow('肩肘关节 1–4 限速（左右共用）',self.speed)
+        form.addRow('腕部关节 5–6 限速（左右共用）',self.wrist_speed)
         form.addRow('预览区间 ±（非机械安全限位）',self.angle)
         self.extra_limits=QtWidgets.QCheckBox('额外角度区间限制（默认关闭；始终遵守场景关节区间）')
         form.addRow(self.extra_limits)
@@ -340,7 +388,7 @@ class SceneRobotDialog(QtWidgets.QDialog):
             self.palm_offset_controls[side]=(enabled,axis,angle,plus,minus)
         warning=QtWidgets.QLabel('固定转向仅在该侧“手掌朝向”开启时生效；轴为机器人中立手掌局部轴，不是人体轴。会改变中立掌面，无碰撞保护。停止跟随后调整。')
         warning.setWordWrap(True);layout.addWidget(warning)
-        self.logging=QtWidgets.QCheckBox('记录角度、超时原因及 GUI / IK / 通信耗时（复现前勾选）')
+        self.logging=QtWidgets.QCheckBox('记录角度、腕部目标速度 / 5、6 角速度 / 朝向误差及时序（连接前勾选）')
         layout.addWidget(self.logging)
         self.connect_button=QtWidgets.QPushButton('连接 / 重新读取场景')
         self.start=QtWidgets.QPushButton('启动所选手臂跟随');self.start.setEnabled(False)
@@ -362,6 +410,58 @@ class SceneRobotDialog(QtWidgets.QDialog):
         self.ingress_timer.timeout.connect(self.flush_ingress)
         self.input_gap=False
 
+    def choose_environment_path(self,field,is_dir):
+        if is_dir:path=QtWidgets.QFileDialog.getExistingDirectory(self,'选择 CoppeliaSim 安装目录',field.text())
+        else:path,_=QtWidgets.QFileDialog.getOpenFileName(self,'选择启动场景',field.text(),'CoppeliaSim (*.ttt)')
+        if path:field.setText(path)
+
+    def environment_busy(self,busy):
+        for w in (self.open_environment_button,self.close_environment_button,self.install_path,self.scene_path,self.environment_gpu):
+            w.setEnabled(not busy)
+        if busy:
+            self._environment_port_enabled=self.port.isEnabled();self.port.setEnabled(False)
+        else:self.port.setEnabled(self._environment_port_enabled)
+
+    def open_environment(self):
+        if self.environment_action is not None:return
+        if self.environment_process is not None and self.environment_process.poll() is None:
+            self.environment_status.setText('本窗口启动的环境仍在运行／加载中；不会重复打开。');return
+        self.environment_busy(True)
+        self.environment_status.setText('检查所选端口是否已有环境…')
+        action=EnvironmentAction(self.port.value(),parent=self);self.environment_action=action
+        action.result.connect(self.environment_open_result)
+        action.finished.connect(self.environment_action_finished);action.start()
+
+    def environment_open_result(self,available,message):
+        if available:self.environment_status.setText(message);return
+        if port_in_use(self.port.value()):
+            self.environment_status.setText('所选端口已占用但 API 未响应；请处理环境弹窗或等待，未重复启动。');return
+        try:
+            self.environment_process=launch_environment(self.install_path.text(),self.scene_path.text(),self.port.value(),
+                                                        gpu=self.environment_gpu.isChecked())
+            self.environment_status.setText('已启动进程'+('（已设置 NVIDIA GPU 渲染）' if self.environment_gpu.isChecked() else '')+
+                '，正在加载场景；等待窗口加载完成后点击“连接 / 重新读取场景”。')
+        except Exception as exc:self.environment_status.setText('启动失败：'+str(exc))
+
+    def environment_action_finished(self):
+        self.environment_action.deleteLater();self.environment_action=None;self.environment_busy(False)
+
+    def close_environment(self):
+        if self.environment_action is not None:return
+        answer=QtWidgets.QMessageBox.question(self,'关闭 CoppeliaSim',
+            '将停止跟随，并请求所选本机端口 %d 的 CoppeliaSim 正常退出。\n'
+            '请先保存需要保留的场景；本程序不会自动保存，也不会强制结束进程。\n是否继续？'%self.port.value())
+        if answer!=QtWidgets.QMessageBox.Yes:return
+        self.halt(reason='用户关闭 CoppeliaSim 环境')
+        if not self.shutdown():return
+        self.connected=False;self.start.setEnabled(False);self.connect_button.setEnabled(True)
+        for w in (self.port,self.speed,self.wrist_speed,self.logging,self.extra_limits):w.setEnabled(True)
+        self.angle.setEnabled(self.extra_limits.isChecked())
+        self.environment_busy(True)
+        action=EnvironmentAction(self.port.value(),closing=True,parent=self);self.environment_action=action
+        action.result.connect(lambda ok,message:self.environment_status.setText(message))
+        action.finished.connect(self.environment_action_finished);action.start()
+
     def controls(self,running):
         for widgets in self.palm_offset_controls.values():
             for w in widgets:w.setEnabled(not running)
@@ -373,10 +473,11 @@ class SceneRobotDialog(QtWidgets.QDialog):
         self.halt()
         if not self.shutdown(): return
         self.connected=False;self.start.setEnabled(False);self.connect_button.setEnabled(False)
-        for w in (self.port,self.speed,self.angle,self.logging,self.extra_limits):w.setEnabled(False)
+        for w in (self.port,self.speed,self.wrist_speed,self.angle,self.logging,self.extra_limits):w.setEnabled(False)
         self.status.setText('正在读取场景关节链；不会改变关节角…')
         self.worker=SceneWorker(self.port.value(),self.mailbox,self.speed.value(),
-            self.angle.value() if self.extra_limits.isChecked() else None,self.logging.isChecked(),self)
+            self.angle.value() if self.extra_limits.isChecked() else None,self.logging.isChecked(),self,
+            wrist_speed=self.wrist_speed.value())
         worker=self.worker
         self.worker.report.connect(lambda data: self.report(data) if self.worker is worker else None)
         self.worker.failed.connect(lambda text: self.failure(text) if self.worker is worker else None)
@@ -492,6 +593,15 @@ class SceneRobotDialog(QtWidgets.QDialog):
             lines=[]
             for side,q in data['angles'].items():
                 lines.append(('左' if side=='left' else '右')+'臂实际角度 °：'+', '.join(f'{v:.1f}' for v in np.rad2deg(q)))
+                wrist=data.get('wrist_diagnostics',{}).get(side)
+                if wrist is not None:
+                    fmt=lambda value:'—' if value is None else f'{value:.1f}'
+                    lines.append('腕部诊断：目标速度 '+fmt(wrist['target_speed_deg_s'])+' °/s；J5 '+
+                        fmt(wrist['joint5_velocity_deg_s'])+' °/s；J6 '+fmt(wrist['joint6_velocity_deg_s'])+' °/s')
+                    if wrist['target_relative_forearm_speed_deg_s'] is not None:
+                        lines.append('相对目标前臂的掌面速度：'+fmt(wrist['target_relative_forearm_speed_deg_s'])+' °/s')
+                    lines.append('腕部单步限速触边 J5/J6：'+str(wrist['wrist_step_limit_active'])+
+                                 '；场景角度限位触边：'+str(wrist['wrist_joint_limit_active']))
                 if side in data.get('errors',{}):
                     err,orient=data['errors'][side]
                     label='肘腕位置' if data.get('task')=='positions' else '骨段端点'
@@ -510,7 +620,7 @@ class SceneRobotDialog(QtWidgets.QDialog):
     def failure(self,text):
         self.connected=False;self.halt(reason='连接/求解失败：'+text);self.status.setText('连接/求解停止：'+text)
         self.connect_button.setEnabled(True)
-        for w in (self.port,self.speed,self.logging,self.extra_limits):w.setEnabled(True)
+        for w in (self.port,self.speed,self.wrist_speed,self.logging,self.extra_limits):w.setEnabled(True)
         self.angle.setEnabled(self.extra_limits.isChecked())
 
     def export_config(self):
@@ -531,10 +641,12 @@ class SceneRobotDialog(QtWidgets.QDialog):
         return True
 
     def closeEvent(self,event):
+        if self.environment_action is not None:
+            self.environment_status.setText('环境操作正在进行，请稍后关闭配置窗口。');event.ignore();return
         self.halt()
         if self.shutdown():
             self.connected=False;self.start.setEnabled(False);self.connect_button.setEnabled(True)
-            for w in (self.port,self.speed,self.logging,self.extra_limits):w.setEnabled(True)
+            for w in (self.port,self.speed,self.wrist_speed,self.logging,self.extra_limits):w.setEnabled(True)
             self.angle.setEnabled(self.extra_limits.isChecked())
             event.accept()
         else:event.ignore()

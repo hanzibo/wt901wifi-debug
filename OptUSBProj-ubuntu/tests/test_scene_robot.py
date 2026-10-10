@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 from scipy.spatial.transform import Rotation
 from optusbproj_ubuntu.scene_robot_model import SceneArm,position_targets,segment_targets,palm_target
-from optusbproj_ubuntu.scene_robot_gui import Mailbox, pose_sample,SceneWorker,SceneRobotDialog,dispatch_reason,StaleImuInput,temporary_imu_gap,joint_step,cycle_wait_ms
+from optusbproj_ubuntu.scene_robot_gui import Mailbox, pose_sample,SceneWorker,SceneRobotDialog,dispatch_reason,StaleImuInput,temporary_imu_gap,joint_step,joint_steps,cycle_wait_ms
 from optusbproj_ubuntu.x1_retarget import retarget_bone_points
 from optusbproj_ubuntu.pose import PoseEngine
 from optusbproj_ubuntu.coppeliasim_bridge import SceneBridge
@@ -22,6 +22,22 @@ def fixture():
 
 
 class ModelTests(unittest.TestCase):
+    def test_independent_wrist_speed_preserves_arm_limits(self):
+        np.testing.assert_allclose(np.rad2deg(joint_steps(120,240,.05)),[6,6,6,6,12,12])
+        np.testing.assert_allclose(np.rad2deg(joint_steps(120,240,.2)),[9,9,9,9,18,18])
+        np.testing.assert_allclose(joint_steps(120,120,.05),np.full(6,joint_step(120,.05)))
+        np.testing.assert_allclose(np.rad2deg(joint_steps(120,60,.05)),[6,6,6,6,3,3])
+
+    def test_vector_steps_apply_in_both_solver_modes(self):
+        for mode in ('staged','joint'):
+            m=SceneArm(fixture(),np.full(6,-3.),np.full(6,3.));previous=np.zeros(6)
+            truth=previous.copy();truth[4:]=[.8,.6]
+            _,e,w=m.points(previous)
+            steps=joint_steps(120,240,.05)
+            q,_,_=m.fit(None,previous,steps,m.tool_frame(truth)[:3,:3],positions=(e,w),solver_mode=mode)
+            self.assertTrue(np.all(np.abs(q-previous)<=steps+1e-8))
+            self.assertGreater(np.max(np.abs(q[4:])),np.deg2rad(6))
+
     def test_staged_palm_target_cannot_change_arm_stage(self):
         m=SceneArm(fixture(),np.full(6,-3.),np.full(6,3.))
         q0=np.zeros(6);_,e,w=m.points(q0)
