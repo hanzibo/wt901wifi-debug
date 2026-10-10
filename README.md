@@ -15,6 +15,7 @@
 | 单目相机姿态原型 | `OptUSBProj-ubuntu/camera_run.py` | 见 [相机环境说明](OptUSBProj-ubuntu/docs/CAMERA_SETUP.md) |
 | Gemini RGB-D＋IMU、双臂一体标定与纠偏 | `OptUSBProj-ubuntu/fusion_run.py --camera-source orbbec` | 推荐已配置的 `OptUSBProj-yolo`；SDK 独立环境见下文 |
 | X1 双臂／手掌 RViz 随动 | 人体 GUI 内的“X1 双臂实时预览…” | ROS 接收端使用 `x1_ros2_py` |
+| 新机器人双臂／手掌 CoppeliaSim 随动 | 人体 GUI 内的“新机器人双臂实时预览…” | 本机 ZeroMQ API；仅停止状态预览；见[说明](docs/COPPELIASIM_LIVE_RETARGET.md) |
 
 ## 当前能力与边界
 

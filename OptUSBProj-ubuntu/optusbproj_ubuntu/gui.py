@@ -128,6 +128,7 @@ class BodyWindow(QtWidgets.QMainWindow):
         self.calibration_dialog = None
         self.natural_hand_dialog = None
         self.x1_preview_dialog = None
+        self.scene_robot_dialog = None
         self.gripper_gesture_dialog = None
         self.recorder: PacketRecorder | None = None
         self.replay_mode = isinstance(source, ReplaySource) or getattr(source, "is_replay", False)
@@ -208,6 +209,10 @@ class BodyWindow(QtWidgets.QMainWindow):
         self.x1_preview_button.clicked.connect(self._show_x1_preview)
         self.x1_preview_button.setEnabled(not self.replay_mode)
         panel_layout.addWidget(self.x1_preview_button)
+        self.scene_robot_button = QtWidgets.QPushButton("新机器人双臂实时预览…（CoppeliaSim）")
+        self.scene_robot_button.clicked.connect(self._show_scene_robot)
+        self.scene_robot_button.setEnabled(not self.replay_mode)
+        panel_layout.addWidget(self.scene_robot_button)
         self.gripper_gesture_button = QtWidgets.QPushButton('左右手 IMU 夹爪配置…（四设备 / RViz）')
         self.gripper_gesture_button.clicked.connect(self._show_gripper_gesture)
         self.gripper_gesture_button.setEnabled(not self.replay_mode)
@@ -361,6 +366,7 @@ class BodyWindow(QtWidgets.QMainWindow):
         self._render_dirty = True
 
     def _poll(self) -> None:
+        poll_started=time.monotonic()
         try:
             timed_packets = (self.source.poll_timed() if hasattr(self.source, 'poll_timed') else
                              [(time.monotonic_ns(), packet) for packet in self.source.poll()])
@@ -395,6 +401,10 @@ class BodyWindow(QtWidgets.QMainWindow):
         now = time.monotonic()
         if self._render_dirty and now - self._last_render >= 1 / 30:
             self._render_pose()
+
+        if hasattr(self.source,'diagnostic_event'):
+            self.source.diagnostic_event('gui_poll_end',duration_ms=(time.monotonic()-poll_started)*1000,
+                                         packets=len(timed_packets))
 
     def _check_calibration_reconnect(self, device_id: str, received_at: float) -> None:
         if self.replay_mode:
@@ -557,6 +567,16 @@ class BodyWindow(QtWidgets.QMainWindow):
         self.gripper_gesture_dialog.show()
         self.gripper_gesture_dialog.raise_()
         self.gripper_gesture_dialog.activateWindow()
+
+    def _show_scene_robot(self) -> None:
+        if self.replay_mode:
+            return
+        from .scene_robot_gui import SceneRobotDialog
+        if self.scene_robot_dialog is None:
+            self.scene_robot_dialog = SceneRobotDialog(self)
+        self.scene_robot_dialog.show()
+        self.scene_robot_dialog.raise_()
+        self.scene_robot_dialog.activateWindow()
 
     def _show_x1_preview(self) -> None:
         if self.replay_mode:
@@ -797,6 +817,9 @@ class BodyWindow(QtWidgets.QMainWindow):
             self.settings_dialog.show()
             self.settings_dialog.raise_()
             self.settings_dialog.status.setText("设备设置正在保存或回读，请等待完成")
+            event.ignore()
+            return
+        if self.scene_robot_dialog is not None and not self.scene_robot_dialog.close():
             event.ignore()
             return
         self.poll_timer.stop()

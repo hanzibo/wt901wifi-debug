@@ -1,0 +1,540 @@
+"""Independent CoppeliaSim preview. GUI samples pose; worker owns all RPC and IK."""
+import threading
+import time
+import json
+from datetime import datetime
+from pathlib import Path
+import numpy as np
+from PySide6 import QtCore, QtWidgets
+from .scene_robot_model import SceneArm, body_axes, position_targets, segment_targets, palm_target, matrix
+from .skeleton import PART_BY_KEY
+from .pose import PoseEngine
+from .x1_live import MAX_JOINT_SPEED_DEG_S,MAX_JOINT_STEP_DEG,NOMINAL_TICK_S
+
+
+def joint_step(speed,dt):
+    return np.deg2rad(min(MAX_JOINT_STEP_DEG,speed*max(0.,dt)))
+
+
+def cycle_wait_ms(start,now):
+    return max(0,int((NOMINAL_TICK_S-(now-start))*1000))
+
+
+class Mailbox:
+    def __init__(self):
+        self.lock=threading.Lock()
+        self.enabled=False
+        self.sample=None
+        self.generation=0
+        self.blocked=False
+        self.stop_reason='尚未启动'
+    def set(self,enabled,sample=None,reason=None):
+        with self.lock:
+            if enabled and self.blocked:return
+            if self.enabled != enabled:
+                self.generation+=1
+            self.enabled=enabled
+            self.sample=sample
+            if reason is not None:self.stop_reason=reason
+    def pause(self):
+        with self.lock:
+            self.blocked=True;self.enabled=False;self.sample=None;self.generation+=1
+    def resume(self,sample):
+        with self.lock:
+            self.blocked=False;self.enabled=True;self.sample=sample;self.generation+=1
+    def get(self):
+        with self.lock:
+            return self.enabled,self.sample,self.generation
+
+
+def dispatch_reason(enabled,generation,current_generation,current,sample,now):
+    if not enabled:return 'sending_stopped'
+    if generation!=current_generation:return 'generation_changed'
+    if current is None:return 'missing_snapshot'
+    if now-sample['at']>=.25:return 'solve_snapshot_expired'
+    return None
+
+
+class SceneWorker(QtCore.QThread):
+    report=QtCore.Signal(object)
+    failed=QtCore.Signal(str)
+    def __init__(self,port,mailbox,speed,angle,logging=False,parent=None):
+        super().__init__(parent)
+        self.port,self.mailbox,self.speed,self.angle=port,mailbox,speed,angle
+        self.logging=logging
+    def run(self):
+        bridge=None
+        logfile=None
+        try:
+            from .coppeliasim_bridge import SceneBridge
+            bridge=SceneBridge(self.port)
+            models={}
+            for side,a in bridge.data['arms'].items():
+                limits=np.array(a['limits']).T
+                lower=limits[0] if self.angle is None else np.maximum(limits[0],-np.deg2rad(self.angle))
+                upper=limits[1] if self.angle is None else np.minimum(limits[1],np.deg2rad(self.angle))
+                models[side]=SceneArm(a,lower,upper)
+            C=body_axes(models)
+            previous=bridge.exchange()
+            human_rest=PoseEngine().transforms(include_natural=False)
+            human_neutral={s:tuple(human_rest[PART_BY_KEY[f'{s}_{p}']][:3,3].copy()
+                                   for p in ('upper_arm','forearm','hand')) for s in models}
+            if hasattr(bridge,'fast_idle'):bridge.fast_idle(True)
+
+            def exchange(targets=None):
+                nonlocal bridge
+                import zmq
+                try:
+                    return bridge.exchange(targets)
+                except zmq.Again:
+                    self.mailbox.pause()
+                    self.report.emit({'recovering':True})
+                    if logfile:logfile.write(json.dumps({'event':'rpc_timeout','mono_s':time.monotonic(),
+                        'write_uncertain':bool(targets)})+'\n')
+                    old=bridge.data
+                    bridge.close();bridge=None
+                    for attempt in range(2):
+                        if self.isInterruptionRequested():return None
+                        try:
+                            bridge=SceneBridge(self.port)
+                            bridge.validate_identity(old)
+                            # Keep original PoE and human references; verify geometry hasn't changed.
+                            for side,m in models.items():
+                                fresh=bridge.data['arms'][side];q=np.array(fresh['q'])
+                                for i,raw in enumerate(fresh['joints']):
+                                    if not np.allclose(m.frame(q,m.homes[i],i),matrix(raw),atol=1e-6,rtol=0):
+                                        raise ValueError('恢复失败：机器人几何改变，请重新连接')
+                                if not np.allclose(m.tool_frame(q)[:3,:3],matrix(fresh['palm'])[:3,:3],atol=1e-6,rtol=0):
+                                    raise ValueError('恢复失败：工具系改变，请重新连接')
+                            actual=bridge.exchange()
+                            if hasattr(bridge,'fast_idle'):bridge.fast_idle(True)
+                            self.report.emit({'recovered':True,'angles':actual})
+                            if logfile:logfile.write(json.dumps({'event':'rpc_recovered','mono_s':time.monotonic()})+'\n')
+                            return actual
+                        except zmq.Again:
+                            if bridge:bridge.close();bridge=None
+                            self.msleep(200)
+                    raise RuntimeError('通信超时：两次重连未恢复，请检查 CoppeliaSim 弹窗或繁忙状态')
+            config={'scene':bridge.data,'axes':C.tolist(),'neutral':{s:m.neutral.tolist() for s,m in models.items()},
+                    'preview_limits':{s:[m.lower.tolist(),m.upper.tolist()] for s,m in models.items()},
+                    'speed_deg_s':self.speed,'version':1}
+            log_path=None
+            if self.logging:
+                folder=Path(__file__).resolve().parents[1]/'recordings/coppeliasim'
+                folder.mkdir(parents=True,exist_ok=True)
+                log_path=folder/(datetime.now().strftime('%Y%m%d-%H%M%S-%f')+'.jsonl')
+                logfile=log_path.open('w',encoding='utf-8',buffering=1)
+                logfile.write(json.dumps({'config':config},ensure_ascii=False)+'\n')
+            self.report.emit({'connected':True,'angles':previous,'axes':C,'config':config,'log':str(log_path) if log_path else None})
+            last=time.monotonic(); last_read=last
+            was_enabled=False
+            last_diagnostic=None;last_diagnostic_at=0.
+            def diagnose(event,message,**values):
+                nonlocal last_diagnostic,last_diagnostic_at
+                moment=time.monotonic()
+                if event==last_diagnostic and moment-last_diagnostic_at<.5:return
+                last_diagnostic=event;last_diagnostic_at=moment
+                if logfile:logfile.write(json.dumps({'event':event,'message':message,'mono_s':moment,**values},ensure_ascii=False)+'\n')
+                self.report.emit({'diagnostic':message})
+            while not self.isInterruptionRequested():
+                now=time.monotonic(); dt=max(.001,now-last);last=now
+                enabled,sample,generation=self.mailbox.get()
+                if enabled and sample and now-sample['at']<.25:
+                    solve_start=time.monotonic();side_ms={}
+                    targets={};errors={};segment_errors={}
+                    for side,human in sample['sides'].items():
+                        side_start=time.monotonic()
+                        directions=[C@v for v in human['directions']]
+                        rotation=None
+                        if human['hand'] is not None:
+                            rotation=palm_target(C,human['hand'],human_rest[PART_BY_KEY[f'{side}_hand']][:3,:3],
+                                models[side].tool_frame(models[side].neutral)[:3,:3],sample.get('palm_offsets',{}).get(side))
+                        positions=None
+                        if sample.get('task','positions')=='positions':
+                            positions=position_targets(models[side],C,human_neutral[side],human['points'],
+                                                       sample.get('scale','uniform'))
+                        segment_rotations=None
+                        if sample.get('segment_orientation',False):
+                            human_zero={p:human_rest[PART_BY_KEY[f'{side}_{p}']][:3,:3]
+                                        for p in ('upper_arm','forearm')}
+                            segment_rotations=segment_targets(models[side],C,human['rotations'],human_zero)
+                        q,err,orient=models[side].fit(directions,previous[side],
+                            joint_step(self.speed,dt),rotation,positions=positions,
+                            segment_rotations=segment_rotations,segment_weight=sample.get('segment_weight',.15),
+                            solver_mode=sample.get('solver_mode','staged'))
+                        targets[side]=q
+                        errors[side]=(err,orient)
+                        segment_errors[side]=models[side].segment_errors(q,segment_rotations)
+                        side_ms[side]=(time.monotonic()-side_start)*1000
+                    # Re-check stop/staleness AFTER solving and before sending.
+                    still_on,current,current_generation=self.mailbox.get()
+                    finished=time.monotonic()
+                    timing={'ik_ms':(finished-solve_start)*1000,'side_ik_ms':side_ms,
+                            'snapshot_age_ms':(finished-sample['at'])*1000,
+                            'latest_snapshot_age_ms':None if current is None else (finished-current['at'])*1000,
+                            'device_ages_ms':sample.get('device_ages_ms',{}),'gui_interval_ms':sample.get('gui_interval_ms')}
+                    reason=dispatch_reason(still_on,generation,current_generation,current,sample,finished)
+                    if reason is None:
+                        rpc_start=time.monotonic()
+                        actual=exchange(targets)
+                        timing['rpc_ms']=(time.monotonic()-rpc_start)*1000
+                        if actual is None:break
+                        if self.mailbox.get()[2]!=generation:
+                            previous=actual
+                            continue
+                        if any(np.max(np.abs(actual[s]-q))>1e-5 for s,q in targets.items()):
+                            raise ValueError('场景未应用目标角度，请检查其他控制器')
+                        previous=actual
+                        if logfile:
+                            logfile.write(json.dumps({'mono_s':time.monotonic(),'input_mono_s':sample['at'],
+                                'target':{s:q.tolist() for s,q in targets.items()},
+                                'actual':{s:q.tolist() for s,q in actual.items()},'errors':errors,
+                                'task':sample.get('task','positions'),'scale':sample.get('scale','uniform'),
+                                'segment_orientation':sample.get('segment_orientation',False),
+                                'segment_weight':sample.get('segment_weight',.15),'segment_errors_deg':segment_errors,'timing':timing,
+                                'palm_offsets':sample.get('palm_offsets',{}),'solver_mode':sample.get('solver_mode','staged')})+'\n')
+                        diagnose('sent','正在发送：IK %.0f ms；通信 %.0f ms；快照 %.0f ms'%(timing['ik_ms'],timing['rpc_ms'],timing['snapshot_age_ms']),**timing)
+                        self.report.emit({'angles':actual,'errors':errors,'following':True,'task':sample.get('task','positions'),
+                                          'segment_errors':segment_errors,'solver_mode':sample.get('solver_mode','staged')})
+                    else:
+                        messages={'sending_stopped':'发送已停止：'+self.mailbox.stop_reason,
+                                  'generation_changed':'授权已改变：丢弃旧求解结果',
+                                  'missing_snapshot':'没有 GUI 快照：本轮不发送',
+                                  'solve_snapshot_expired':'求解快照过期：%.0f ms ≥ 250 ms；IK %.0f ms；最新快照 %s ms，本轮不发送'%(
+                                      timing['snapshot_age_ms'],timing['ik_ms'],
+                                      '无' if current is None else '%.0f'%timing['latest_snapshot_age_ms'])}
+                        diagnose(reason,messages[reason],**timing)
+                    was_enabled=True
+                else:
+                    if now-last_read>.2:
+                        actual=exchange()
+                        if actual is None:break
+                        previous=actual;last_read=now
+                        self.report.emit({'angles':previous,'following':False})
+                    if not enabled:
+                        diagnose('sending_stopped','发送已停止：'+self.mailbox.stop_reason)
+                    elif sample is None:
+                        diagnose('missing_snapshot','没有 GUI 快照：保持当前角度')
+                    else:
+                        diagnose('gui_snapshot_expired','GUI 快照超时：%.0f ms ≥ 250 ms；等待新快照，保持当前角度'%((now-sample['at'])*1000),snapshot_age_ms=(now-sample['at'])*1000)
+                    was_enabled=False
+                wait=cycle_wait_ms(now,time.monotonic())
+                if wait:self.msleep(wait)
+        except Exception as exc:
+            if logfile:logfile.write(json.dumps({'event':'failure','error':str(exc),'mono_s':time.monotonic()},ensure_ascii=False)+'\n')
+            self.mailbox.set(False)
+            self.failed.emit(str(exc))
+        finally:
+            if logfile:logfile.write(json.dumps({'event':'worker_closed','mono_s':time.monotonic()})+'\n')
+            if logfile is not None: logfile.close()
+            if bridge is not None: bridge.close()
+
+
+class StaleImuInput(ValueError):
+    def __init__(self,part,device,age):
+        self.age=age
+        super().__init__(f'IMU 数据不新鲜：{part} / {device}，年龄 {age*1000:.0f} ms（允许 -100…250 ms）')
+
+
+def temporary_imu_gap(exc):
+    # Never accept old poses: only allow waiting for new input for up to 1 s.
+    return isinstance(exc,StaleImuInput) and .25<exc.age<1.
+
+
+def pose_sample(engine,sides,hand_sides,manual=False):
+    """Runs only on GUI thread; no worker shares mutable PoseEngine state."""
+    now=time.monotonic()
+    parts=[f'{s}_{segment}' for s in sides for segment in ('upper_arm','forearm')]
+    parts += [f'{s}_hand' for s in hand_sides if s in sides]
+    ids=[engine.assignments.get(p,'') for p in parts]
+    if not all(ids) or len(set(ids))!=len(ids):
+        raise ValueError('所选部位须分配不同的在线设备')
+    signature=[]
+    ages=[(part,device,now-engine.received_at.get(device,-1e9)) for part,device in zip(parts,ids)]
+    for part,device,age in sorted(ages,key=lambda item:item[2],reverse=True):
+        if not -.1<=age<=.25:raise StaleImuInput(part,device,age)
+    for part,device in zip(parts,ids):
+        if device not in engine.neutral or device not in engine.current:
+            raise ValueError(f'{part} 缺少当前姿态或中立位')
+        if not part.endswith('_hand') and not manual and part not in engine.continuous_basis:
+            raise ValueError(f'{part} 未应用穿戴标定')
+        basis=engine.continuous_basis.get(part)
+        signature.append((part,device,engine.algorithm_modes[part],
+                          repr(engine.axis_mappings[part]),
+                          engine.neutral[device].tobytes(),
+                          None if basis is None else basis.tobytes()))
+    transforms=engine.transforms(include_natural=False)
+    result={}
+    for side in sides:
+        s,e,w=[transforms[PART_BY_KEY[f'{side}_{seg}']][:3,3] for seg in ('upper_arm','forearm','hand')]
+        vectors=[e-s,w-e]
+        if min(np.linalg.norm(v) for v in vectors)<1e-8:
+            raise ValueError('人体骨段长度无效')
+        hand=transforms[PART_BY_KEY[f'{side}_hand']][:3,:3].copy() if side in hand_sides else None
+        result[side]={'directions':[v/np.linalg.norm(v) for v in vectors],'hand':hand,
+                      'points':tuple(v.copy() for v in (s,e,w)),
+                      'rotations':{p:transforms[PART_BY_KEY[f'{side}_{p}']][:3,:3].copy()
+                                   for p in ('upper_arm','forearm')}}
+    return {'at':now,'sides':result,'device_ages_ms':{p:(now-engine.received_at[d])*1000 for p,d in zip(parts,ids)}},tuple(signature)
+
+
+class SceneRobotDialog(QtWidgets.QDialog):
+    def __init__(self,viewer):
+        super().__init__(viewer)
+        self.viewer=viewer;self.worker=None;self.mailbox=Mailbox();self.signature=None
+        self.connected=False
+        self.config=None
+        self.setWindowTitle('新机器人 · CoppeliaSim 双臂实时预览')
+        self.resize(750,600)
+        layout=QtWidgets.QVBoxLayout(self)
+        info=QtWidgets.QLabel('复用当前人体姿态及穿戴标定。仅停止状态运动学预览，不控制真机。\n'
+            '请先打开已确认中立位的新场景并停止仿真；勿同时使用关节 demo。\n'
+            '零角为屈肘姿态；参考中立位两侧关节4为 −90°。手指暂不控制。')
+        info.setWordWrap(True);layout.addWidget(info)
+        form=QtWidgets.QFormLayout();layout.addLayout(form)
+        self.port=QtWidgets.QSpinBox();self.port.setRange(1024,65535);self.port.setValue(23000)
+        self.speed=QtWidgets.QSpinBox();self.speed.setRange(5,120);self.speed.setValue(int(MAX_JOINT_SPEED_DEG_S));self.speed.setSuffix(' °/s')
+        self.angle=QtWidgets.QSpinBox();self.angle.setRange(100,170);self.angle.setValue(150);self.angle.setSuffix(' °')
+        form.addRow('本机 ZeroMQ 端口',self.port)
+        form.addRow('预览关节限速',self.speed)
+        form.addRow('预览区间 ±（非机械安全限位）',self.angle)
+        self.extra_limits=QtWidgets.QCheckBox('额外角度区间限制（默认关闭；始终遵守场景关节区间）')
+        form.addRow(self.extra_limits)
+        self.angle.setEnabled(False);self.extra_limits.toggled.connect(self.angle.setEnabled)
+        self.task=QtWidgets.QComboBox()
+        self.task.addItem('肘腕位置＋可选手掌朝向（X1 默认方案）','positions')
+        self.task.addItem('骨段向量＋可选手掌朝向（对照方案）','vectors')
+        self.scale=QtWidgets.QComboBox()
+        self.scale.addItem('统一比例（X1 默认）','uniform')
+        self.scale.addItem('上臂／前臂分别缩放','segments')
+        form.addRow('任务目标',self.task);form.addRow('位置映射长度比例',self.scale)
+        self.solver_mode=QtWidgets.QComboBox()
+        self.solver_mode.addItem('分层：臂段 1–4 → 手腕 5–6（默认）','staged')
+        self.solver_mode.addItem('六关节联合优化（原方案，对照）','joint')
+        form.addRow('关节任务分配',self.solver_mode)
+        self.segment_orientation=QtWidgets.QCheckBox('臂段朝向软约束（上臂＋前臂，无需手背设备）')
+        self.segment_orientation.setChecked(True)
+        self.segment_orientation.setToolTip('使用穿戴标定后的臂段旋转，减少伸直位轴向歧义；不是碰撞保护，轴向漂移仍可能影响结果。')
+        self.segment_weight=QtWidgets.QDoubleSpinBox()
+        self.segment_weight.setRange(0.,1.);self.segment_weight.setDecimals(3)
+        self.segment_weight.setSingleStep(.025);self.segment_weight.setValue(.15)
+        form.addRow(self.segment_orientation);form.addRow('臂段朝向残差权重（0 等于关闭）',self.segment_weight)
+        self.left=QtWidgets.QCheckBox('左臂');self.right=QtWidgets.QCheckBox('右臂')
+        self.left.setChecked(True);self.right.setChecked(True)
+        self.lhand=QtWidgets.QCheckBox('左手掌朝向');self.rhand=QtWidgets.QCheckBox('右手掌朝向')
+        self.manual=QtWidgets.QCheckBox('允许手动轴映射（实验；不要求穿戴标定）')
+        row=QtWidgets.QHBoxLayout()
+        for w in (self.left,self.right,self.lhand,self.rhand): row.addWidget(w)
+        layout.addLayout(row);layout.addWidget(self.manual)
+        self.palm_offset_controls={}
+        for side,label in (('left','左'),('right','右')):
+            enabled=QtWidgets.QCheckBox(label+'手掌目标固定转向（实验）')
+            axis=QtWidgets.QComboBox();axis.addItems(['x','y','z'])
+            angle=QtWidgets.QDoubleSpinBox();angle.setRange(-180,180);angle.setValue(90);angle.setSuffix(' °')
+            plus=QtWidgets.QPushButton('+90°');minus=QtWidgets.QPushButton('−90°')
+            plus.clicked.connect(lambda checked=False,w=angle:w.setValue(90))
+            minus.clicked.connect(lambda checked=False,w=angle:w.setValue(-90))
+            row=QtWidgets.QHBoxLayout()
+            for w in (enabled,axis,angle,plus,minus):row.addWidget(w)
+            layout.addLayout(row)
+            self.palm_offset_controls[side]=(enabled,axis,angle,plus,minus)
+        warning=QtWidgets.QLabel('固定转向仅在该侧“手掌朝向”开启时生效；轴为机器人中立手掌局部轴，不是人体轴。会改变中立掌面，无碰撞保护。停止跟随后调整。')
+        warning.setWordWrap(True);layout.addWidget(warning)
+        self.logging=QtWidgets.QCheckBox('记录角度、超时原因及 GUI / IK / 通信耗时（复现前勾选）')
+        layout.addWidget(self.logging)
+        self.connect_button=QtWidgets.QPushButton('连接 / 重新读取场景')
+        self.start=QtWidgets.QPushButton('启动所选手臂跟随');self.start.setEnabled(False)
+        self.stop=QtWidgets.QPushButton('停止发送 · 保持当前角度')
+        self.export=QtWidgets.QPushButton('导出本次运动学配置与参考（诊断 JSON）')
+        self.export.setEnabled(False)
+        for w in (self.connect_button,self.start,self.stop,self.export):layout.addWidget(w)
+        self.status=QtWidgets.QLabel('未连接。启动后可能逐步移向人体姿态；本版无碰撞保护。')
+        self.status.setWordWrap(True);layout.addWidget(self.status)
+        self.diagnostic=QtWidgets.QLabel('时序诊断：尚未启动');self.diagnostic.setWordWrap(True);layout.addWidget(self.diagnostic)
+        self.values=QtWidgets.QPlainTextEdit();self.values.setReadOnly(True);layout.addWidget(self.values)
+        self.connect_button.clicked.connect(self.connect_scene)
+        self.start.clicked.connect(self.begin)
+        self.stop.clicked.connect(self.halt)
+        self.export.clicked.connect(self.export_config)
+        self.timer=QtCore.QTimer(self);self.timer.setInterval(50);self.timer.timeout.connect(self.sample)
+        self.ingress_file=None
+        self.ingress_timer=QtCore.QTimer(self);self.ingress_timer.setInterval(200)
+        self.ingress_timer.timeout.connect(self.flush_ingress)
+        self.input_gap=False
+
+    def controls(self,running):
+        for widgets in self.palm_offset_controls.values():
+            for w in widgets:w.setEnabled(not running)
+        for w in (self.left,self.right,self.lhand,self.rhand,self.manual,self.task,self.scale,self.solver_mode,
+                  self.segment_orientation,self.segment_weight):w.setEnabled(not running)
+        self.start.setEnabled(self.connected and not running)
+
+    def connect_scene(self):
+        self.halt()
+        if not self.shutdown(): return
+        self.connected=False;self.start.setEnabled(False);self.connect_button.setEnabled(False)
+        for w in (self.port,self.speed,self.angle,self.logging,self.extra_limits):w.setEnabled(False)
+        self.status.setText('正在读取场景关节链；不会改变关节角…')
+        self.worker=SceneWorker(self.port.value(),self.mailbox,self.speed.value(),
+            self.angle.value() if self.extra_limits.isChecked() else None,self.logging.isChecked(),self)
+        worker=self.worker
+        self.worker.report.connect(lambda data: self.report(data) if self.worker is worker else None)
+        self.worker.failed.connect(lambda text: self.failure(text) if self.worker is worker else None)
+        self.worker.start()
+
+    def flush_ingress(self):
+        if self.ingress_file is None:return
+        try:
+            for row in self.viewer.source.take_diagnostics():
+                self.ingress_file.write(json.dumps(row,ensure_ascii=False)+'\n')
+            self.ingress_file.flush()
+        except OSError as exc:
+            self.status.setText('接收诊断日志写入失败：'+str(exc))
+            self.close_ingress()
+
+    def close_ingress(self):
+        self.ingress_timer.stop()
+        if self.ingress_file is not None:
+            self.ingress_file.close();self.ingress_file=None
+        source=getattr(self.viewer,'source',None)
+        if hasattr(source,'enable_diagnostics'):source.enable_diagnostics(False)
+
+    def selected(self):
+        sides=[s for s,w in (('left',self.left),('right',self.right)) if w.isChecked()]
+        hands=[s for s,w in (('left',self.lhand),('right',self.rhand)) if w.isChecked() and s in sides]
+        if not sides:raise ValueError('至少选择一侧手臂')
+        return sides,hands
+
+    def palm_offsets(self):
+        return {s:{'enabled':widgets[0].isChecked(),'axis':widgets[1].currentText(),'degrees':widgets[2].value()}
+                for s,widgets in getattr(self,'palm_offset_controls',{}).items()}
+
+    def begin(self):
+        try:
+            sides,hands=self.selected()
+            data,self.signature=pose_sample(self.viewer.engine,sides,hands,self.manual.isChecked())
+            data.update(task=self.task.currentData(),scale=self.scale.currentData(),
+                        solver_mode=self.solver_mode.currentData(),
+                        palm_offsets=self.palm_offsets(),
+                        segment_orientation=self.segment_orientation.isChecked() and self.segment_weight.value()>0,
+                        segment_weight=self.segment_weight.value())
+            self.mailbox.resume(data);self.controls(True);self.timer.start()
+            self.last_sample_at=data['at']
+            self.input_gap=False
+            self.status.setText('跟随中；IMU 超过 250 ms 保持，1 s 内恢复可自动继续；持续断流或标定变化需重新启动')
+        except Exception as exc:self.status.setText(str(exc))
+
+    def sample(self):
+        try:
+            sides,hands=self.selected()
+            data,signature=pose_sample(self.viewer.engine,sides,hands,self.manual.isChecked())
+            if signature!=self.signature:raise ValueError('设备分配、姿态模式或标定已改变，请重新启动')
+            data['gui_interval_ms']=(data['at']-self.last_sample_at)*1000
+            self.last_sample_at=data['at']
+            data.update(task=self.task.currentData(),scale=self.scale.currentData(),
+                        solver_mode=self.solver_mode.currentData() if hasattr(self,'solver_mode') else 'staged',
+                        palm_offsets=SceneRobotDialog.palm_offsets(self),
+                        segment_orientation=self.segment_orientation.isChecked() and self.segment_weight.value()>0,
+                        segment_weight=self.segment_weight.value())
+            self.mailbox.set(True,data)
+            if self.input_gap:
+                self.input_gap=False
+                self.status.setText('IMU 数据恢复：已核对原标定/模式，按原限速继续跟随，不回放积压目标')
+                source=getattr(self.viewer,'source',None)
+                if hasattr(source,'diagnostic_event'):source.diagnostic_event('follow_input_resumed')
+        except Exception as exc:
+            if temporary_imu_gap(exc):
+                self.mailbox.set(True,None)
+                self.status.setText('短暂 IMU 断流：保持当前角度，等待自动恢复；'+str(exc))
+                if not self.input_gap:
+                    source=getattr(self.viewer,'source',None)
+                    if hasattr(source,'diagnostic_event'):source.diagnostic_event('follow_input_waiting',reason=str(exc))
+                self.input_gap=True
+                return
+            source=getattr(self.viewer,'source',None)
+            if hasattr(source,'diagnostic_event'):
+                source.diagnostic_event('follow_input_rejected',reason=str(exc),
+                    device_ages_ms={d:(time.monotonic()-at)*1000 for d,at in self.viewer.engine.received_at.items()})
+            self.halt(reason='输入检查失败：'+str(exc));self.status.setText('已停止：'+str(exc))
+
+    def halt(self,checked=False,reason='用户/窗口主动停止'):
+        self.input_gap=False
+        self.timer.stop();self.mailbox.set(False,reason=reason);self.controls(False)
+        self.status.setText('已停止发送；保持当前角度。已在途的单次通信不能撤回。')
+
+    @QtCore.Slot(object)
+    def report(self,data):
+        if 'diagnostic' in data:self.diagnostic.setText('时序诊断：'+data['diagnostic'])
+        if data.get('recovering'):
+            self.connected=False;self.halt(reason='通信超时，正在恢复连接')
+            self.connect_button.setEnabled(False)
+            self.status.setText('通信超时：暂停发送，正在重建连接并核对场景；不会盲目重发角度。')
+        if data.get('recovered'):
+            self.connected=True;self.controls(False);self.connect_button.setEnabled(True)
+            self.status.setText('通信已恢复并读回实际角度；请点击启动继续跟随。原标定与运动学参考保留。')
+        if data.get('connected'):
+            self.connected=True;self.connect_button.setEnabled(True);self.controls(False)
+            self.config=data['config'];self.export.setEnabled(True)
+            self.status.setText('已连接；轴变换与机器人参考已读取，尚未发送角度。')
+            if data.get('log'):
+                self.status.setText(self.status.text()+'\n日志：'+data['log'])
+                source=getattr(self.viewer,'source',None)
+                if hasattr(source,'enable_diagnostics'):
+                    path=Path(data['log']).with_suffix('.ingress.jsonl')
+                    try:
+                        self.ingress_file=path.open('w',encoding='utf-8')
+                        source.enable_diagnostics(True)
+                        source.diagnostic_event('ingress_begin',note='GUI recvfrom 时间，不是内核到达时间；未记录原始数据负载')
+                        self.ingress_timer.start()
+                        self.status.setText(self.status.text()+'\n收包诊断：'+str(path))
+                    except OSError as exc:self.status.setText('接收诊断日志创建失败：'+str(exc))
+        if 'angles' in data:
+            lines=[]
+            for side,q in data['angles'].items():
+                lines.append(('左' if side=='left' else '右')+'臂实际角度 °：'+', '.join(f'{v:.1f}' for v in np.rad2deg(q)))
+                if side in data.get('errors',{}):
+                    err,orient=data['errors'][side]
+                    label='肘腕位置' if data.get('task')=='positions' else '骨段端点'
+                    lines.append(f'{label}误差：{err*1000:.1f} mm；掌面误差：'+('未启用' if orient is None else f'{orient:.1f}°'))
+                    if data.get('solver_mode')=='staged':
+                        lines.append('分层求解：手掌任务不驱动关节 1–4'+
+                            ('；腕部目标未完全达到（不借肩部代偿）' if orient is not None and orient>5 else ''))
+                    segment_error=data.get('segment_errors',{}).get(side,{})
+                    if segment_error:
+                        lines.append('臂段朝向误差：上臂 %.1f°／前臂 %.1f°'%(
+                            segment_error['upper_arm'],segment_error['forearm']))
+                    else:lines.append('臂段朝向约束：未启用')
+            self.values.setPlainText('\n'.join(lines))
+        if 'warning' in data and not self.mailbox.blocked:self.status.setText(data['warning'])
+
+    def failure(self,text):
+        self.connected=False;self.halt(reason='连接/求解失败：'+text);self.status.setText('连接/求解停止：'+text)
+        self.connect_button.setEnabled(True)
+        for w in (self.port,self.speed,self.logging,self.extra_limits):w.setEnabled(True)
+        self.angle.setEnabled(self.extra_limits.isChecked())
+
+    def export_config(self):
+        if self.config is None:return
+        path,_=QtWidgets.QFileDialog.getSaveFileName(self,'保存运动学诊断配置','scene_robot_config.json','JSON (*.json)')
+        if path:
+            try:
+                Path(path).write_text(json.dumps(self.config,ensure_ascii=False,indent=2),encoding='utf-8')
+            except OSError as exc:self.status.setText('保存失败：'+str(exc))
+
+    def shutdown(self):
+        if self.worker is not None:
+            self.worker.requestInterruption()
+            if not self.worker.wait(5000):
+                self.status.setText('通信仍在退出，请稍后再试');return False
+            self.worker=None
+        self.flush_ingress();self.close_ingress()
+        return True
+
+    def closeEvent(self,event):
+        self.halt()
+        if self.shutdown():
+            self.connected=False;self.start.setEnabled(False);self.connect_button.setEnabled(True)
+            for w in (self.port,self.speed,self.logging,self.extra_limits):w.setEnabled(True)
+            self.angle.setEnabled(self.extra_limits.isChecked())
+            event.accept()
+        else:event.ignore()
