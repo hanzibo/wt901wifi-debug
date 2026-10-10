@@ -39,7 +39,7 @@ def readiness(engine: PoseEngine, *, now: float | None = None,
               max_age_s: float = 0.25,
               follow_left_hand: bool = False,
               follow_right_hand: bool = False,
-              task_mode: str = "mimic") -> list[str]:
+              task_mode: str = "mimic", allow_manual_arms: bool = False) -> list[str]:
     """List the reasons a live calibrated bilateral preview cannot start."""
     moment = time.monotonic() if now is None else now
     problems = []
@@ -53,8 +53,12 @@ def readiness(engine: PoseEngine, *, now: float | None = None,
     for part, device in zip(PARTS, ids):
         if not device:
             continue
-        if part not in engine.continuous_basis or device not in engine.neutral:
+        if device not in engine.neutral:
+            problems.append(f"{part} 尚无中立位；请自然下垂并归零")
+        elif part not in engine.continuous_basis and not allow_manual_arms:
             problems.append(f"{part} 未应用本次穿戴标定")
+        if device not in engine.current:
+            problems.append(f"{part} 尚无当前姿态")
         age = moment - engine.received_at.get(device, -1e9)
         if age > max_age_s or age < -0.1:
             problems.append(f"{part} 数据不新鲜（{max(0.0, age):.1f} 秒）")
@@ -84,7 +88,8 @@ class LiveRetargeter:
                  follow_left_hand: bool = False,
                  follow_right_hand: bool = False,
                  backend: str = "least_squares",
-                 task_mode: str = "mimic", scale_mode: str = "uniform") -> None:
+                 task_mode: str = "mimic", scale_mode: str = "uniform",
+                 allow_manual_arms: bool = False) -> None:
         if scale_mode not in ("uniform", "segments"):
             raise ValueError("未知人体到机器人长度比例模式")
         if backend not in ("least_squares", "jacobian"):
@@ -92,7 +97,7 @@ class LiveRetargeter:
         problems = readiness(engine, max_age_s=max_age_s,
                              follow_left_hand=follow_left_hand,
                              follow_right_hand=follow_right_hand,
-                             task_mode=task_mode)
+                             task_mode=task_mode, allow_manual_arms=allow_manual_arms)
         if problems:
             raise ValueError("；".join(problems))
         self.engine = engine
@@ -104,7 +109,11 @@ class LiveRetargeter:
         self.follow_right_hand = follow_right_hand
         self.ids = {part: engine.assignments[part] for part in PARTS}
         self.algorithm_modes = {part: engine.algorithm_modes[part] for part in PARTS}
-        self.bases = {part: engine.continuous_basis[part].copy() for part in PARTS}
+        self.allow_manual_arms = allow_manual_arms
+        self.arm_calibrated = {part: part in engine.continuous_basis for part in PARTS}
+        self.arm_mappings = {part: engine.axis_mappings[part] for part in PARTS}
+        self.bases = {part: engine.continuous_basis.get(
+            part, mapping_matrix(engine.axis_mappings[part])).copy() for part in PARTS}
         self.neutrals = {part: engine.neutral[device].copy()
                          for part, device in self.ids.items()}
         self.models = {side: PoEArmKinematics(urdf, side) for side in SIDES}
@@ -162,9 +171,11 @@ class LiveRetargeter:
         arm_changed = any(
             self.engine.assignments.get(part) != device or
             self.engine.algorithm_modes[part] != self.algorithm_modes[part] or
-            part not in self.engine.continuous_basis or
+            (part in self.engine.continuous_basis) != self.arm_calibrated[part] or
+            self.engine.axis_mappings[part] != self.arm_mappings[part] or
             device not in self.engine.neutral or
-            not np.allclose(self.engine.continuous_basis[part], self.bases[part]) or
+            not np.allclose(self.engine.continuous_basis.get(
+                part, mapping_matrix(self.engine.axis_mappings[part])), self.bases[part]) or
             not np.allclose(self.engine.neutral[device], self.neutrals[part])
             for part, device in self.ids.items()
         )
@@ -338,11 +349,19 @@ class LiveRetargeter:
                 candidate = fitted
                 fit_success = success
                 fit_wrist_error = error
-                if success and (error <= 0.08 or self.task_mode == "pose"):
+                progress = False
+                if success and error > .08 and self.task_mode == 'mimic':
+                    tracking_task = ArmTask(self.models[side], target_elbow, target_wrist,
+                                            self.previous[side], bend, hand_target)
+                    old_residual = tracking_task.evaluate(self.previous[side])
+                    new_residual = tracking_task.evaluate(fitted)
+                    progress = (np.isfinite(fitted).all() and
+                                new_residual @ new_residual < old_residual @ old_residual - 1e-9)
+                if success and (error <= 0.08 or self.task_mode == "pose" or progress):
                     q = fitted
                     if commit:
                         self.previous[side] = q
-                    state = "跟随"
+                    state = "追赶（腕点误差仍大）" if progress else "跟随"
                 else:
                     q = self.previous[side]
                     state = "IK 未收敛，保持该侧"

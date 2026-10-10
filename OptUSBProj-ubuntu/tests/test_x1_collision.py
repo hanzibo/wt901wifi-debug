@@ -223,7 +223,7 @@ class GUITests(unittest.TestCase):
             self.assertFalse(dialog.collision_protection.isEnabled())
             self.assertFalse(dialog._collision_ready())
             dialog._policy_ack=True
-            dialog._safety=dict(enabled=True,state='初始化')
+            dialog._safety=dict(enabled=True,state='初始化',output_speed_limit=True)
             self.assertFalse(dialog._collision_ready())
             dialog._safety['state']='正常'
             self.assertTrue(dialog._collision_ready())

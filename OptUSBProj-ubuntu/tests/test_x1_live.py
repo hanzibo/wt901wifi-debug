@@ -57,6 +57,59 @@ def with_manual_left_hand(engine: PoseEngine) -> PoseEngine:
 
 
 class X1LiveTests(unittest.TestCase):
+    def test_manual_arm_preview_is_explicit_and_keeps_guards(self):
+        engine=prepared_engine()
+        engine.continuous_basis.clear()
+        self.assertTrue(readiness(engine))
+        self.assertEqual(readiness(engine,allow_manual_arms=True),[])
+        with self.assertRaises(ValueError):LiveRetargeter(engine,URDF)
+        live=LiveRetargeter(engine,URDF,allow_manual_arms=True)
+        self.assertFalse(live.calibration_changed())
+        q,_=live.step();self.assertEqual(len(q),12)
+        engine.set_axis_mapping('left_upper_arm',('+Y','+Z','+X'))
+        self.assertTrue(live.calibration_changed())
+        engine.neutral.clear()
+        self.assertTrue(any('中立位' in r for r in readiness(engine,allow_manual_arms=True)))
+        engine.received_at.clear()
+        self.assertTrue(any('不新鲜' in r for r in readiness(engine,allow_manual_arms=True)))
+
+    def test_protected_tracking_requires_updated_bridge_limiter(self):
+        from types import SimpleNamespace
+        from optusbproj_ubuntu.x1_live_gui import X1PreviewDialog
+        dialog=SimpleNamespace(_policy_error=None,_policy_started=time.monotonic(),
+            _policy_ack=True,collision_protection=SimpleNamespace(isChecked=lambda:True),
+            _safety=dict(enabled=True,state='正常'))
+        with self.assertRaisesRegex(ValueError,'末级限速'):
+            X1PreviewDialog._collision_ready(dialog)
+        dialog._safety['output_speed_limit']=True
+        self.assertTrue(X1PreviewDialog._collision_ready(dialog))
+
+    def test_large_target_can_catch_up_in_bounded_steps(self):
+        for backend in ('jacobian','least_squares'):
+            with self.subTest(backend=backend):
+                engine=prepared_engine()
+                live=LiveRetargeter(engine,URDF,backend=backend)
+                stamp=time.monotonic();previous,_=live.step(now=stamp)
+                for part in ('left_upper_arm','left_forearm'):
+                    engine.current[engine.assignments[part]]=Rotation.from_euler('x',60,degrees=True).as_matrix()
+                errors=[]
+                for _ in range(4):
+                    stamp+=.05
+                    for device in engine.received_at:engine.received_at[device]=stamp
+                    q,status=live.step(now=stamp)
+                    self.assertIn('追赶',status['left']['state'])
+                    self.assertGreater(status['left']['fit_wrist_error_m'],.08)
+                    self.assertLessEqual(np.max(np.abs(np.array(q)-previous)),np.deg2rad(6)+1e-7)
+                    errors.append(status['left']['fit_wrist_error_m']);previous=np.array(q)
+                self.assertTrue(all(b<a for a,b in zip(errors,errors[1:])))
+
+    def test_high_error_non_improving_fit_still_holds(self):
+        engine=prepared_engine();live=LiveRetargeter(engine,URDF)
+        with patch('optusbproj_ubuntu.x1_live.fit_arm',return_value=(np.zeros(6),0.,.2,True)):
+            q,status=live.step()
+        self.assertEqual(q,(0.,)*12)
+        self.assertIn('保持该侧',status['left']['state'])
+
     def test_four_combinations_and_pose_recording_comparison(self):
         from x1_compare_ik import compare
         for backend in ("least_squares", "jacobian"):
@@ -513,6 +566,15 @@ class X1LiveTests(unittest.TestCase):
                 x1_live_gui.X1PreviewDialog, "_start_ros_receiver"), patch.object(
                 x1_live_gui.X1PreviewDialog, '_collision_ready', return_value=True):
             dialog = x1_live_gui.X1PreviewDialog(host)
+            self.assertFalse(dialog.angle_log_checkbox.isChecked())
+            dialog.angle_log_checkbox.setChecked(True)
+            self.assertIsNotNone(dialog._angle_log_id)
+            self.assertFalse(dialog._angle_log_ack)
+            self.assertFalse(dialog.collision_protection.isChecked())
+            dialog._show_angle_log(dict(enabled=True, path='/tmp/angles.jsonl', dropped=2))
+            self.assertIn('记录中', dialog.angle_log_status.text())
+            self.assertIn('丢失 2', dialog.angle_log_status.text())
+            dialog.angle_log_checkbox.setChecked(False)
             self.assertTrue(dialog.launch_rviz_button.isEnabled())
             self.assertFalse(dialog.close_rviz_button.isEnabled())
             with patch.object(dialog, "_external_display_launch_running", return_value=True):
@@ -536,10 +598,49 @@ class X1LiveTests(unittest.TestCase):
             dialog.show()
             dialog.stop()
             self.assertIsNone(dialog.recorder)
+            self.assertIsNone(dialog.first_send_at)
             self.assertTrue((recorded / "frames.csv").is_file())
             self.assertIn(str(recorded), dialog.recording_status.text())
             dialog.close()
         host.close()
+        self.assertIsNotNone(app)
+
+    def test_slow_collision_initialization_does_not_consume_first_ack_timeout(self):
+        from PySide6 import QtWidgets
+        from unittest.mock import Mock
+        from optusbproj_ubuntu import x1_live_gui
+        app=QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        host=QtWidgets.QMainWindow();host.engine=prepared_engine()
+        host.calibration_dialog=None;host.settings_dialog=None
+        host.x1_preview_button=QtWidgets.QPushButton()
+        dialog=x1_live_gui.X1PreviewDialog(host);dialog.timer.stop()
+        q,status=LiveRetargeter(host.engine,URDF).step()
+        sender=Mock(last_ack_at=None,last_ack_seq=None,safety=None,subscribers=1)
+        dialog.sender=sender;dialog.retargeter=Mock()
+        dialog.retargeter.step.return_value=(q,status)
+        dialog.started_at=100.
+        dialog.collision_protection.setChecked(True)
+        try:
+            with patch.object(dialog,'_poll_gripper_status'),patch.object(dialog,'stop') as stop,patch.object(
+                    dialog,'_collision_ready',return_value=False) as ready,patch.object(
+                    x1_live_gui.time,'monotonic',return_value=109.) as clock:
+                dialog._tick()
+                sender.send.assert_not_called();self.assertIsNone(dialog.first_send_at)
+                stop.assert_not_called()
+                ready.return_value=True
+                dialog._tick()
+                self.assertEqual(dialog.first_send_at,109.)
+                sender.send.assert_called_once();stop.assert_not_called()
+                clock.return_value=116.9;dialog._tick();stop.assert_not_called()
+                self.assertEqual(dialog.first_send_at,109.)
+                clock.return_value=117.1;dialog._tick()
+                self.assertIn('未应答',stop.call_args.args[0])
+                stop.reset_mock();sender.last_ack_at=119.
+                clock.return_value=120.;dialog._tick();stop.assert_not_called()
+                clock.return_value=121.1;dialog._tick()
+                self.assertIn('应答中断',stop.call_args.args[0])
+        finally:
+            dialog.sender=None;dialog.retargeter=None;dialog._shutdown();host.close()
         self.assertIsNotNone(app)
 
     def test_preview_dialog_hand_toggle_records_optional_fifth_device(self):

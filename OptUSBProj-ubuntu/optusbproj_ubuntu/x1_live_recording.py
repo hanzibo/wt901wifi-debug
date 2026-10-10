@@ -80,6 +80,7 @@ class X1DiagnosticRecorder:
             "parts": {part: {
                 "device_id": retargeter.ids[part],
                 "basis_matrix": retargeter.bases[part].tolist(),
+                "mapping_source": "wearing_calibration" if retargeter.arm_calibrated[part] else "manual_axis_mapping",
                 "neutral_matrix": retargeter.neutrals[part].tolist(),
             } for part in PARTS},
             **{f"{side}_hand": ({"enabled": True,
@@ -104,6 +105,9 @@ class X1DiagnosticRecorder:
                        "max_joint_speed_deg_s": MAX_JOINT_SPEED_DEG_S,
                        "max_step_per_tick_deg": MAX_JOINT_STEP_DEG,
                        "accepted_wrist_error_m": 0.08,
+                       "mimic_high_error_acceptance": "successful finite step reducing full task residual",
+                       "protected_planning": "continue candidates; reanchor on initial/blocked/shortened feedback",
+                       "protected_output_limits": "ROS bridge limits certified joint-space path prefixes",
                        "fresh_sample_age_s": retargeter.max_age_s,
                        "wrist_preview_limits_deg": {"axial": [-90, 90],
                                                     "radial": [-45, 45]}},

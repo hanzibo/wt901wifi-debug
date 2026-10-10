@@ -42,6 +42,7 @@ class X1PreviewDialog(QtWidgets.QDialog):
         self.rviz_process: QtCore.QProcess | None = None
         self.rviz_output = ""
         self.started_at = 0.0
+        self.first_send_at: float | None = None
         self.gripper_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.gripper_socket.bind(('127.0.0.1', 0))
         self.gripper_socket.setblocking(False)
@@ -52,6 +53,10 @@ class X1PreviewDialog(QtWidgets.QDialog):
         self._policy_error = None
         self._safety = None
         self._bridge_has_safety = None
+        self._planning_initialized = False
+        self._angle_log_id = None
+        self._angle_log_ack = False
+        self._angle_log_started = 0.
         outer = QtWidgets.QVBoxLayout(self)
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
@@ -133,6 +138,11 @@ class X1PreviewDialog(QtWidgets.QDialog):
         self.precise_pose = QtWidgets.QCheckBox("优先精确末端位姿（不约束肘部模仿）")
         self.precise_pose.toggled.connect(self._refresh_readiness)
         layout.addWidget(self.precise_pose)
+        self.manual_arms = QtWidgets.QCheckBox('允许未标定臂段使用手动轴映射（快速验证）')
+        self.manual_arms.setToolTip('默认关闭。缺少穿戴标定的臂段使用主界面手动轴映射；'
+                                   '已有标定仍优先使用。须先摆好中立位并归零，设备在线；不更改主界面标定。')
+        self.manual_arms.toggled.connect(self._refresh_readiness)
+        layout.addWidget(self.manual_arms)
         self.collision_protection = QtWidgets.QCheckBox('启用自碰撞检测与拦截（实验）')
         self.collision_protection.setToolTip(
             '默认关闭。启用后在 ROS 最终合并双臂和夹爪之后检查完整构型及运动区间；'
@@ -142,6 +152,15 @@ class X1PreviewDialog(QtWidgets.QDialog):
         self.collision_status = QtWidgets.QLabel('防碰撞：关闭（保留原预览限位和限速）')
         self.collision_status.setWordWrap(True)
         layout.addWidget(self.collision_status)
+        self.angle_log_checkbox = QtWidgets.QCheckBox('记录 ROS 接收 / 发布关节角日志（诊断抖动）')
+        self.angle_log_checkbox.setToolTip('默认关闭，可运行中切换。记录目标角、碰撞检查及 /joint_states 发布角；'
+                                         '不是机器人硬件回读。取消勾选或停止 ROS 桥后结束记录。')
+        self.angle_log_checkbox.toggled.connect(self._configure_angle_log)
+        layout.addWidget(self.angle_log_checkbox)
+        self.angle_log_status = QtWidgets.QLabel('角度日志：关闭')
+        self.angle_log_status.setWordWrap(True)
+        self.angle_log_status.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(self.angle_log_status)
         mode_note = QtWidgets.QLabel(
             "默认保留动作模仿。完整位姿模式需要两侧手背在线；末端定义为 L6/R56，"
             "不是夹爪尖端。不直接指定腕关节角，允许肘部与人体不同；"
@@ -207,6 +226,13 @@ class X1PreviewDialog(QtWidgets.QDialog):
 
     def _poll_gripper_status(self) -> None:
         try:
+            if self._angle_log_id is not None and not self._angle_log_ack:
+                if time.monotonic()-self._angle_log_started < 5:
+                    config = dict(version=1, type='angle_log_config', request_id=self._angle_log_id,
+                        enabled=self.angle_log_checkbox.isChecked(), sent_mono_ns=time.monotonic_ns())
+                    self.gripper_socket.sendto(json.dumps(config).encode(), ('127.0.0.1', 13991))
+                else:
+                    self.angle_log_status.setText('角度日志未确认：ROS 桥未启动或版本较旧；启动 / 重启接收后重试')
             if self._policy_id is not None and not self._policy_ack:
                 config = dict(version=1, type='collision_config', request_id=self._policy_id,
                     enabled=self.collision_protection.isChecked(), sent_mono_ns=time.monotonic_ns())
@@ -221,6 +247,11 @@ class X1PreviewDialog(QtWidgets.QDialog):
                 data = json.loads(raw)
                 if peer != ('127.0.0.1', 13991):
                     continue
+                if data.get('type') == 'angle_log_config_ack':
+                    if data.get('request_id') == self._angle_log_id:
+                        self._angle_log_ack = True
+                        self._show_angle_log(data.get('angle_log', {}))
+                    continue
                 if data.get('type') == 'collision_config_ack':
                     if data.get('request_id') == self._policy_id:
                         self._policy_ack = True
@@ -229,6 +260,8 @@ class X1PreviewDialog(QtWidgets.QDialog):
                     continue
                 if data.get('type') != 'gripper_status':
                     continue
+                if self._angle_log_ack and data.get('angle_log'):
+                    self._show_angle_log(data['angle_log'])
                 self._bridge_has_safety = bool(data.get('safety', {}).get('supported'))
                 if data.get('safety', {}).get('configuration_id') == self._policy_id:
                     self._safety = data['safety']
@@ -251,7 +284,26 @@ class X1PreviewDialog(QtWidgets.QDialog):
             self.gripper_status_label.setText("手机夹爪：ROS 状态读取失败")
         self._show_collision_status()
 
+    def _configure_angle_log(self, checked=False) -> None:
+        self._angle_log_id = uuid4().hex
+        self._angle_log_ack = False
+        self._angle_log_started = time.monotonic()
+        self.angle_log_status.setText('角度日志：等待 ROS 确认（未启动时将在下次启动应用）')
+
+    def _show_angle_log(self, state) -> None:
+        if state.get('error'):
+            text = '角度日志失败：'+state['error']
+        else:
+            text = '角度日志：'+('记录中' if state.get('enabled') else '已停止')
+            if state.get('path'):
+                text += ' · '+state['path']
+            if state.get('dropped'):
+                text += f" · 队列丢失 {state['dropped']} 条（分析时需注意）"
+        self.angle_log_status.setText(text)
+
     def _begin_collision_policy(self) -> None:
+        self._planning_initialized = False
+        self._configure_angle_log()
         self._policy_id = uuid4().hex
         self._policy_ack = False
         self._policy_error = None
@@ -310,6 +362,8 @@ class X1PreviewDialog(QtWidgets.QDialog):
             return not self.collision_protection.isChecked()
         if self._safety.get('enabled') != self.collision_protection.isChecked():
             raise ValueError('GUI 与 ROS 防碰撞开关不一致')
+        if self.collision_protection.isChecked() and self._safety.get('output_speed_limit') is not True:
+            raise ValueError('旧 ROS 桥未支持末级限速；请停止并重启 ROS 接收进程')
         if self._safety.get('state') == '故障':
             raise ValueError('防碰撞故障：'+self._safety.get('reason', '未知'))
         return self._safety.get('state') != '初始化'
@@ -318,7 +372,8 @@ class X1PreviewDialog(QtWidgets.QDialog):
         reasons = readiness(self.host.engine,
                             follow_left_hand=self.follow_left_hand.isChecked(),
                             follow_right_hand=self.follow_right_hand.isChecked(),
-                            task_mode="pose" if self.precise_pose.isChecked() else "mimic")
+                            task_mode="pose" if self.precise_pose.isChecked() else "mimic",
+                            allow_manual_arms=self.manual_arms.isChecked())
         if self.host.calibration_dialog is not None and self.host.calibration_dialog.isVisible():
             reasons.append("请先关闭穿戴标定窗口")
         if self.host.settings_dialog is not None and self.host.settings_dialog.isVisible():
@@ -331,7 +386,9 @@ class X1PreviewDialog(QtWidgets.QDialog):
             return
         reasons = self._preconditions()
         self.readiness_label.setText(
-            "准备就绪：四个臂段已标定，所选手背设备在线且有中立位" if not reasons
+            ("准备就绪：快速验证，未标定臂段使用手动映射；不代表映射精度已验证"
+             if self.manual_arms.isChecked() else
+             "准备就绪：四个臂段已标定，所选手背设备在线且有中立位") if not reasons
             else "尚不能开始：\n" + "\n".join("• " + reason for reason in reasons))
         self.start_button.setEnabled(not reasons and URDF.is_file())
 
@@ -349,7 +406,8 @@ class X1PreviewDialog(QtWidgets.QDialog):
                 follow_right_hand=self.follow_right_hand.isChecked(),
                 backend=self.backend_combo.currentData(),
                 task_mode="pose" if self.precise_pose.isChecked() else "mimic",
-                scale_mode=self.scale_combo.currentData())
+                scale_mode=self.scale_combo.currentData(),
+                allow_manual_arms=self.manual_arms.isChecked())
             self.sender = PreviewSender()
             self._start_ros_receiver()
             self._begin_collision_policy()
@@ -363,12 +421,14 @@ class X1PreviewDialog(QtWidgets.QDialog):
             self.ros_status.setText(f"启动失败：{exc}")
             return
         self.started_at = time.monotonic()
+        self.first_send_at = None
         self.start_button.setEnabled(False)
         self.follow_left_hand.setEnabled(False)
         self.follow_right_hand.setEnabled(False)
         self.backend_combo.setEnabled(False)
         self.scale_combo.setEnabled(False)
         self.precise_pose.setEnabled(False)
+        self.manual_arms.setEnabled(False)
         self.stop_button.setEnabled(True)
         self.ros_status.setText("正在等待 ROS 预览进程的应答…")
         self.recording_status.setText(f"诊断记录进行中：{self.recorder.path}")
@@ -392,12 +452,14 @@ class X1PreviewDialog(QtWidgets.QDialog):
             self.sender = None
         self._stop_ros_receiver()
         self.retargeter = None
+        self.first_send_at = None
         self.stop_button.setEnabled(False)
         self.follow_left_hand.setEnabled(True)
         self.follow_right_hand.setEnabled(True)
         self.backend_combo.setEnabled(True)
         self.scale_combo.setEnabled(True)
         self.precise_pose.setEnabled(True)
+        self.manual_arms.setEnabled(True)
         self.collision_protection.setEnabled(True)
         self._policy_id = None
         self._policy_ack = False
@@ -621,12 +683,22 @@ class X1PreviewDialog(QtWidgets.QDialog):
                            s.get('configuration_id') == self._policy_id]
                 safety = max(choices, key=lambda s:s.get('revision', -1)) if choices else None
                 if (safety and safety.get('configuration_id') == self._policy_id and
-                        safety.get('accepted')):
+                        safety.get('accepted') and (not self._planning_initialized or
+                            safety.get('state') != '正常')):
                     self.retargeter.accept_published(tuple(safety['accepted'][name]
                         for name in ('1','2','3','4','5','6','51','52','53','54','55','56')))
+                    self._planning_initialized = True
+                # Continue the candidate trajectory during normal tracking.
+                # Re-anchoring EVERY tick to delayed feedback creates alternating
+                # trajectories. The ROS bridge independently limits/checks output.
             q, status = self.retargeter.step(now=tick_ns / 1e9,
-                                           commit=not self.collision_protection.isChecked())
+                                           commit=True)
+            sent_at = time.monotonic()
             self.sender.send(q)
+            if self.first_send_at is None:
+                # Geometry initialization has its own watchdog. Start the
+                # first-ACK deadline only when a frame was actually sent.
+                self.first_send_at = sent_at
             self.sender.poll_ack()
             if self.recorder is not None:
                 self.recorder.write_frame(
@@ -672,7 +744,7 @@ class X1PreviewDialog(QtWidgets.QDialog):
                 f"朝向误差 {hand['hand_orientation_error_deg']:.1f}° · "
                 f"数据延迟 {1000 * hand['hand_age_s']:.0f} ms")
         if self.sender.last_ack_at is None:
-            if time.monotonic() - self.started_at > 8.0:
+            if self.first_send_at is not None and time.monotonic() - self.first_send_at > 8.0:
                 detail = self.ros_output.strip().splitlines()
                 self.stop("ROS 预览进程未应答" +
                           (f"：{detail[-1]}" if detail else "；请检查 ROS 环境"))
