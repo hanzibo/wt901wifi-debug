@@ -11,10 +11,14 @@ import argparse
 import json
 import math
 import socket
+import signal
+import threading
 import time
+from pathlib import Path
 
 from x1_common import JOINT_NAMES
 from x1_collision_gate import CollisionGate
+from x1_angle_log import AngleLogger
 
 
 LEFT = ("1", "2", "3", "4", "5", "6")
@@ -22,6 +26,18 @@ RIGHT = ("51", "52", "53", "54", "55", "56")
 ARMS = LEFT + RIGHT
 DEFAULT_PORT = 13990
 GRIPPER_PORT = 13991
+
+
+def limited_step(start, goal, dt):
+    """Common fraction preserves the certified straight joint-space path."""
+    dt = max(0., min(float(dt), .075))
+    alpha = 1.
+    for name in start:
+        delta = abs(goal[name]-start[name])
+        limit = min(math.radians(9), math.radians(120)*dt) if name in ARMS else dt
+        if delta > 0:
+            alpha = min(alpha, limit/delta)
+    return {name: value+alpha*(goal[name]-value) for name,value in start.items()}, alpha
 
 
 def parse_gripper(raw: bytes, *, now_ns=None):
@@ -105,6 +121,8 @@ def main() -> None:
                         help='Python executable for isolated optional collision worker')
     parser.add_argument('--collision-start-enabled', action='store_true',
                         help='Start fail-closed BEFORE accepting any gripper/arm input')
+    parser.add_argument('--angle-log-root', default=str(Path(__file__).resolve().parents[2] /
+        'OptUSBProj-ubuntu/recordings/x1_bridge'))
     args = parser.parse_args()
     if (not 1024 <= args.port <= 65535 or not 1024 <= args.gripper_port <= 65535 or
             args.port == args.gripper_port):
@@ -130,6 +148,8 @@ def main() -> None:
     node = Node("x1_imu_live_preview")
     publisher = node.create_publisher(JointState, "/joint_states", 10)
     names = list(JOINT_NAMES)
+    angle_log = AngleLogger(args.angle_log_root)
+    log_request = None
     positions = [0.0] * len(names)
     indices = tuple(names.index(name) for name in ARMS)
     current: tuple[float, ...] | None = None
@@ -137,6 +157,7 @@ def main() -> None:
     last_sequence = 0
     peer_address = None
     published_count = 0
+    last_publish_at = time.monotonic()
     gate = CollisionGate(args.collision_python)
     if args.collision_start_enabled:
         gate.configure(True, dict(zip(names, positions)))
@@ -146,11 +167,28 @@ def main() -> None:
 
     def safety_status():
         return dict(gate.status(), configuration_id=configuration_id,
-                    published_count=published_count, accepted_arm_seq=feedback_seq)
+                    published_count=published_count, accepted_arm_seq=feedback_seq,
+                    output_speed_limit=True)
 
     def configure(raw, peer, sock):
-        nonlocal configuration_id, configuration_peer
+        nonlocal configuration_id, configuration_peer, log_request
         payload = json.loads(raw)
+        if isinstance(payload, dict) and payload.get('type') == 'angle_log_config':
+            stamp, request_id = payload.get('sent_mono_ns'), payload.get('request_id')
+            if (payload.get('version') != 1 or type(stamp) is not int or
+                    abs(time.monotonic_ns()-stamp) > 500_000_000 or
+                    type(payload.get('enabled')) is not bool or
+                    not isinstance(request_id, str) or not 1 <= len(request_id) <= 100):
+                raise ValueError('Invalid angle log configuration')
+            if log_request != (peer, request_id):
+                if payload['enabled']:
+                    angle_log.start(names)
+                else:
+                    angle_log.close()
+                log_request = (peer, request_id)
+            sock.sendto(json.dumps(dict(version=1, type='angle_log_config_ack',
+                request_id=request_id, angle_log=angle_log.status())).encode(), peer)
+            return True
         if not isinstance(payload, dict) or payload.get('type') != 'collision_config':
             return False
         stamp, request_id = payload.get('sent_mono_ns'), payload.get('request_id')
@@ -188,14 +226,29 @@ def main() -> None:
                             for j in grippers.positions},
                     subscribers=publisher.get_subscription_count(), published_count=published_count,
                     arms_fresh=current is not None and now-last_received <= .3,
+                    angle_log=angle_log.status(),
                     safety=safety_status())
 
     def publish_latest() -> None:
-        nonlocal published_count, feedback_seq
+        nonlocal published_count, feedback_seq, last_publish_at
         now = time.monotonic()
+        previous_pending = dict(gate.pending) if gate.pending else None
+        previous_result = gate.last_result
+        previous_state = gate.state
         commit = gate.poll()
+        if gate.last_result is not previous_result or gate.state != previous_state:
+            angle_log.emit('check_result', pending=previous_pending, safety=safety_status())
+        if gate.pending and previous_pending is None:
+            angle_log.emit('check_submit', pending=gate.pending, initial=True)
         if commit is not None:
             accepted, metadata = commit
+            # Prefix of exactly the verified segment, not per-joint clipping
+            # or an unverified interpolation path. Keep the gate ledger equal
+            # to what we will actually publish before any next submission.
+            accepted, fraction = limited_step(dict(zip(names, positions)), accepted,
+                                               now-last_publish_at)
+            gate.accepted = accepted.copy()
+            gate.last_result = dict(gate.last_result, output_limit_alpha=fraction)
             positions[:] = [accepted[name] for name in names]
             for joint in grippers.positions:
                 grippers.positions[joint] = accepted[joint]
@@ -215,7 +268,11 @@ def main() -> None:
             for joint in grippers.positions:
                 grippers.positions[joint] = positions[names.index(joint)]
             if gate.validated and gate.state != '故障' and (arms_fresh or fresh_grippers):
-                gate.submit(dict(zip(names, candidate)), last_sequence if arms_fresh else 0)
+                goal, fraction = limited_step(dict(zip(names, positions)), dict(zip(names, candidate)),
+                                               min(1/30, now-last_publish_at))
+                if gate.submit(goal, last_sequence if arms_fresh else 0):
+                    angle_log.emit('check_submit', pending=gate.pending, candidate=candidate,
+                                   input_limit_alpha=fraction)
             if not gate.validated:
                 safety_feedback(0)
                 return
@@ -228,14 +285,23 @@ def main() -> None:
         message.name = names
         message.position = positions.copy()
         publisher.publish(message)
+        last_publish_at = now
         published_count += 1
+        angle_log.emit('publish', positions=positions, candidate=candidate,
+                       input_seq=last_sequence, accepted_arm_seq=feedback_seq if gate.enabled else last_sequence,
+                       published_count=published_count, arms_fresh=arms_fresh,
+                       safety=safety_status())
         if gate.enabled:
             safety_feedback(feedback_seq)
 
     node.create_timer(1 / 30, publish_latest)
+    stopping = threading.Event()
+    previous_term = None
+    if threading.current_thread() is threading.main_thread():
+        previous_term = signal.signal(signal.SIGTERM, lambda *_: stopping.set())
     print(f"仅 RViz 预览：双臂 127.0.0.1:{args.port}；手机夹爪 {args.gripper_port}；不连接 X1 硬件。", flush=True)
     try:
-        while rclpy.ok():
+        while rclpy.ok() and not stopping.is_set():
             while True:
                 try:
                     raw, peer = gripper_receiver.recvfrom(2048)
@@ -273,6 +339,8 @@ def main() -> None:
                 last_sequence = sequence
                 current = angles
                 last_received = time.monotonic()
+                angle_log.emit('receive', seq=sequence, positions=angles,
+                    joint_names=list(ARMS), source_sent_mono_ns=json.loads(raw)['sent_mono_ns'])
                 ack = {"version": 1, "type": "ack", "seq": sequence,
                        "recv_mono_ns": time.monotonic_ns(),
                        "subscribers": publisher.get_subscription_count()}
@@ -281,6 +349,9 @@ def main() -> None:
     except KeyboardInterrupt:
         print("实时预览结束；RViz 保持末次姿态。", flush=True)
     finally:
+        if previous_term is not None:
+            signal.signal(signal.SIGTERM, previous_term)
+        angle_log.close()
         gate.close()
         receiver.close()
         gripper_receiver.close()
