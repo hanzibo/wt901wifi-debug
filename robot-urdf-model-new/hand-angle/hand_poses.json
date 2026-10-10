@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "sides": {
+    "right": {
+      "open_deg": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "closed_deg": [
+        29.999999999999996,
+        29.999999999999996,
+        29.999999999999996,
+        45.0,
+        45.0,
+        45.0,
+        45.0,
+        45.0,
+        45.0,
+        45.0,
+        45.0,
+        45.0,
+        45.0,
+        45.0,
+        45.0
+      ],
+      "paths": [
+        "/BaseLinkHull/jointRH11",
+        "/BaseLinkHull/jointRH12",
+        "/BaseLinkHull/jointRH13",
+        "/BaseLinkHull/jointRH21",
+        "/BaseLinkHull/jointRH22",
+        "/BaseLinkHull/jointRH23",
+        "/BaseLinkHull/jointRH31",
+        "/BaseLinkHull/jointRH32",
+        "/BaseLinkHull/jointRH33",
+        "/BaseLinkHull/jointRH41",
+        "/BaseLinkHull/jointRH42",
+        "/BaseLinkHull/jointRH43",
+        "/BaseLinkHull/jointRH51",
+        "/BaseLinkHull/jointRH52",
+        "/BaseLinkHull/jointRH53"
+      ],
+      "speed_deg_s": 120
+    }
+  }
+}
