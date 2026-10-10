@@ -16,7 +16,7 @@ class SceneBridge:
             self.sim=self.client.require('sim')
             self.data=self.run('''
 local base=sim.getObject('/BaseLinkHull')
-local r={base=base,uid=sim.getObjectUid(base),baseMatrix=sim.getObjectMatrix(base,sim.handle_world),arms={}}
+local r={base=base,uid=sim.getObjectUid(base),baseMatrix=sim.getObjectMatrix(base,sim.handle_world),arms={},hands={}}
 for _,side in ipairs({'L','R'}) do
  local arm={q={},joints={},objects={},limits={}}
  for i=1,6 do
@@ -39,6 +39,29 @@ for _,side in ipairs({'L','R'}) do
   ancestor=sim.getObjectParent(ancestor)
  end
  r.arms[side=='L' and 'left' or 'right']=arm
+ local hand={objects={},limits={},q={}}
+ for finger=1,5 do for segment=1,3 do
+  local path='/BaseLinkHull/joint'..side..'H'..finger..segment
+  local h=sim.getObject(path)
+  assert(sim.getJointType(h)==sim.joint_revolute_subtype,'手指非旋转关节')
+  assert(sim.getJointDependency(h)<0,'从属手指关节不可独立控制')
+  local cyclic,iv=sim.getJointInterval(h)
+  hand.objects[#hand.objects+1]={path=path,h=h,uid=sim.getObjectUid(h),parent=sim.getObjectParent(h)}
+  hand.limits[#hand.limits+1]=cyclic and {-math.pi,math.pi} or {iv[1],iv[1]+iv[2]}
+  hand.q[#hand.q+1]=sim.getJointPosition(h)
+ end end
+ for finger=1,5 do
+  local ancestor=hand.objects[finger*3].h
+  for segment=3,1,-1 do
+   local expected=hand.objects[(finger-1)*3+segment].h
+   while ancestor~=-1 and ancestor~=expected do ancestor=sim.getObjectParent(ancestor) end
+   assert(ancestor~=-1,'手指链层级不匹配')
+   ancestor=sim.getObjectParent(ancestor)
+  end
+  while ancestor~=-1 and ancestor~=palm do ancestor=sim.getObjectParent(ancestor) end
+  assert(ancestor~=-1,'手指不属于该侧掌部')
+ end
+ r.hands[side=='L' and 'left' or 'right']=hand
 end
 return r
 ''')
@@ -51,16 +74,19 @@ return r
         if not ok: raise RuntimeError(str(result))
         return result
 
-    def exchange(self,targets=None):
+    def exchange(self,targets=None,hand_targets=None):
         changes=[]
-        for side,q in (targets or {}).items():
-            if side not in self.data['arms'] or len(q)!=6 or not np.isfinite(q).all():
-                raise ValueError('无效角度批次')
-            for obj,value,limits in zip(self.data['arms'][side]['objects'],q,self.data['arms'][side]['limits']):
-                if not limits[0]<=value<=limits[1]: raise ValueError('超出场景区间')
-                changes.append('{h=%d,v=%.17g}'%(obj['h'],value))
+        for kind,batch,count in (('arms',targets,6),('hands',hand_targets,15)):
+            for side,q in (batch or {}).items():
+                if side not in self.data.get(kind,{}) or np.asarray(q).shape!=(count,) or not np.isfinite(q).all():
+                    raise ValueError('无效角度批次')
+                for obj,value,limits in zip(self.data[kind][side]['objects'],q,self.data[kind][side]['limits']):
+                    if not limits[0]<=value<=limits[1]: raise ValueError('超出场景区间')
+                    changes.append('{h=%d,v=%.17g}'%(obj['h'],value))
         objects=[o for a in self.data['arms'].values() for o in a['objects']]
-        rows=','.join('{h=%d,uid=%d,path=%s}'%(o['h'],o['uid'],json.dumps(o['path'])) for o in objects)
+        objects += [o for a in self.data.get('hands',{}).values() for o in a['objects']]
+        rows=','.join('{h=%d,uid=%d,path=%s%s}'%(o['h'],o['uid'],json.dumps(o['path']),
+            '' if 'parent' not in o else ',parent=%d'%o['parent']) for o in objects)
         code='''
 local base=sim.getObject('/BaseLinkHull')
 assert(sim.getObjectUid(base)==%d,'场景已更换')
@@ -71,6 +97,7 @@ local objects={%s}
 for _,o in ipairs(objects) do
  assert(sim.getObject(o.path)==o.h and sim.getObjectUid(o.h)==o.uid,'关节对象已改变')
  assert(sim.getJointDependency(o.h)<0,'关节已变为从属关节')
+ if o.parent then assert(sim.getObjectParent(o.h)==o.parent,'手指装配层级已改变') end
 end
 local changes={%s}
 for _,o in ipairs(changes) do
@@ -83,6 +110,7 @@ for _,o in ipairs(objects) do q[o.path]=sim.getJointPosition(o.h) end
 return q
 '''%(self.data['uid'],','.join(map(str,self.data['baseMatrix'])),rows,','.join(changes))
         raw=self.run(code)
+        self.hand_angles={side:np.array([raw[o['path']] for o in a['objects']]) for side,a in self.data.get('hands',{}).items()}
         return {side:np.array([raw[o['path']] for o in a['objects']]) for side,a in self.data['arms'].items()}
 
     def fast_idle(self,enabled):
@@ -118,3 +146,7 @@ return q
             current=self.data['arms'][side]
             if current['objects']!=arm['objects'] or current['limits']!=arm['limits']:
                 raise ValueError('恢复失败：关节身份或区间改变，请重新连接')
+        for side,hand in old.get('hands',{}).items():
+            current=self.data.get('hands',{}).get(side,{})
+            if current.get('objects')!=hand['objects'] or current.get('limits')!=hand['limits']:
+                raise ValueError('恢复失败：手指身份或区间改变，请重新连接')

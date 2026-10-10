@@ -12,6 +12,7 @@ from .pose import PoseEngine
 from .x1_live import MAX_JOINT_SPEED_DEG_S,MAX_JOINT_STEP_DEG,NOMINAL_TICK_S
 from .scene_environment import DEFAULT_INSTALL,DEFAULT_SCENE,EnvironmentAction,launch_environment,port_in_use
 from .wrist_diagnostics import WristDiagnostics
+from .scene_hand import HandMailbox
 
 
 def joint_step(speed,dt):
@@ -68,11 +69,12 @@ def dispatch_reason(enabled,generation,current_generation,current,sample,now):
 class SceneWorker(QtCore.QThread):
     report=QtCore.Signal(object)
     failed=QtCore.Signal(str)
-    def __init__(self,port,mailbox,speed,angle,logging=False,parent=None,*,wrist_speed=None):
+    def __init__(self,port,mailbox,speed,angle,logging=False,parent=None,*,wrist_speed=None,hand_mailbox=None):
         super().__init__(parent)
         self.port,self.mailbox,self.speed,self.angle=port,mailbox,speed,angle
         self.logging=logging
         self.wrist_speed=speed if wrist_speed is None else wrist_speed
+        self.hand_mailbox=hand_mailbox or HandMailbox()
     def run(self):
         bridge=None
         logfile=None
@@ -87,21 +89,38 @@ class SceneWorker(QtCore.QThread):
                 models[side]=SceneArm(a,lower,upper)
             C=body_axes(models)
             previous=bridge.exchange()
+            last_hand_exchange=time.monotonic()
             human_rest=PoseEngine().transforms(include_natural=False)
             human_neutral={s:tuple(human_rest[PART_BY_KEY[f'{s}_{p}']][:3,3].copy()
                                    for p in ('upper_arm','forearm','hand')) for s in models}
             if hasattr(bridge,'fast_idle'):bridge.fast_idle(True)
 
             def exchange(targets=None):
-                nonlocal bridge
+                nonlocal bridge,last_hand_exchange
                 import zmq
                 try:
-                    return bridge.exchange(targets)
+                    now=time.monotonic()
+                    fingers,requests,revision=self.hand_mailbox.targets(getattr(bridge,'hand_angles',{}),now,now-last_hand_exchange)
+                    if self.hand_mailbox.snapshot()[1]!=revision:fingers={};requests={}
+                    actual=bridge.exchange(targets,hand_targets=fingers) if fingers else bridge.exchange(targets)
+                    last_hand_exchange=time.monotonic()
+                    hand_angles=getattr(bridge,'hand_angles',{})
+                    if any(not np.allclose(hand_angles[s],q,atol=1e-5,rtol=0) for s,q in fingers.items()):
+                        raise ValueError('场景未应用手指目标，请检查其他控制器')
+                    hand_row={'hand_angles':{s:q.tolist() for s,q in hand_angles.items()},
+                        'hand_targets':{s:q.tolist() for s,q in fingers.items()},
+                        'hand_requests':{s:{**r,'target':r['target'].tolist()} for s,r in requests.items()},
+                        'hand_readback_mono_s':last_hand_exchange}
+                    if logfile and (fingers or requests):
+                        logfile.write(json.dumps({'event':'hands','mono_s':last_hand_exchange,**hand_row})+'\n')
+                    if hand_angles:self.report.emit(hand_row)
+                    return actual
                 except zmq.Again:
                     self.mailbox.pause()
+                    self.hand_mailbox.stop()
                     self.report.emit({'recovering':True})
                     if logfile:logfile.write(json.dumps({'event':'rpc_timeout','mono_s':time.monotonic(),
-                        'write_uncertain':bool(targets)})+'\n')
+                        'write_uncertain':bool(targets or fingers)})+'\n')
                     old=bridge.data
                     bridge.close();bridge=None
                     for attempt in range(2):
@@ -223,6 +242,11 @@ class SceneWorker(QtCore.QThread):
                                           'segment_errors':segment_errors,'solver_mode':sample.get('solver_mode','staged'),
                                           'wrist_diagnostics':wrist})
                     else:
+                        # Hand authorization is independent of a rejected arm snapshot.
+                        if self.hand_mailbox.snapshot()[0]:
+                            actual=exchange()
+                            if actual is None:break
+                            previous=actual
                         messages={'sending_stopped':'发送已停止：'+self.mailbox.stop_reason,
                                   'generation_changed':'授权已改变：丢弃旧求解结果',
                                   'missing_snapshot':'没有 GUI 快照：本轮不发送',
@@ -233,7 +257,7 @@ class SceneWorker(QtCore.QThread):
                     was_enabled=True
                 else:
                     wrist_tracker.reset()
-                    if now-last_read>.2:
+                    if now-last_read>.2 or self.hand_mailbox.snapshot()[0]:
                         actual=exchange()
                         if actual is None:break
                         previous=actual;last_read=now
@@ -250,6 +274,7 @@ class SceneWorker(QtCore.QThread):
         except Exception as exc:
             if logfile:logfile.write(json.dumps({'event':'failure','error':str(exc),'mono_s':time.monotonic()},ensure_ascii=False)+'\n')
             self.mailbox.set(False)
+            self.hand_mailbox.stop()
             self.failed.emit(str(exc))
         finally:
             if logfile:logfile.write(json.dumps({'event':'worker_closed','mono_s':time.monotonic()})+'\n')
@@ -311,13 +336,14 @@ class SceneRobotDialog(QtWidgets.QDialog):
         self.viewer=viewer;self.worker=None;self.mailbox=Mailbox();self.signature=None
         self.connected=False
         self.config=None
+        self.hand_mailbox=HandMailbox();self.hand_dialog=None;self.hand_angles={};self.hand_readback_at=0.
         self.environment_action=None;self.environment_process=None
-        self.setWindowTitle('新机器人 · CoppeliaSim 双臂实时预览')
+        self.setWindowTitle('新机器人 · CoppeliaSim 双臂 / 手指实时预览')
         self.resize(750,600)
         layout=QtWidgets.QVBoxLayout(self)
         info=QtWidgets.QLabel('复用当前人体姿态及穿戴标定。仅停止状态运动学预览，不控制真机。\n'
             '请先打开已确认中立位的新场景并停止仿真；勿同时使用关节 demo。\n'
-            '零角为屈肘姿态；参考中立位两侧关节4为 −90°。手指暂不控制。')
+            '零角为屈肘姿态；参考中立位两侧关节4为 −90°。手指可独立配置并启用离散开合。')
         info.setWordWrap(True);layout.addWidget(info)
         self.install_path=QtWidgets.QLineEdit(str(DEFAULT_INSTALL))
         self.scene_path=QtWidgets.QLineEdit(str(DEFAULT_SCENE))
@@ -391,8 +417,13 @@ class SceneRobotDialog(QtWidgets.QDialog):
         self.logging=QtWidgets.QCheckBox('记录角度、腕部目标速度 / 5、6 角速度 / 朝向误差及时序（连接前勾选）')
         layout.addWidget(self.logging)
         self.connect_button=QtWidgets.QPushButton('连接 / 重新读取场景')
+        self.hand_config_button=QtWidgets.QPushButton('左右手指姿态配置…（可独立于双臂运行）')
+        self.hand_config_button.clicked.connect(self.show_hand_config);layout.addWidget(self.hand_config_button)
+        self.hand_status=QtWidgets.QLabel('手指：尚未连接；输出默认关闭');layout.addWidget(self.hand_status)
+        hand_stop=QtWidgets.QPushButton('停止左右手指输出（保持当前位置）')
+        hand_stop.clicked.connect(self.stop_hands);layout.addWidget(hand_stop)
         self.start=QtWidgets.QPushButton('启动所选手臂跟随');self.start.setEnabled(False)
-        self.stop=QtWidgets.QPushButton('停止发送 · 保持当前角度')
+        self.stop=QtWidgets.QPushButton('停止双臂发送 · 保持角度（手指独立）')
         self.export=QtWidgets.QPushButton('导出本次运动学配置与参考（诊断 JSON）')
         self.export.setEnabled(False)
         for w in (self.connect_button,self.start,self.stop,self.export):layout.addWidget(w)
@@ -469,7 +500,50 @@ class SceneRobotDialog(QtWidgets.QDialog):
                   self.segment_orientation,self.segment_weight):w.setEnabled(not running)
         self.start.setEnabled(self.connected and not running)
 
+    def show_hand_config(self):
+        if self.hand_dialog is None:
+            from .scene_hand_gui import HandPoseDialog
+            self.hand_dialog=HandPoseDialog(self)
+            if self.connected:self.hand_dialog.bind_scene()
+        self.hand_dialog.show();self.hand_dialog.raise_()
+
+    def revoke_hand_input(self,side):
+        gesture=getattr(self.viewer,'gripper_gesture_dialog',None)
+        if gesture is not None:gesture.panels[side].send_scene.setChecked(False)
+
+    def stop_hands(self):
+        self.hand_mailbox.stop()
+        if self.hand_dialog is not None:self.hand_dialog.stop_all()
+        for side in ('left','right'):self.revoke_hand_input(side)
+        self.hand_status.setText('手指输出已停止；保持当前位置')
+
+    def receive_hand(self,side,data):
+        gesture=getattr(self.viewer,'gripper_gesture_dialog',None)
+        panel=None if gesture is None else gesture.panels[side]
+        if not data.get('enabled'):
+            requests,_=self.hand_mailbox.snapshot()
+            if requests.get(side,{}).get('source')=='gesture':self.hand_mailbox.stop(side)
+            return
+        try:
+            if not self.connected:raise ValueError('请先连接新机器人场景，再重新启用手指输出')
+            if self.hand_dialog is None:raise ValueError('请先打开手指配置并确认两组端点')
+            self.hand_dialog.endpoint(side,'open')  # Validate both endpoints even before a state is available.
+            if not data.get('valid') or data.get('state') not in (False,True):
+                self.hand_mailbox.stop(side)
+                if panel:panel.scene_status.setText('暂停手指：手势数据无效或状态待判定，保持当前位置')
+                return
+            key='closed' if data['state'] else 'open'
+            q=self.hand_dialog.endpoint(side,key)
+            self.hand_dialog.preview.pop(side,None)
+            self.hand_mailbox.set(side,q,data['stamp'],self.hand_dialog.widgets[side][1].value(),'gesture')
+            if panel:panel.scene_status.setText('手势目标：'+('闭合' if data['state'] else '张开')+'；等待场景回读')
+        except (ValueError,KeyError) as exc:
+            self.hand_mailbox.stop(side)
+            if panel:
+                panel.send_scene.setChecked(False);panel.scene_status.setText(str(exc))
+
     def connect_scene(self):
+        self.stop_hands()
         self.halt()
         if not self.shutdown(): return
         self.connected=False;self.start.setEnabled(False);self.connect_button.setEnabled(False)
@@ -477,7 +551,7 @@ class SceneRobotDialog(QtWidgets.QDialog):
         self.status.setText('正在读取场景关节链；不会改变关节角…')
         self.worker=SceneWorker(self.port.value(),self.mailbox,self.speed.value(),
             self.angle.value() if self.extra_limits.isChecked() else None,self.logging.isChecked(),self,
-            wrist_speed=self.wrist_speed.value())
+            wrist_speed=self.wrist_speed.value(),hand_mailbox=self.hand_mailbox)
         worker=self.worker
         self.worker.report.connect(lambda data: self.report(data) if self.worker is worker else None)
         self.worker.failed.connect(lambda text: self.failure(text) if self.worker is worker else None)
@@ -565,8 +639,18 @@ class SceneRobotDialog(QtWidgets.QDialog):
 
     @QtCore.Slot(object)
     def report(self,data):
+        if 'hand_angles' in data:
+            self.hand_angles={s:np.array(q) for s,q in data['hand_angles'].items()}
+            self.hand_readback_at=data['hand_readback_mono_s']
+            active=data.get('hand_requests',{})
+            self.hand_status.setText('手指场景回读正常；当前输出：'+('、'.join(('左' if s=='left' else '右')+'手 '+r['source'] for s,r in active.items()) or '未启用'))
+            gesture=getattr(self.viewer,'gripper_gesture_dialog',None)
+            if gesture is not None:
+                for s,r in active.items():
+                    if r['source']=='gesture':gesture.panels[s].scene_status.setText('CoppeliaSim 已回读该侧十五关节；按配置端点过渡中')
         if 'diagnostic' in data:self.diagnostic.setText('时序诊断：'+data['diagnostic'])
         if data.get('recovering'):
+            self.stop_hands()
             self.connected=False;self.halt(reason='通信超时，正在恢复连接')
             self.connect_button.setEnabled(False)
             self.status.setText('通信超时：暂停发送，正在重建连接并核对场景；不会盲目重发角度。')
@@ -576,6 +660,7 @@ class SceneRobotDialog(QtWidgets.QDialog):
         if data.get('connected'):
             self.connected=True;self.connect_button.setEnabled(True);self.controls(False)
             self.config=data['config'];self.export.setEnabled(True)
+            if self.hand_dialog is not None:self.hand_dialog.bind_scene()
             self.status.setText('已连接；轴变换与机器人参考已读取，尚未发送角度。')
             if data.get('log'):
                 self.status.setText(self.status.text()+'\n日志：'+data['log'])
@@ -618,6 +703,7 @@ class SceneRobotDialog(QtWidgets.QDialog):
         if 'warning' in data and not self.mailbox.blocked:self.status.setText(data['warning'])
 
     def failure(self,text):
+        self.stop_hands()
         self.connected=False;self.halt(reason='连接/求解失败：'+text);self.status.setText('连接/求解停止：'+text)
         self.connect_button.setEnabled(True)
         for w in (self.port,self.speed,self.wrist_speed,self.logging,self.extra_limits):w.setEnabled(True)
@@ -632,6 +718,8 @@ class SceneRobotDialog(QtWidgets.QDialog):
             except OSError as exc:self.status.setText('保存失败：'+str(exc))
 
     def shutdown(self):
+        self.stop_hands()
+        if self.hand_dialog is not None:self.hand_dialog.hide()
         if self.worker is not None:
             self.worker.requestInterruption()
             if not self.worker.wait(5000):

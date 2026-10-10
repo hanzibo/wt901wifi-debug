@@ -562,11 +562,20 @@ class BodyWindow(QtWidgets.QMainWindow):
         if self.gripper_gesture_dialog is None:
             self.gripper_gesture_dialog = BilateralGestureWindow(
                 SharedGestureSource(), Path(__file__).resolve().parents[1]/'recordings/imu_gripper', self)
+            self.gripper_gesture_dialog.hand_output.connect(self._route_scene_hand)
             for device, packet in self.engine.packets.items():
                 self._feed_gripper_packet(round(self.engine.received_at[device]*1e9), packet)
         self.gripper_gesture_dialog.show()
         self.gripper_gesture_dialog.raise_()
         self.gripper_gesture_dialog.activateWindow()
+
+    def _route_scene_hand(self,side,data):
+        if self.scene_robot_dialog is not None:
+            self.scene_robot_dialog.receive_hand(side,data)
+        elif data.get('enabled') and self.gripper_gesture_dialog is not None:
+            panel=self.gripper_gesture_dialog.panels[side]
+            panel.scene_status.setText('请先打开并连接新机器人窗口，配置手型后重新启用')
+            panel.send_scene.setChecked(False)
 
     def _show_scene_robot(self) -> None:
         if self.replay_mode:

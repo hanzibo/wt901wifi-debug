@@ -104,6 +104,7 @@ class SharedGestureSource:
 
 
 class GestureWindow(QtWidgets.QWidget):
+    hand_output=QtCore.Signal(object)
     def __init__(self, source, output_root, parent=None, panel_joint=None):
         super().__init__(parent, QtCore.Qt.WindowType.Window)
         self.embedded = parent is not None
@@ -178,8 +179,14 @@ class GestureWindow(QtWidgets.QWidget):
         if panel_joint is not None:
             self.target_joint.setCurrentIndex(self.target_joint.findData(panel_joint))
             self.target_joint.setEnabled(False)
-        self.reverse=QtWidgets.QCheckBox('反向映射');output.addWidget(self.reverse)
+        self.reverse=QtWidgets.QCheckBox('反向映射（仅 RViz）');output.addWidget(self.reverse)
         self.preview_status=QtWidgets.QLabel('RViz输出关闭；请勿同时启用手机网页夹爪输出。');layout.addWidget(self.preview_status)
+        self.send_scene=QtWidgets.QCheckBox('输出离散开合至 CoppeliaSim 手指（仅仿真）')
+        self.send_scene.setEnabled(panel_joint is not None and self.embedded)
+        layout.addWidget(self.send_scene)
+        self.scene_status=QtWidgets.QLabel('CoppeliaSim 手指输出关闭；需连接场景并配置张开 / 闭合端点')
+        self.scene_status.setWordWrap(True);layout.addWidget(self.scene_status)
+        self.send_scene.toggled.connect(lambda _:self.hand_output.emit({'enabled':False,'valid':False,'state':None,'stamp':0.}))
         if self.embedded and panel_joint is None:
             bridge=QtWidgets.QPushButton('打开 X1 预览配置…（启动 ROS 接收 / RViz 模型）')
             bridge.clicked.connect(parent._show_x1_preview);layout.addWidget(bridge)
@@ -206,6 +213,7 @@ class GestureWindow(QtWidgets.QWidget):
 
     def reset_discrete(self,*_):
         self.send_preview.setChecked(False)
+        self.send_scene.setChecked(False)
         try:
             self.discrete=DiscreteClosure(self.open_threshold.value()/100,self.closed_threshold.value()/100,self.dwell.value())
             self.state_label.setText('离散状态：待判定；两阈值之间保持，必须重新越过阈值确认')
@@ -280,6 +288,7 @@ class GestureWindow(QtWidgets.QWidget):
         except ValueError as exc:
             QtWidgets.QMessageBox.warning(self,'不能开始采样',str(exc));return
         self.capture=dict(kind=kind,state='prepare',deadline=time.monotonic()+self.delay.value(),rows=[],stamp=None)
+        self.send_scene.setChecked(False)
         self.controls()
 
     def cancel_capture(self):
@@ -395,6 +404,10 @@ class GestureWindow(QtWidgets.QWidget):
             self.stop_record();self.status.setText('接收／记录错误：'+str(exc))
         try:self.update_preview(now,output_allowed)
         except OSError as exc:self.send_preview.setChecked(False);self.preview_status.setText('预览发送错误：'+str(exc))
+        self.hand_output.emit({'enabled':self.send_scene.isChecked(),
+            'valid':bool(output_allowed and self.discrete is not None and self.discrete.state is not None),
+            'state':None if self.discrete is None else self.discrete.state,
+            'stamp':self.last_filter_stamp if output_allowed and self.last_filter_stamp is not None else 0.})
         self.controls()
 
     def toggle_record(self):
@@ -429,7 +442,7 @@ class GestureWindow(QtWidgets.QWidget):
             self.shutdown();event.accept()
 
     def shutdown(self):
-        self.send_preview.setChecked(False);self.timer.stop();self.stop_record();self.source.close();self.preview_socket.close()
+        self.send_scene.setChecked(False);self.send_preview.setChecked(False);self.timer.stop();self.stop_record();self.source.close();self.preview_socket.close()
 
 
 class BilateralDemoSource(DemoSource):
@@ -442,10 +455,11 @@ class BilateralDemoSource(DemoSource):
 
 class BilateralGestureWindow(QtWidgets.QWidget):
     """One upstream receiver, two independent gesture/state/output channels."""
+    hand_output=QtCore.Signal(str,object)
     def __init__(self, source, output_root, parent=None):
         super().__init__(parent,QtCore.Qt.WindowType.Window)
         self.source=source;self.embedded=parent is not None;self._closed=False
-        self.setWindowTitle('左右手四 IMU 夹爪 · 独立离散开合（仅 RViz）')
+        self.setWindowTitle('左右手四 IMU · 离散开合（RViz / CoppeliaSim 预览）')
         self.resize(1450,940)
         layout=QtWidgets.QVBoxLayout(self)
         note=QtWidgets.QLabel('左、右各选手背＋指段，共四台不同设备；每侧独立采集开手/闭合、设置阈值及启用输出。\n'
@@ -457,6 +471,10 @@ class BilateralGestureWindow(QtWidgets.QWidget):
         if self.embedded:
             bridge=QtWidgets.QPushButton('打开 X1 预览配置…（启动 ROS 接收 / RViz）')
             bridge.clicked.connect(parent._show_x1_preview);top.addWidget(bridge)
+            scene=QtWidgets.QPushButton('打开新机器人 / 手指配置…')
+            if hasattr(parent,'_show_scene_robot'):scene.clicked.connect(parent._show_scene_robot)
+            else:scene.setEnabled(False)
+            top.addWidget(scene)
         stop=QtWidgets.QPushButton('停用左右夹爪输出（保持末次位置）');stop.clicked.connect(self.stop_outputs);top.addWidget(stop)
         split=QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal);layout.addWidget(split,1)
         self.panels={}
@@ -464,8 +482,10 @@ class BilateralGestureWindow(QtWidgets.QWidget):
             group=QtWidgets.QGroupBox(title);column=QtWidgets.QVBoxLayout(group)
             queue=SharedGestureSource();queue.simulation=isinstance(source,DemoSource)
             panel=GestureWindow(queue,Path(output_root)/side,self,panel_joint=joint)
+            panel.send_scene.setEnabled(self.embedded)
             panel.setWindowFlags(QtCore.Qt.WindowType.Widget);panel.timer.stop()
             panel.role_validator=lambda panel=panel:self.validate_roles(panel)
+            panel.hand_output.connect(lambda data,s=side:self.hand_output.emit(s,data))
             panel.plot.setMinimumHeight(150)
             column.addWidget(panel);split.addWidget(group);self.panels[side]=panel
         split.setSizes([700,700])
@@ -499,7 +519,8 @@ class BilateralGestureWindow(QtWidgets.QWidget):
             self.assignment_status.setText(str(exc));self.stop_outputs()
 
     def stop_outputs(self):
-        for panel in self.panels.values():panel.send_preview.setChecked(False)
+        for panel in self.panels.values():
+            panel.send_preview.setChecked(False);panel.send_scene.setChecked(False)
 
     def tick(self):
         if self._closed:return
