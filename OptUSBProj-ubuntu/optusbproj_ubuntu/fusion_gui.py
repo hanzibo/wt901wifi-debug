@@ -1175,6 +1175,7 @@ class FusionWindow(BodyWindow):
                 self.statusBar().showMessage(f"联合录制中断：{exc}")
 
     def _poll(self) -> None:
+        poll_started=time.monotonic()
         try:
             timed_packets = self.source.poll_timed()
         except (OSError, ValueError) as exc:
@@ -1252,6 +1253,10 @@ class FusionWindow(BodyWindow):
         now = time.monotonic()
         if self._render_dirty and now - self._last_render >= 1 / 30:
             self._render_pose()
+
+        if hasattr(self.source,'diagnostic_event'):
+            self.source.diagnostic_event('gui_poll_end',duration_ms=(time.monotonic()-poll_started)*1000,
+                                         packets=len(timed_packets))
 
     def toggle_session(self) -> None:
         if self.camera_calibration_dialog is not None and self.camera_calibration_dialog.active:

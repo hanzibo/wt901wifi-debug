@@ -25,6 +25,31 @@ class GuiUdpSource:
         self._endpoints: dict[str, tuple[str, int, float]] = {}
         self._latest_packets: dict[str, AttitudePacket] = {}
         self._replies: deque[tuple[str, tuple[int, int, int, int]]] = deque()
+        self._diagnostics = None
+
+    def enable_diagnostics(self, enabled: bool) -> None:
+        self._diagnostics = ({'rows': deque(maxlen=20000), 'dropped': 0,
+                              'last_poll': None, 'endpoints': {}, 'devices': {}}
+                             if enabled else None)
+
+    def diagnostic_event(self, event: str, **values) -> None:
+        state = self._diagnostics
+        if state is None:
+            return
+        if len(state['rows']) == state['rows'].maxlen:
+            state['dropped'] += 1
+        state['rows'].append({'event': event, 'mono_s': time.monotonic(), **values})
+
+    def take_diagnostics(self) -> list[dict]:
+        state = self._diagnostics
+        if state is None:
+            return []
+        rows = list(state['rows']); state['rows'].clear()
+        if state['dropped']:
+            rows.append({'event': 'diagnostic_overflow', 'mono_s': time.monotonic(),
+                         'dropped': state['dropped']})
+            state['dropped'] = 0
+        return rows
 
     def poll(self) -> list[AttitudePacket]:
         return [packet for _, packet in self.poll_timed()]
@@ -32,12 +57,26 @@ class GuiUdpSource:
     def poll_timed(self) -> list[tuple[int, AttitudePacket]]:
         """Return packets with the host monotonic timestamp at UDP receipt."""
         packets: list[tuple[int, AttitudePacket]] = []
+        started = time.monotonic()
+        diag = self._diagnostics
+        if diag is not None:
+            self.diagnostic_event('udp_poll_begin', interval_ms=None if diag['last_poll'] is None
+                                  else (started-diag['last_poll'])*1000)
+            diag['last_poll'] = started
+        datagrams = 0
         for _ in range(512):
             try:
                 data, addr = self.sock.recvfrom(4096)
             except BlockingIOError:
                 break
             received_ns = time.monotonic_ns()
+            datagrams += 1
+            if diag is not None:
+                endpoint = f'{addr[0]}:{addr[1]}'
+                prior = diag['endpoints'].get(endpoint)
+                diag['endpoints'][endpoint] = received_ns
+                self.diagnostic_event('udp_datagram', endpoint=endpoint, bytes=len(data),
+                                      gap_ms=None if prior is None else (received_ns-prior)/1e6)
             if len(data) == 11 and data[:2] == b"\x55\x5f" and sum(data[:10]) & 0xff == data[10]:
                 for device_id, (ip, seen) in self._devices.items():
                     if ip == addr[0] and time.monotonic() - seen < 3.0:
@@ -46,14 +85,28 @@ class GuiUdpSource:
                         break
                 continue
             buffer = self._buffers.setdefault(addr, bytearray())
+            before = len(buffer)
             buffer.extend(data)
-            for raw in extract_packets(buffer):
+            raws = extract_packets(buffer)
+            if diag is not None:
+                self.diagnostic_event('udp_parse', endpoint=endpoint, packets=len(raws),
+                    buffered_bytes=len(buffer), discarded_bytes=before+len(data)-len(buffer)-sum(map(len,raws)))
+            for raw in raws:
                 packet = AttitudePacket.parse(raw)
                 seen = time.monotonic()
                 self._devices[packet.device_id] = (addr[0], seen)
                 self._endpoints[packet.device_id] = (addr[0], addr[1], seen)
                 self._latest_packets[packet.device_id] = packet
                 packets.append((received_ns, packet))
+                if diag is not None:
+                    prior = diag['devices'].get(packet.device_id)
+                    diag['devices'][packet.device_id] = received_ns
+                    self.diagnostic_event('imu_parsed', device=packet.device_id, endpoint=endpoint,
+                        gap_ms=None if prior is None else (received_ns-prior)/1e6,
+                        sensor_time=packet.time_str, rssi_dbm=packet.rssi)
+        if diag is not None:
+            self.diagnostic_event('udp_poll_end', duration_ms=(time.monotonic()-started)*1000,
+                                  datagrams=datagrams, packets=len(packets), budget_reached=datagrams==512)
         return packets
 
     def take_replies(self) -> list[tuple[str, tuple[int, int, int, int]]]:
