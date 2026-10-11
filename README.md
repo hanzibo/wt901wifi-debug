@@ -217,6 +217,23 @@ python3 OptUSBProj-ubuntu/lan_gripper_demo.py
 
 ## 测试
 
+统一测试入口可从任意工作目录调用。使用当前机器已配置的两套环境，运行旧手腕核心测试与人体/RGB-D 测试：
+
+```bash
+python /home/hzb/Work/WT901/scripts/run_tests.py --core-env wt901 --app-env OptUSBProj-yolo
+```
+
+入口自动设置导入路径，默认使用无头 Qt，不安装依赖，不运行真实仿真联调脚本。
+已有激活环境时可省略 `--core-env` / `--app-env`；此时使用启动入口的 Python。
+快速检查新机器人链路：
+
+```bash
+conda run --no-capture-output -n OptUSBProj-yolo python /home/hzb/Work/WT901/scripts/run_tests.py --suite scene
+```
+
+用 `--suite core|app` 选择测试组，`--pattern test_pose.py` 选择文件，`--verbose` 显示具体用例。
+重构基线、固定数值样本与验收边界见 [阶段 0 基线说明](docs/REFACTOR_PHASE0_BASELINE.md)。以下原始命令仍保留兼容。
+
 ```bash
 conda run --no-capture-output -n wt901 python -m unittest discover -s tests -v
 ```

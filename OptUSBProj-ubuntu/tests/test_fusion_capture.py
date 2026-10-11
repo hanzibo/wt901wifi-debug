@@ -4,10 +4,10 @@ import csv
 import json
 import sys
 import time
-from collections import deque
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -48,19 +48,21 @@ class FusionCaptureTests(unittest.TestCase):
         class FakeSocket:
             def __init__(self):
                 self.pending = [(bytes(raw), ("10.42.0.174", 9250))]
+                self.bind = Mock()
+                self.setblocking = Mock()
+                self.close = Mock()
 
             def recvfrom(self, _size):
                 if not self.pending:
                     raise BlockingIOError
                 return self.pending.pop(0)
 
-        source = object.__new__(GuiUdpSource)
-        source.sock = FakeSocket()
-        source._buffers = {}
-        source._devices = {}
-        source._endpoints = {}
-        source._latest_packets = {}
-        source._replies = deque()
+        sock = FakeSocket()
+        with patch("wt901.gui_udp.socket.socket", return_value=sock):
+            source = GuiUdpSource(port=0, host="127.0.0.1")
+        self.addCleanup(source.close)
+        sock.bind.assert_called_once_with(("127.0.0.1", 0))
+        sock.setblocking.assert_called_once_with(False)
         timed = source.poll_timed()
         self.assertEqual(len(timed), 1)
         self.assertGreater(timed[0][0], 0)
