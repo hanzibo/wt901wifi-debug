@@ -1,10 +1,9 @@
 """Editable hand endpoints. No direct simulator API calls on the GUI thread."""
-import json
 import time
-from pathlib import Path
 import numpy as np
 from PySide6 import QtCore,QtWidgets
 from .scene_hand import hand_pose
+from .scene_hand_profiles import read_hand_profiles, write_hand_profiles
 
 
 class HandPoseDialog(QtWidgets.QDialog):
@@ -141,7 +140,7 @@ class HandPoseDialog(QtWidgets.QDialog):
                     'paths':[o['path'] for o in self.owner.config['scene']['hands'][side]['objects']],
                     'speed_deg_s':self.widgets[side][1].value()}
             if not data['sides']:raise ValueError('至少确认一侧的两组端点后才能保存')
-            Path(path).write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8')
+            write_hand_profiles(path, data['sides'])
         except (OSError,ValueError) as exc:QtWidgets.QMessageBox.warning(self,'保存失败',str(exc))
 
     def load(self):
@@ -149,15 +148,9 @@ class HandPoseDialog(QtWidgets.QDialog):
         if not path:return
         self.stop_all()
         try:
-            data=json.loads(Path(path).read_text(encoding='utf-8'))
-            if data['version']!=1:raise ValueError('不支持的手型格式')
-            checked={}
-            if not data['sides'] or not set(data['sides'])<=set(self.widgets):raise ValueError('无效手侧')
-            for side in data['sides']:
-                row=data['sides'][side];limits=self.limits(side)
-                if row['paths']!=[o['path'] for o in self.owner.config['scene']['hands'][side]['objects']]:raise ValueError('手指对象路径不匹配')
-                if not 5<=row['speed_deg_s']<=720:raise ValueError('无效手指速度')
-                checked[side]=(hand_pose(np.deg2rad(row['open_deg']),limits),hand_pose(np.deg2rad(row['closed_deg']),limits),row['speed_deg_s'])
+            if not self.owner.connected or self.owner.config is None:
+                raise ValueError('请先连接 CoppeliaSim 场景')
+            checked=read_hand_profiles(path,self.owner.config['scene']['hands'])
             for side,(opened,closed,speed) in checked.items():
                 for pair,a,b in zip(self.widgets[side][0],np.rad2deg(opened),np.rad2deg(closed)):
                     pair[0].setValue(a);pair[1].setValue(b)

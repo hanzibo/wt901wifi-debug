@@ -234,6 +234,8 @@ conda run --no-capture-output -n OptUSBProj-yolo python /home/hzb/Work/WT901/scr
 用 `--suite core|app` 选择测试组，`--pattern test_pose.py` 选择文件，`--verbose` 显示具体用例。
 重构基线、固定数值样本与验收边界见 [阶段 0 基线说明](docs/REFACTOR_PHASE0_BASELINE.md)。以下原始命令仍保留兼容。
 
+新机器人链路的模块拆分与手动验收步骤见 [阶段 1 验收说明](docs/REFACTOR_PHASE1_ACCEPTANCE.md)。
+
 ```bash
 conda run --no-capture-output -n wt901 python -m unittest discover -s tests -v
 ```
