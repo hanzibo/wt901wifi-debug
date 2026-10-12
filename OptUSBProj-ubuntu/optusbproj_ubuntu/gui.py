@@ -101,6 +101,11 @@ class AxisMappingDialog(QtWidgets.QDialog):
             self.ok_button.setEnabled(True)
 
 
+from .body_panel import build_body_panel
+from .body_view import BodyView
+from .body_device_controller import BodyDeviceController
+
+
 class BodyWindow(QtWidgets.QMainWindow):
     def __init__(self, source: GuiUdpSource | ReplaySource, settings_path: Path,
                  assignments: dict[str, str] | None = None,
@@ -133,6 +138,12 @@ class BodyWindow(QtWidgets.QMainWindow):
         self.recorder: PacketRecorder | None = None
         self.replay_mode = isinstance(source, ReplaySource) or getattr(source, "is_replay", False)
 
+        self._body_view = BodyView(self, model_dir=MODEL_DIR, triad_factory=_axis_triad)
+        self._device_controller = BodyDeviceController(
+            self, save=lambda *a, **k: save_config(*a, **k),
+            mapping_dialog_factory=lambda *a, **k: AxisMappingDialog(*a, **k),
+            warn=lambda title, message: QtWidgets.QMessageBox.warning(self, title, message),
+            accepted_code=QtWidgets.QDialog.DialogCode.Accepted)
         self.setWindowTitle("WT901 全身姿态映射 · Ubuntu")
         self.resize(1500, 920)
         central = QtWidgets.QWidget()
@@ -144,172 +155,7 @@ class BodyWindow(QtWidgets.QMainWindow):
         layout.addWidget(self.plotter.interactor, 4)
         self._load_model()
 
-        panel = QtWidgets.QWidget()
-        panel.setMinimumWidth(390)
-        panel.setMaximumWidth(540)
-        panel_layout = QtWidgets.QVBoxLayout(panel)
-        layout.addWidget(panel, 2)
-
-        title = QtWidgets.QLabel("全身设备分配与姿态")
-        font = title.font()
-        font.setPointSize(16)
-        font.setBold(True)
-        title.setFont(font)
-        panel_layout.addWidget(title)
-        self.overview = QtWidgets.QLabel("等待 WT901 UDP 数据…")
-        self.overview.setWordWrap(True)
-        panel_layout.addWidget(self.overview)
-
-        toolbar = QtWidgets.QHBoxLayout()
-        for label, callback in (("热点设备", self._show_devices),
-                                ("设备参数", self._show_settings),
-                                ("接入新设备", self._show_setup),
-                                ("全部归零", self._zero_all)):
-            button = QtWidgets.QPushButton(label)
-            button.clicked.connect(callback)
-            if self.replay_mode and label != "全部归零":
-                button.setEnabled(False)
-            toolbar.addWidget(button)
-        panel_layout.addLayout(toolbar)
-        timed_zero_row = QtWidgets.QHBoxLayout()
-        timed_zero_row.addWidget(QtWidgets.QLabel("延时"))
-        self.zero_delay = QtWidgets.QSpinBox()
-        self.zero_delay.setRange(3, 120)
-        self.zero_delay.setValue(10)
-        self.zero_delay.setSuffix(" 秒")
-        self.zero_delay.setToolTip("点击开始后，可在倒计时期间穿戴设备并摆好中立姿势")
-        timed_zero_row.addWidget(self.zero_delay)
-        self.timed_zero_button = QtWidgets.QPushButton("定时全部归零")
-        self.timed_zero_button.clicked.connect(self._start_timed_zero)
-        timed_zero_row.addWidget(self.timed_zero_button, 1)
-        self.cancel_zero_button = QtWidgets.QPushButton("取消")
-        self.cancel_zero_button.setEnabled(False)
-        self.cancel_zero_button.clicked.connect(self._cancel_timed_zero)
-        timed_zero_row.addWidget(self.cancel_zero_button)
-        panel_layout.addLayout(timed_zero_row)
-        self.zero_countdown = QtWidgets.QLabel("定时归零未启动")
-        self.zero_countdown.setWordWrap(True)
-        panel_layout.addWidget(self.zero_countdown)
-        self.calibration_button = QtWidgets.QPushButton("穿戴标定…（躯干 / 双臂 / 双手）")
-        self.calibration_button.clicked.connect(self._show_calibration)
-        self.calibration_button.setEnabled(not self.replay_mode)
-        panel_layout.addWidget(self.calibration_button)
-        self.bilateral_calibration_button = QtWidgets.QPushButton("双臂联合标定…（左右上臂 / 前臂）")
-        self.bilateral_calibration_button.clicked.connect(self._show_bilateral_calibration)
-        self.bilateral_calibration_button.setEnabled(not self.replay_mode)
-        panel_layout.addWidget(self.bilateral_calibration_button)
-        self.wearing_options_button = QtWidgets.QPushButton('穿戴标定参数…（弱先验 λ）')
-        self.wearing_options_button.clicked.connect(self._show_wearing_options)
-        self.wearing_options_button.setEnabled(not self.replay_mode)
-        panel_layout.addWidget(self.wearing_options_button)
-        self.natural_hand_button=QtWidgets.QPushButton('左手自然掌面参考…（手动原型）')
-        self.natural_hand_button.clicked.connect(self._show_natural_hand)
-        self.natural_hand_button.setEnabled(not self.replay_mode);panel_layout.addWidget(self.natural_hand_button)
-        self.x1_preview_button = QtWidgets.QPushButton("X1 双臂实时预览…（RViz）")
-        self.x1_preview_button.clicked.connect(self._show_x1_preview)
-        self.x1_preview_button.setEnabled(not self.replay_mode)
-        panel_layout.addWidget(self.x1_preview_button)
-        self.scene_robot_button = QtWidgets.QPushButton("新机器人双臂实时预览…（CoppeliaSim）")
-        self.scene_robot_button.clicked.connect(self._show_scene_robot)
-        self.scene_robot_button.setEnabled(not self.replay_mode)
-        panel_layout.addWidget(self.scene_robot_button)
-        self.gripper_gesture_button = QtWidgets.QPushButton('左右手 IMU 夹爪配置…（四设备 / RViz）')
-        self.gripper_gesture_button.clicked.connect(self._show_gripper_gesture)
-        self.gripper_gesture_button.setEnabled(not self.replay_mode)
-        panel_layout.addWidget(self.gripper_gesture_button)
-        self._timed_zero_deadline: float | None = None
-        self.zero_countdown_timer = QtCore.QTimer(self)
-        self.zero_countdown_timer.setInterval(100)
-        self.zero_countdown_timer.timeout.connect(self._update_zero_countdown)
-        self.axes_checkbox = QtWidgets.QCheckBox("显示部位坐标轴（红 X · 绿 Y · 蓝 Z）")
-        self.axes_checkbox.setChecked(True)
-        self.axes_checkbox.toggled.connect(self._toggle_axes)
-        panel_layout.addWidget(self.axes_checkbox)
-        self.record_button = QtWidgets.QPushButton("开始录制 CSV")
-        self.record_button.clicked.connect(self._toggle_recording)
-        self.record_button.setEnabled(not self.replay_mode)
-        panel_layout.addWidget(self.record_button)
-
-        group = QtWidgets.QGroupBox("设备 ID → 身体部位（支持部分设备先行测试）")
-        grid = QtWidgets.QGridLayout(group)
-        section_color = ("#76D7FF" if group.palette().color(
-            QtGui.QPalette.ColorRole.Window).lightness() < 128 else "#006D9B")
-        grid.addWidget(QtWidgets.QLabel("部位"), 0, 0)
-        grid.addWidget(QtWidgets.QLabel("轴映射"), 0, 1)
-        grid.addWidget(QtWidgets.QLabel("设备 ID"), 0, 2)
-        grid.addWidget(QtWidgets.QLabel("中立位"), 0, 3)
-        row = 1
-        section = ""
-        for part in (p for p in PARTS if p.sensor_slot):
-            next_section = ("骨盆 / 躯干 / 头部" if part.key in ("pelvis", "torso", "head")
-                            else "左臂" if part.key.startswith("left_") and
-                            part.key in ("left_upper_arm", "left_forearm", "left_hand")
-                            else "右臂" if part.key.startswith("right_") and
-                            part.key in ("right_upper_arm", "right_forearm", "right_hand")
-                            else "左腿" if part.key.startswith("left_") else "右腿")
-            if next_section != section:
-                section = next_section
-                heading = QtWidgets.QLabel(section)
-                heading.setObjectName("bodySectionHeading")
-                heading.setStyleSheet(
-                    f"color: {section_color}; font-weight: bold; "
-                    "padding-top: 10px; padding-bottom: 2px;")
-                grid.addWidget(heading, row, 0, 1, 4)
-                row += 1
-            grid.addWidget(QtWidgets.QLabel(part.label), row, 0)
-            mapping_button = QtWidgets.QPushButton("轴映射")
-            mapping_button.clicked.connect(
-                lambda _checked=False, key=part.key: self._show_axis_mapping(key))
-            grid.addWidget(mapping_button, row, 1)
-            self.mapping_buttons[part.key] = mapping_button
-            self._update_mapping_button(part.key)
-            combo = QtWidgets.QComboBox()
-            combo.setMinimumWidth(165)
-            combo.currentIndexChanged.connect(
-                lambda _index, key=part.key: self._assignment_changed(key))
-            grid.addWidget(combo, row, 2)
-            self.combos[part.key] = combo
-            zero = QtWidgets.QPushButton("归零")
-            zero.clicked.connect(lambda _checked=False, key=part.key: self._zero(key))
-            grid.addWidget(zero, row, 3)
-            status = QtWidgets.QLabel("未分配")
-            status.setWordWrap(True)
-            algorithm = QtWidgets.QComboBox()
-            algorithm.addItem("厂商 R/P/Y", VENDOR_RPY)
-            algorithm.addItem("陀螺＋加计", GYRO_TILT)
-            if part.key in ('left_upper_arm','left_forearm','right_upper_arm','right_forearm'):
-                algorithm.addItem("陀螺＋加计＋RGB-D（需相机标定）",GYRO_RGBD)
-            algorithm.setCurrentIndex(algorithm.findData(self.engine.algorithm_modes[part.key]))
-            algorithm.setToolTip("仅切换本部位软件姿态估计；不改变设备的 6/9 轴寄存器设置")
-            algorithm.currentIndexChanged.connect(
-                lambda _index, key=part.key: self._algorithm_changed(key))
-            grid.addWidget(algorithm, row + 1, 0, 1, 2)
-            self.algorithm_combos[part.key] = algorithm
-            grid.addWidget(status, row + 1, 2, 1, 2)
-            self.status_labels[part.key] = status
-            row += 2
-        assignment_scroll = QtWidgets.QScrollArea()
-        assignment_scroll.setWidgetResizable(True)
-        assignment_scroll.setHorizontalScrollBarPolicy(
-            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        assignment_scroll.setWidget(group)
-        assignment_scroll.setMinimumHeight(280)
-        panel_layout.addWidget(assignment_scroll, 1)
-        refresh = QtWidgets.QPushButton("刷新在线设备列表")
-        refresh.clicked.connect(self._refresh_choices)
-        panel_layout.addWidget(refresh)
-
-        hint = QtWidgets.QLabel(
-            "模型 15 个部件均可绑定 IMU；不必一次接满。"
-            "未绑定部位跟随父部位。每只设备首次收到数据时自动建立中立位。"
-            "彩色箭头是模型各部位的局部轴，不是 WT901 外壳上的轴。"
-            "归零只重设姿态基准，不改变设备轴映射；更换绑法后需重新设置或标定。"
-            "空格：立即全部归零；定时归零可留出穿戴和摆姿势的时间；R：重置视角。\n"
-            "本窗口占用 UDP 1399，运行时请关闭手腕控制台。")
-        hint.setWordWrap(True)
-        panel_layout.addWidget(hint)
-        self.statusBar().showMessage("就绪；等待设备数据")
-        self._refresh_choices()
+        build_body_panel(self, layout)
 
         self.poll_timer = QtCore.QTimer(self)
         self.poll_timer.setInterval(20)
@@ -328,42 +174,16 @@ class BodyWindow(QtWidgets.QMainWindow):
         toggle_axes.activated.connect(self.axes_checkbox.toggle)
 
     def _load_model(self) -> None:
-        missing = [part.mesh for part in PARTS if not (MODEL_DIR / part.mesh).is_file()]
-        if missing:
-            raise FileNotFoundError(f"缺少人体 STL 模型：{', '.join(missing)}")
-        triad = _axis_triad(0.105)
-        for part in PARTS:
-            mesh = pv.read(MODEL_DIR / part.mesh)
-            mesh.points *= 0.001  # Original mesh units are millimetres.
-            actor = self.plotter.add_mesh(mesh, color=part.color,
-                                          smooth_shading=False, show_edges=False)
-            self.actors.append(actor)
-            axis_actor = self.plotter.add_mesh(
-                triad, scalars="axis_rgb", rgb=True, lighting=False,
-                show_scalar_bar=False, pickable=False)
-            self.axis_actors.append(axis_actor)
-        self.plotter.set_background("#1a1d23")
-        self.plotter.show_axes()
-        self._render_pose()
-        self._front_view()
+        return self._body_view._load_model()
 
     def _front_view(self) -> None:
-        self.plotter.camera_position = [(2.5, 0.0, 0.15), (0.0, 0.0, 0.15), (0.0, 0.0, 1.0)]
-        self.plotter.reset_camera()
+        return self._body_view._front_view()
 
     def _render_pose(self) -> None:
-        for actor, axis_actor, matrix in zip(
-                self.actors, self.axis_actors, self.engine.transforms()):
-            actor.user_matrix = matrix
-            axis_actor.user_matrix = matrix
-        self.plotter.render()
-        self._render_dirty = False
-        self._last_render = time.monotonic()
+        return self._body_view._render_pose()
 
     def _toggle_axes(self, visible: bool) -> None:
-        for actor in self.axis_actors:
-            actor.SetVisibility(visible)
-        self._render_dirty = True
+        return self._body_view._toggle_axes(visible)
 
     def _poll(self) -> None:
         poll_started=time.monotonic()
@@ -407,113 +227,22 @@ class BodyWindow(QtWidgets.QMainWindow):
                                          packets=len(timed_packets))
 
     def _check_calibration_reconnect(self, device_id: str, received_at: float) -> None:
-        if self.replay_mode:
-            return
-        previous = self.engine.received_at.get(device_id)
-        if previous is None or received_at - previous <= 5.0:
-            return
-        self.engine.invalidate_neutral(device_id)
-        for key, assigned in self.engine.assignments.items():
-            if assigned == device_id and key in self.engine.continuous_basis:
-                self.engine.clear_calibration(key)
-                if self.calibration_dialog is not None:
-                    self.calibration_dialog.invalidate_for(device_id)
-                self.statusBar().showMessage(
-                    f"{device_id} 断流超过 5 秒后恢复；穿戴标定已停用，请重新验证", 10000)
+        return self._device_controller._check_calibration_reconnect(device_id, received_at)
 
     def _refresh_choices(self, force: bool = False) -> None:
-        seen = self.source.seen_devices(max_age=10.0)
-        ids = sorted(set(seen) | {device_id for device_id in self.engine.assignments.values()
-                                  if device_id})
-        choice_state = tuple((device_id, device_id in seen) for device_id in ids)
-        if not force and choice_state == self._choice_state:
-            return
-        self._choice_state = choice_state
-        for key, combo in self.combos.items():
-            selected = self.engine.assignments[key]
-            combo.blockSignals(True)
-            combo.clear()
-            combo.addItem("— 未分配 —", "")
-            for device_id in ids:
-                suffix = "" if device_id in seen else "（暂离线）"
-                combo.addItem(device_id + suffix, device_id)
-            combo.setCurrentIndex(max(0, combo.findData(selected)))
-            combo.blockSignals(False)
+        return self._device_controller._refresh_choices(force)
 
     def _assignment_changed(self, key: str) -> None:
-        combo = self.combos[key]
-        device_id = combo.currentData() or ""
-        previous = self.engine.assignments[key]
-        try:
-            proposed = dict(self.engine.assignments)
-            proposed[key] = device_id
-            save_config(self.settings_path, proposed, self.engine.axis_mappings,
-                        self.engine.algorithm_modes)
-            self.engine.assign(key, device_id)
-        except (ValueError, OSError) as exc:
-            QtWidgets.QMessageBox.warning(self, "分配未保存", str(exc))
-        else:
-            if previous != device_id and self.calibration_dialog is not None:
-                self.calibration_dialog.invalidate_for(previous)
-        self._refresh_choices(force=True)
-        self._render_dirty = True
+        return self._device_controller._assignment_changed(key)
 
     def _update_mapping_button(self, key: str) -> None:
-        mapping = self.engine.axis_mappings[key]
-        button = self.mapping_buttons[key]
-        button.setText("轴映射*" if mapping != DEFAULT_AXIS_MAPPING else "轴映射")
-        button.setToolTip("；".join(f"设备 {axis} → 模型 {target}"
-                                for axis, target in zip("XYZ", mapping)))
+        return self._device_controller._update_mapping_button(key)
 
     def _show_axis_mapping(self, key: str) -> None:
-        part = next(part for part in PARTS if part.key == key)
-        dialog = AxisMappingDialog(part.label, self.engine.axis_mappings[key], self)
-        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
-            return
-        try:
-            proposed = dict(self.engine.axis_mappings)
-            proposed[key] = dialog.mapping()
-            save_config(self.settings_path, self.engine.assignments,
-                        proposed, self.engine.algorithm_modes)
-            self.engine.set_axis_mapping(key, dialog.mapping())
-        except (ValueError, OSError) as exc:
-            QtWidgets.QMessageBox.warning(self, "轴映射未保存", str(exc))
-            return
-        if self.calibration_dialog is not None:
-            self.calibration_dialog.invalidate_for(self.engine.assignments.get(key, ""))
-        self._update_mapping_button(key)
-        self._render_dirty = True
+        return self._device_controller._show_axis_mapping(key)
 
     def _algorithm_changed(self, key: str) -> None:
-        combo = self.algorithm_combos[key]
-        mode = combo.currentData()
-        previous = self.engine.algorithm_modes[key]
-        if mode == previous:
-            return
-        if (self.recorder is not None or
-                getattr(self, "session", None) is not None):
-            error = "录制期间不可切换姿态算法；请先结束录制"
-        elif self.calibration_dialog is not None and self.calibration_dialog.isVisible():
-            error = "穿戴标定窗口打开时不可切换姿态算法；请先关闭标定窗口"
-        else:
-            error = ""
-        try:
-            if error:
-                raise ValueError(error)
-            self.engine.set_algorithm_mode(key, mode)
-            save_config(self.settings_path, self.engine.assignments,
-                        self.engine.axis_mappings, self.engine.algorithm_modes)
-        except (ValueError, OSError) as exc:
-            self.engine.set_algorithm_mode(key, previous)
-            combo.blockSignals(True)
-            combo.setCurrentIndex(combo.findData(previous))
-            combo.blockSignals(False)
-            QtWidgets.QMessageBox.warning(self, "姿态算法未切换", str(exc))
-            return
-        self._render_dirty = True
-        self.statusBar().showMessage(
-            f"{key} 已切换为 {MODE_LABELS[mode]}；"
-            "设备融合寄存器未改变", 5000)
+        return self._device_controller._algorithm_changed(key)
 
     def _zero(self, key: str) -> None:
         self.engine.zero(key)

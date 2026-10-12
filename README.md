@@ -238,6 +238,8 @@ conda run --no-capture-output -n OptUSBProj-yolo python /home/hzb/Work/WT901/scr
 
 融合窗口协调器拆分与手动验收步骤见 [阶段 2 验收说明](docs/REFACTOR_PHASE2_ACCEPTANCE.md)。
 
+主窗口、人体视图与穿戴流程拆分见 [阶段 3 验收说明](docs/REFACTOR_PHASE3_ACCEPTANCE.md)。
+
 ```bash
 conda run --no-capture-output -n wt901 python -m unittest discover -s tests -v
 ```
