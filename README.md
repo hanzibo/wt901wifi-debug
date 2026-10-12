@@ -236,6 +236,8 @@ conda run --no-capture-output -n OptUSBProj-yolo python /home/hzb/Work/WT901/scr
 
 新机器人链路的模块拆分与手动验收步骤见 [阶段 1 验收说明](docs/REFACTOR_PHASE1_ACCEPTANCE.md)。
 
+融合窗口协调器拆分与手动验收步骤见 [阶段 2 验收说明](docs/REFACTOR_PHASE2_ACCEPTANCE.md)。
+
 ```bash
 conda run --no-capture-output -n wt901 python -m unittest discover -s tests -v
 ```
