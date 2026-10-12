@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wt901-repo-tools"
+version = "0.1.0"
+description = "Source-checkout launch and validation tools for WT901"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["numpy>=1.24", "scipy>=1.10", "pyserial>=3.5", "ruff>=0.6"]
+
+[project.scripts]
+wt901-project = "wt901_tools.run_project:main"
+wt901-tests = "wt901_tools.run_tests:main"
+wt901-smoke = "wt901_tools.run_smoke:main"
+wt901-check = "wt901_tools.check_repo:main"
+
+[tool.setuptools]
+packages = ["wt901_tools"]
+
+[tool.setuptools.package-dir]
+wt901_tools = "scripts"
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+# Start with correctness checks, not a repository-wide formatting rewrite.
+select = ["E9", "F63", "F7", "F82"]

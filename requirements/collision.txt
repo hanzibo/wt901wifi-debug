@@ -1,0 +1,4 @@
+# Optional, currently frozen experimental collision route.
+-r core.txt
+python-fcl>=0.7
+trimesh>=4

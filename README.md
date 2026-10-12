@@ -1,8 +1,8 @@
-# WT901WIFI：人体姿态、RGB-D 纠偏与 X1 随动预览
+# WT901WIFI：人体姿态、RGB-D 纠偏与机器人遥操作预览
 
-本仓库在 Ubuntu 上实现 WT901WIFI 多设备采集、人体姿态映射、穿戴标定、RGB-D 辅助航向纠偏，以及 X1 机器人双臂的 **RViz 运动学预览**。当前主路线位于 [OptUSBProj Ubuntu 版](OptUSBProj-ubuntu/README.md)；根目录的 [双手手腕控制台](wrist_demo.py) 保留为独立调试入口。说明更新于 2026-10-06。
+本仓库在 Ubuntu 上实现 WT901WIFI 多设备采集、人体姿态映射、穿戴标定、RGB-D 辅助航向纠偏，以及 X1 的 **RViz 运动学预览**和新机器人的 **CoppeliaSim 遥操作预览**。当前主路线位于 [OptUSBProj Ubuntu 版](OptUSBProj-ubuntu/README.md)；根目录的 [双手手腕控制台](wrist_demo.py) 保留为独立调试入口。说明更新于 2026-10-12。当前均为仿真/可视化，不代表真机安全验收。
 
-主要数据链路为：WT901 原始数据 → 姿态估计 → 穿戴轴映射与中立参考 → STL 人体模型 → 肘腕目标及 IK → X1 `/joint_states`。Gemini 336L 的彩色图像经二维关键点检测后，结合真实配准深度得到骨段方向，为四个臂段提供低频航向纠偏；高频传播仍由 IMU 完成。
+主要数据链路为：WT901 原始数据 → 姿态估计 → 穿戴轴映射与中立参考 → STL 人体模型 → 肘腕目标及 IK → X1 `/joint_states` 或 CoppeliaSim 场景关节角。双 IMU 的离散开合输入还可驱动 X1 夹爪或新机器人预先配置的手指端点。Gemini 336L 的彩色图像经二维关键点检测后，结合真实配准深度得到骨段方向，为四个臂段提供低频航向纠偏；高频传播仍由 IMU 完成。
 
 两个 GUI 共用 [`wt901/`](wt901/) 通信模块，实时模式均监听 UDP 1399，**不要同时启动**。相机也不能被 OrbbecViewer 或另一个采集程序同时占用。旧版 Windows 项目 `OptUSBProj/` 是本机未跟踪的参考资料，不参与 Ubuntu 程序运行。
 
@@ -15,7 +15,7 @@
 | 单目相机姿态原型 | `OptUSBProj-ubuntu/camera_run.py` | 见 [相机环境说明](OptUSBProj-ubuntu/docs/CAMERA_SETUP.md) |
 | Gemini RGB-D＋IMU、双臂一体标定与纠偏 | `OptUSBProj-ubuntu/fusion_run.py --camera-source orbbec` | 推荐已配置的 `OptUSBProj-yolo`；SDK 独立环境见下文 |
 | X1 双臂／手掌 RViz 随动 | 人体 GUI 内的“X1 双臂实时预览…” | ROS 接收端使用 `x1_ros2_py` |
-| 新机器人双臂／手掌 CoppeliaSim 随动 | 人体 GUI 内的“新机器人双臂实时预览…” | 本机 ZeroMQ API；仅停止状态预览；见[说明](docs/COPPELIASIM_LIVE_RETARGET.md) |
+| 新机器人双臂／手掌／手指 CoppeliaSim 随动 | 人体 GUI 内的“新机器人双臂实时预览…” | 本机 ZeroMQ API；仅停止状态预览；见[说明](docs/COPPELIASIM_LIVE_RETARGET.md) |
 
 ## 当前能力与边界
 
@@ -26,9 +26,11 @@
 - 左右上臂、前臂可启用“陀螺＋加计＋RGB-D”航向纠偏。用户已在多次长于 5 分钟的运行中观察到纠偏有效，但这不是有 GT 的精度测量，也不保证遮挡、长轴扭转或任意动作下均可观测。
 - 默认关闭的“双人体实时对比”并列显示 IMU-only 与 RGB-D 融合姿态，仅影响显示，不改变实际算法或 X1 输出。相机结果应用后仍须明确启用对应部位融合，否则纠偏待机。
 - X1 支持双臂位置随动、可选双手朝向、统一／分段长度比例，以及数值最小二乘／PoE 雅可比两种 IK 后端。完整末端位姿优先模式保留用于对比，可能产生较大关节转动。
+- 新机器人复用人体姿态链路，通过 CoppeliaSim ZeroMQ API 随动；提供 X1 式位置目标与备选骨段向量目标、臂段朝向约束、分层腕部求解及独立可调腕部限速。可一键打开／关闭场景，新启动环境可选择 NVIDIA GPU 渲染。
+- 新机器人每手十五个指关节可分别配置并确认张开／闭合端点，复用四 IMU 离散开合输入；手指与双臂共用通信线程。手型不是逐指姿态测量，也没有接触、力反馈或手指碰撞保护。
 - 手部自然掌面参考、视觉估计 C0、历史标定快速恢复、视觉辅助穿戴标定及不限累计纠偏角等仍属实验功能。手腕尚无与四臂段同等的长期 RGB-D 航向纠偏。
 
-**X1 链路只发布 RViz 预览关节状态，不是实体机器人控制方案。** 现提供默认关闭的实验性自碰撞检查与拦截；它依赖 CAD 几何、接触排除及预览状态，不能作为真机安全保证。当前未完成真机安全限位、执行器闭环或急停。
+**X1 与 CoppeliaSim 链路均为仿真预览，不是实体机器人控制方案。** X1 现提供默认关闭的实验性自碰撞检查与拦截，后续开发暂缓；它依赖 CAD 几何、接触排除及预览状态，不能作为真机安全保证。当前未完成真机安全限位、执行器闭环或急停。
 
 ## 主路线快速启动
 
@@ -43,7 +45,16 @@ conda run --no-capture-output -n OptUSBProj-yolo python -u OptUSBProj-ubuntu/fus
   --rgbd-pose --pose-backend yolo26 --pose-imgsz 640
 ```
 
-默认 YOLO 权重为本地 `no-improtent/yolo-models/yolo26m-pose.pt`；可用 `--yolo-model /path/to/yolo26l-pose.pt` 或 GUI 的“YOLO权重…”选择其他姿态权重。RTMW 后端可用 `--pose-backend rtmw`。更换后端、权重或输入尺寸后应重新完成相机标定，不能直接复用旧视觉会话结果。
+默认 YOLO 权重为本地 `no-improtent/yolo-models/yolo26m-pose.pt`；可用 `--yolo-model /path/to/yolo26l-pose.pt` 或 GUI 的“YOLO权重…”选择其他姿态权重。RTMW 后端可用 `--pose-backend rtmw`。在线更换视觉模型会暂停纠偏；若相机、佩戴与 IMU 参考未变，可重新确认原标定者后继续使用保留的标定，无需仅因换模型而重录。物理安装或参考系变化仍需重新标定；恢复身份确认不等于新后端精度已经验收。
+
+也可从任意工作目录调用统一启动工具，参数转交原入口，且不会自动安装依赖：
+
+```bash
+python /home/hzb/Work/WT901/scripts/run_project.py --env OptUSBProj-yolo fusion -- \
+  --camera-source orbbec --rgbd-pose --pose-backend yolo26 --pose-imgsz 640
+```
+
+相对路径参数仍相对于调用时的工作目录；可加 `--dry-run` 只检查命令。完整入口及依赖分层见 [仓库工具指南](docs/REPOSITORY_GUIDE.md)。
 
 也可使用本机桌面“WT901-RGBD-YOLO对比”启动项，或：
 
@@ -87,6 +98,7 @@ conda run --no-capture-output -n OptUSBProj python -u OptUSBProj-ubuntu/run.py
 | 人体 → 机器人目标、优化与 FK | [重定向数学](docs/HUMAN_TO_X1_RETARGETING_MATH.md)、[URDF / PoE 等价关系](docs/URDF_POE_EQUIVALENCE.md) |
 | X1 启动、诊断及 IK 对比 | [双臂实时预览](urdf-model/docs/IMU双臂实时预览.md)、[IK 后端](OptUSBProj-ubuntu/docs/X1_IK_BACKENDS.md) |
 | X1 可开关自碰撞检查与拦截 | [实验性保护说明](docs/X1_COLLISION_PREVIEW.md) |
+| 新机器人场景启动、双臂／手掌 IK 与十五关节手型配置 | [CoppeliaSim 遥操作](docs/COPPELIASIM_LIVE_RETARGET.md) |
 | 自然掌面与历史复用 | [自然掌面数学](docs/NATURAL_PALM_C0_MATH.md)、[快速恢复](OptUSBProj-ubuntu/docs/CALIBRATION_REUSE.md) |
 | 项目总览 | [总览 HTML](docs/PROJECT_PIPELINE_OVERVIEW.html)、[图像讲解源文件及复现](docs/project-explainer/README.md) |
 
@@ -195,6 +207,8 @@ conda run --no-capture-output -n wt901 python -u so3_rotvec_demo.py --device-id 
 | [OptUSBProj-ubuntu/](OptUSBProj-ubuntu/) | 人体 GUI、RGB-D 采集／回放、穿戴与相机标定、实时融合；业务代码在 `optusbproj_ubuntu/` |
 | [urdf-model/](urdf-model/) | X1 URDF、ROS 2 可视化、FK/IK、离线回放和实时预览工具 |
 | [docs/](docs/) | 数学推导、项目总览与图像讲解源文件 |
+| [scripts/](scripts/)、[requirements/](requirements/) | 统一启动／检查／测试工具及分层依赖；见[工具指南](docs/REPOSITORY_GUIDE.md) |
+| [robot-urdf-model-new/](robot-urdf-model-new/) | 新机器人模型相关资料；本机大场景与个人手型配置需单独管理 |
 | [multi9.py](multi9.py)、[print9.py](print9.py) | 命令行接收、检查传感器数据 |
 | [magcal.py](magcal.py)、[configure.py](configure.py)、[setsta.py](setsta.py) | 命令行校准、配置与 STA 接入工具 |
 | [pose9.py](pose9.py) | 基于 IMU 的位置估计实验；积分漂移明显，不适合当作可靠定位结果 |
@@ -216,6 +230,15 @@ python3 OptUSBProj-ubuntu/lan_gripper_demo.py
 手机和电脑分别打开终端输出的控制／观测链接。可选择左／右夹爪并勾选发送至 RViz，由现有 ROS 桥统一合并双臂和夹爪状态；不发送电机指令。详见 [使用说明](OptUSBProj-ubuntu/docs/LAN_GRIPPER_DEMO.md)。
 
 ## 测试
+
+先运行不加载 GUI、相机或视觉模型的轻量检查：
+
+```bash
+python /home/hzb/Work/WT901/scripts/check_repo.py
+conda run --no-capture-output -n OptUSBProj-yolo python /home/hzb/Work/WT901/scripts/run_smoke.py
+```
+
+阶段 5 的仓库检查及 39 项冒烟测试通过，用户已完成手动验收。全量应用测试可能加载重型视觉依赖，应按需运行；本轮该套件因强制重启中断，不能视为全量通过。GitHub Actions 仅配置了轻量离线检查，尚未据此确认远端运行结果。
 
 统一测试入口可从任意工作目录调用。使用当前机器已配置的两套环境，运行旧手腕核心测试与人体/RGB-D 测试：
 
@@ -241,6 +264,8 @@ conda run --no-capture-output -n OptUSBProj-yolo python /home/hzb/Work/WT901/scr
 主窗口、人体视图与穿戴流程拆分见 [阶段 3 验收说明](docs/REFACTOR_PHASE3_ACCEPTANCE.md)。
 
 共享 SO(3)/SE(3)、长度比例及单位契约见 [阶段 4 验收说明](docs/REFACTOR_PHASE4_ACCEPTANCE.md)。
+
+仓库分工、分层依赖、从任意目录启动及离线 CI 见 [仓库工具指南](docs/REPOSITORY_GUIDE.md)，手动步骤见 [阶段 5 验收](docs/REFACTOR_PHASE5_ACCEPTANCE.md)。旧命令与桌面启动器继续保留；无需为了使用新工具升级已可用环境。
 
 ```bash
 conda run --no-capture-output -n wt901 python -m unittest discover -s tests -v

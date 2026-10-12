@@ -1,0 +1,3 @@
+# CoppeliaSim remote client, not the simulator itself.
+-r core.txt
+coppeliasim-zmqremoteapi-client>=2.0

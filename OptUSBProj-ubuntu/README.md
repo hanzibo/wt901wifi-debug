@@ -1,20 +1,20 @@
-# OptUSBProj Ubuntu 版（进行中）
+# OptUSBProj Ubuntu 版
 
-当前里程碑：人体模型的 15 个部件（骨盆、躯干、头部、双臂和双腿）都可分配 WT901WIFI；允许仅连接少数设备逐步测试。设备通过电脑 `WT901-LAN` 热点向本机 UDP 1399 发数据。此版本**尚未包含**旧项目的机器人 FK/IK、碰撞检测和 CoppeliaSim 映射；进度和后续验收见 [重构计划](docs/REFACTOR_PLAN.md)。
+当前能力：人体模型的 15 个部件可分配 WT901WIFI；已接入穿戴/相机标定、四臂段 RGB-D 航向纠偏、X1 RViz FK/IK 预览及新机器人 CoppeliaSim 双臂/手指映射。设备通过热点向本机 UDP 1399 发数据。碰撞检查为实验性功能，精度改进目前暂停；上述链路不代表真机安全控制。早期 [重构计划](docs/REFACTOR_PLAN.md) 仅作阶段历史参考；当前结构、工具及验收见 [仓库指南](../docs/REPOSITORY_GUIDE.md)。
 
 目录分工：本层的 `run.py`、`camera_run.py`、`fusion_run.py` 等是兼容现有命令与桌面启动器的程序入口；`optusbproj_ubuntu/` 存放实际业务代码；`tests/` 是离线测试；`assets/` 放模型资源；`docs/` 放专题说明。`recordings/`、`calibrations/` 和 `local_config.json` 是本机生成的数据，已被 Git 忽略。根目录的 `wt901/` 和 `wt901_viz/` 是两条 GUI 路线共用的设备协议与工具；旧版 `OptUSBProj/` 仅供参考，不在运行路径中。
 
 ## 运行
 
-RGB-D GUI支持RTMW / YOLO26二维关键点切换，复用真实深度和双臂标定/纠偏。新启动项「WT901-RGBD-YOLO对比」使用OptUSBProj-yolo，原图标保留。模型切换停用旧相机标定，并提供同录像二维/三维可用率比较，详见 [YOLO RGB-D后端](docs/YOLO_RGBD_BACKEND.md)。
+RGB-D GUI支持RTMW / YOLO26二维关键点切换，复用真实深度和双臂标定/纠偏。启动项「WT901-RGBD-YOLO对比」使用OptUSBProj-yolo，原图标保留。在线模型切换暂停视觉更新；相机与设备未变、确认原标定者后可按当前流程继续，不因仅换二维模型强制重做标定。另有同录像二维/三维可用率比较，详见 [YOLO RGB-D后端](docs/YOLO_RGBD_BACKEND.md)。
 
 纯相机上身 7 部位原型（不需要 WT901，也不占用 UDP 1399）的环境准备和运行命令见 [相机环境说明](docs/CAMERA_SETUP.md)。它与下面的 WT901 程序是独立入口。
 
-单目相机＋WT901 的第一阶段联合采集入口见 [融合环境说明](docs/FUSION_SETUP.md)：可在同一窗口录制及回放两路数据，目前模型仍由 IMU 驱动，尚未进行视觉姿态校正。
+单目相机＋WT901 的第一阶段联合采集入口见 [融合环境说明](docs/FUSION_SETUP.md)：可在同一窗口录制及回放两路数据。它描述早期采集基线；当前 RGB-D 纠偏以实时融合文档为准。
 
-Gemini 336L RGB-D 正式采集使用同一入口加 `--camera-source orbbec`：独立 SDK 环境、配准深度、标定参数、时间戳和 WT901 联合录制/回放，暂不做视觉纠偏。见 [RGB-D 阶段 A](docs/RGBD_STAGE_A.md)。
+Gemini 336L RGB-D 使用同一入口加 `--camera-source orbbec`：独立 SDK 环境、配准深度、标定参数、时间戳和 WT901 联合录制/回放。早期采集语义见 [RGB-D 阶段 A](docs/RGBD_STAGE_A.md)，当前可选纠偏见下文。
 
-RGB-D 上半身三维诊断：勾选「三维观测」或加 `--rgbd-pose`，RTMW 仅识别二维点，三维距离取真实配准深度；独立骨架/可靠性弹窗与源帧关联记录，仍不驱动人体模型或纠正 IMU。见 [阶段 B 与测试步骤](docs/RGBD_STAGE_B.md)。
+RGB-D 上半身三维诊断：勾选「三维观测」或加 `--rgbd-pose`，三维距离取真实配准深度；独立骨架/可靠性弹窗与源帧关联记录。它也是当前视觉融合的观测输入，但只有明确应用有效标定并启用相应算法的部位参与纠偏。早期纯诊断步骤见 [阶段 B](docs/RGBD_STAGE_B.md)。
 
 独立的右臂离线航向融合实验及三轨迹回放已提供；流程、数学约定与实验局限见 [离线融合说明](docs/RGBD_OFFLINE_FUSION.md)。实时可选接入见下文。
 
