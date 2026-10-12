@@ -4,17 +4,19 @@ import time
 import numpy as np
 from scipy.optimize import least_squares, lsq_linear
 from scipy.spatial.transform import Rotation
+from .core.contracts import (JointAnglesRad, Milliseconds, DistanceMeters,
+                             AngleDegrees)
 
 
 @dataclass
 class IKResult:
-    q: np.ndarray
+    q: JointAnglesRad
     success: bool
     iterations: int
-    elapsed_ms: float
+    elapsed_ms: Milliseconds
     cost: float
-    position_error_m: float
-    orientation_error_deg: float | None
+    position_error_m: DistanceMeters
+    orientation_error_deg: AngleDegrees | None
     at_limit: bool
     reason: str
 

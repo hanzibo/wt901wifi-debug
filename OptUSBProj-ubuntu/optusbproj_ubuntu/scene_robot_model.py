@@ -2,8 +2,8 @@
 import numpy as np
 from scipy.optimize import least_squares
 from scipy.spatial.transform import Rotation
-from .x1_kinematics import exp_se3, adjoint
-from .x1_retarget import retarget_scales
+from .core.rigid import exp_se3, adjoint
+from .core.retarget import retarget_scales
 
 
 def position_targets(model, C, human_neutral, human_current, scale_mode='uniform'):

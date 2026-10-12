@@ -3,19 +3,21 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from .x1_kinematics import (adjoint, inverse, log_se3, se3_left_inverse,
+from .core.rigid import (adjoint, inverse, log_se3, se3_left_inverse,
                             so3_right_inverse)
+from .core.contracts import (PointMeters, JointAnglesRad, AngleDegrees,
+                             RotationMatrix, TransformMeters)
 
 
 @dataclass
 class ArmTask:
     model: object
-    elbow: np.ndarray
-    wrist: np.ndarray
-    previous: np.ndarray
-    bend: float = 180.
-    relative_rotation: np.ndarray | None = None
-    target_pose: np.ndarray | None = None
+    elbow: PointMeters
+    wrist: PointMeters
+    previous: JointAnglesRad
+    bend: AngleDegrees = 180.
+    relative_rotation: RotationMatrix | None = None
+    target_pose: TransformMeters | None = None
 
     @property
     def mode(self):

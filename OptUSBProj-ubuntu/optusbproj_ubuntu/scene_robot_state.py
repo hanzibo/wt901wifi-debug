@@ -7,22 +7,24 @@ import time
 from typing import NotRequired, TypedDict
 import numpy as np
 from .skeleton import PART_BY_KEY
+from .core.contracts import (DirectionVector, PointMeters, RotationMatrix,
+                             Seconds, Milliseconds)
 from .x1_live import MAX_JOINT_SPEED_DEG_S, MAX_JOINT_STEP_DEG, NOMINAL_TICK_S
 
 
 class HumanSideSnapshot(TypedDict):
-    directions: list[np.ndarray]
-    hand: np.ndarray | None
-    points: NotRequired[tuple[np.ndarray, ...]]
-    rotations: NotRequired[dict[str, np.ndarray]]
+    directions: list[DirectionVector]
+    hand: RotationMatrix | None
+    points: NotRequired[tuple[PointMeters, ...]]
+    rotations: NotRequired[dict[str, RotationMatrix]]
 
 
 class SceneSnapshot(TypedDict):
     """Dictionary-compatible contract; monotonic seconds and positions in metres."""
-    at: float
+    at: Seconds
     sides: dict[str, HumanSideSnapshot]
-    device_ages_ms: NotRequired[dict[str, float]]
-    gui_interval_ms: NotRequired[float]
+    device_ages_ms: NotRequired[dict[str, Milliseconds]]
+    gui_interval_ms: NotRequired[Milliseconds]
     task: NotRequired[str]
     scale: NotRequired[str]
     solver_mode: NotRequired[str]

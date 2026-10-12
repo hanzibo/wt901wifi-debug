@@ -5,17 +5,18 @@ import numpy as np
 from .scene_robot_model import position_targets, segment_targets, palm_target
 from .scene_robot_state import SceneSnapshot, joint_steps
 from .skeleton import PART_BY_KEY
+from .core.contracts import JointAnglesRad, RotationMatrix, Milliseconds
 
 
 @dataclass
 class SolveResult:
-    targets: dict
+    targets: dict[str, JointAnglesRad]
     errors: dict
     segment_errors: dict
-    palm_targets: dict
-    relative_targets: dict
-    side_ms: dict
-    step: np.ndarray
+    palm_targets: dict[str, RotationMatrix | None]
+    relative_targets: dict[str, RotationMatrix | None]
+    side_ms: dict[str, Milliseconds]
+    step: JointAnglesRad
 
 
 class SceneSolver:

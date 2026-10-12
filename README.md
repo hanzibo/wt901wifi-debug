@@ -240,6 +240,8 @@ conda run --no-capture-output -n OptUSBProj-yolo python /home/hzb/Work/WT901/scr
 
 主窗口、人体视图与穿戴流程拆分见 [阶段 3 验收说明](docs/REFACTOR_PHASE3_ACCEPTANCE.md)。
 
+共享 SO(3)/SE(3)、长度比例及单位契约见 [阶段 4 验收说明](docs/REFACTOR_PHASE4_ACCEPTANCE.md)。
+
 ```bash
 conda run --no-capture-output -n wt901 python -m unittest discover -s tests -v
 ```
