@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=五指机器人 · 手动串口演示
+Comment=默认离线预览；显式确认后才发送关节目标
+Exec=/usr/bin/env -u QT_QPA_PLATFORM_PLUGIN_PATH -u QT_PLUGIN_PATH QT_QPA_PLATFORM=xcb /home/hzb/miniconda3/envs/OptUSBProj-yolo/bin/python /home/hzb/Work/WT901/demos/real_robot_manual_demo.py
+Path=/home/hzb/Work/WT901
+Icon=applications-engineering
+Terminal=false
+Categories=Education;Robotics;
+StartupNotify=true

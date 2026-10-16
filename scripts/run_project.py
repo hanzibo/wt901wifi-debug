@@ -21,6 +21,7 @@ ENTRIES = {
     "wrist": "wrist_demo.py",
     "imu-gripper": "OptUSBProj-ubuntu/gripper_gesture_demo.py",
     "lan-gripper": "OptUSBProj-ubuntu/lan_gripper_demo.py",
+    "real-robot-manual": "demos/real_robot_manual_demo.py",
 }
 
 
