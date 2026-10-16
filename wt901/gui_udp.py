@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from collections import deque
 import socket
+import struct
+import sys
 import time
 
 from .protocol import AttitudePacket, extract_packets
@@ -26,6 +28,43 @@ class GuiUdpSource:
         self._latest_packets: dict[str, AttitudePacket] = {}
         self._replies: deque[tuple[str, tuple[int, int, int, int]]] = deque()
         self._diagnostics = None
+        self._diagnostic_sinks = []
+        self._observer_state = None
+        self._kernel_stamp_option = None
+        self._kernel_stamp_original = None
+        self._diagnostic_sink_errors = 0
+
+    def add_diagnostic_sink(self, sink):
+        """Observe the existing socket; never open a second UDP listener."""
+        if sink in self._diagnostic_sinks:
+            return
+        self._diagnostic_sinks.append(sink)
+        if self._observer_state is None:
+            self._observer_state = {'last_poll':None, 'endpoints':{}, 'devices':{}}
+        # Ubuntu 64-bit SO_TIMESTAMPNS_OLD uses native struct timespec.
+        if self._kernel_stamp_option is None and sys.platform.startswith('linux') and struct.calcsize('@ll') == 16:
+            option = getattr(socket, 'SO_TIMESTAMPNS', 35)
+            try:
+                original = self.sock.getsockopt(socket.SOL_SOCKET, option)
+                self.sock.setsockopt(socket.SOL_SOCKET, option, 1)
+                self._kernel_stamp_original = original
+                self._kernel_stamp_option = option
+            except (OSError, AttributeError):
+                pass
+        self.diagnostic_event('acquisition_trace_enabled',
+                              kernel_timestamp_available=self._kernel_stamp_option is not None)
+
+    def remove_diagnostic_sink(self, sink):
+        if sink in self._diagnostic_sinks:
+            self._diagnostic_sinks.remove(sink)
+        if not self._diagnostic_sinks:
+            self._observer_state = None
+            if self._kernel_stamp_option is not None:
+                try:
+                    self.sock.setsockopt(socket.SOL_SOCKET, self._kernel_stamp_option, self._kernel_stamp_original)
+                except OSError:
+                    pass
+                self._kernel_stamp_option = None
 
     def enable_diagnostics(self, enabled: bool) -> None:
         self._diagnostics = ({'rows': deque(maxlen=20000), 'dropped': 0,
@@ -34,11 +73,17 @@ class GuiUdpSource:
 
     def diagnostic_event(self, event: str, **values) -> None:
         state = self._diagnostics
-        if state is None:
-            return
+        row = {'event': event, 'mono_s': time.monotonic(), **values}
+        for sink in tuple(self._diagnostic_sinks):
+            try:
+                sink(dict(row))
+            except Exception:
+                # Instrumentation must not interrupt acquisition/control.
+                self._diagnostic_sink_errors += 1
+        if state is None: return
         if len(state['rows']) == state['rows'].maxlen:
             state['dropped'] += 1
-        state['rows'].append({'event': event, 'mono_s': time.monotonic(), **values})
+        state['rows'].append(row)
 
     def take_diagnostics(self) -> list[dict]:
         state = self._diagnostics
@@ -58,24 +103,37 @@ class GuiUdpSource:
         """Return packets with the host monotonic timestamp at UDP receipt."""
         packets: list[tuple[int, AttitudePacket]] = []
         started = time.monotonic()
-        diag = self._diagnostics
+        diag = self._diagnostics if self._diagnostics is not None else self._observer_state
         if diag is not None:
             self.diagnostic_event('udp_poll_begin', interval_ms=None if diag['last_poll'] is None
                                   else (started-diag['last_poll'])*1000)
             diag['last_poll'] = started
         datagrams = 0
         for _ in range(512):
+            kernel_received_wall_ns = None
             try:
-                data, addr = self.sock.recvfrom(4096)
+                if self._kernel_stamp_option is not None:
+                    data, ancillary, flags, addr = self.sock.recvmsg(4096, socket.CMSG_SPACE(16))
+                    for level,kind,value in ancillary:
+                        if level == socket.SOL_SOCKET and kind == self._kernel_stamp_option and len(value) >= 16:
+                            seconds,nanos = struct.unpack('@ll',value[:16])
+                            kernel_received_wall_ns = seconds*1_000_000_000+nanos
+                else:
+                    data, addr = self.sock.recvfrom(4096)
             except BlockingIOError:
                 break
             received_ns = time.monotonic_ns()
+            read_wall_ns = time.time_ns() if diag is not None else None
             datagrams += 1
             if diag is not None:
                 endpoint = f'{addr[0]}:{addr[1]}'
                 prior = diag['endpoints'].get(endpoint)
                 diag['endpoints'][endpoint] = received_ns
                 self.diagnostic_event('udp_datagram', endpoint=endpoint, bytes=len(data),
+                                      read_mono_ns=received_ns, read_wall_ns=read_wall_ns,
+                                      kernel_received_wall_ns=kernel_received_wall_ns,
+                                      socket_queue_ms=None if kernel_received_wall_ns is None else
+                                                      (read_wall_ns-kernel_received_wall_ns)/1e6,
                                       gap_ms=None if prior is None else (received_ns-prior)/1e6)
             if len(data) == 11 and data[:2] == b"\x55\x5f" and sum(data[:10]) & 0xff == data[10]:
                 for device_id, (ip, seen) in self._devices.items():
@@ -102,6 +160,7 @@ class GuiUdpSource:
                     prior = diag['devices'].get(packet.device_id)
                     diag['devices'][packet.device_id] = received_ns
                     self.diagnostic_event('imu_parsed', device=packet.device_id, endpoint=endpoint,
+                        read_mono_ns=received_ns, parsed_mono_ns=time.monotonic_ns(),
                         gap_ms=None if prior is None else (received_ns-prior)/1e6,
                         sensor_time=packet.time_str, rssi_dbm=packet.rssi)
         if diag is not None:

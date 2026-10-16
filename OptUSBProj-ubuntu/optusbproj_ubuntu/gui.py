@@ -134,6 +134,7 @@ class BodyWindow(QtWidgets.QMainWindow):
         self.natural_hand_dialog = None
         self.x1_preview_dialog = None
         self.scene_robot_dialog = None
+        self.real_robot_dialog = None
         self.gripper_gesture_dialog = None
         self.recorder: PacketRecorder | None = None
         self.replay_mode = isinstance(source, ReplaySource) or getattr(source, "is_replay", False)
@@ -187,6 +188,8 @@ class BodyWindow(QtWidgets.QMainWindow):
 
     def _poll(self) -> None:
         poll_started=time.monotonic()
+        from .real_robot_timing import acquisition_poll, acquisition_feed
+        acquisition_poll(self,poll_started)
         try:
             timed_packets = (self.source.poll_timed() if hasattr(self.source, 'poll_timed') else
                              [(time.monotonic_ns(), packet) for packet in self.source.poll()])
@@ -195,9 +198,12 @@ class BodyWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"UDP 接收失败：{exc}")
             return
         packets = [packet for _, packet in timed_packets]
+        acquisition_poll(self,poll_started,timed_packets)
         for received_ns, packet in timed_packets:
             self._check_calibration_reconnect(packet.device_id, time.monotonic())
+            feed_started = time.monotonic()
             self.engine.feed(packet)
+            acquisition_feed(self,packet,received_ns,feed_started)
             self._feed_gripper_packet(received_ns, packet)
             if self.calibration_dialog is not None:
                 self.calibration_dialog.on_packet(time.monotonic_ns(), packet)
@@ -315,6 +321,16 @@ class BodyWindow(QtWidgets.QMainWindow):
         self.scene_robot_dialog.show()
         self.scene_robot_dialog.raise_()
         self.scene_robot_dialog.activateWindow()
+
+    def _show_real_robot(self) -> None:
+        if self.replay_mode:
+            return
+        from .real_robot_arm_gui import RealRobotModesDialog as RealRobotDialog
+        if self.real_robot_dialog is None:
+            self.real_robot_dialog = RealRobotDialog(self)
+        self.real_robot_dialog.show()
+        self.real_robot_dialog.raise_()
+        self.real_robot_dialog.activateWindow()
 
     def _show_x1_preview(self) -> None:
         if self.replay_mode:
@@ -536,6 +552,9 @@ class BodyWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"已保存 {count} 包：{path}", 5000)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        if self.real_robot_dialog is not None and not self.real_robot_dialog.close():
+            event.ignore()
+            return
         if (self.calibration_dialog is not None and
                 self.calibration_dialog.phase in ("prepare", "hold")):
             self.calibration_dialog.show()

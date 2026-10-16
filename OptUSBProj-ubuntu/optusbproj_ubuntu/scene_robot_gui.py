@@ -245,6 +245,11 @@ class SceneRobotDialog(QtWidgets.QDialog):
                 panel.send_scene.setChecked(False);panel.scene_status.setText(str(exc))
 
     def connect_scene(self):
+        physical = getattr(self.viewer, 'real_robot_dialog', None)
+        if physical is not None and (getattr(physical, 'mirror_worker', None) is not None
+                or (getattr(physical, 'busy', False) and physical._shared_mode())):
+            self.status.setText('真机同源控制占用场景；请先停止同源控制并关闭镜像。')
+            return
         self.stop_hands()
         self.halt()
         if not self.shutdown(): return
@@ -288,6 +293,10 @@ class SceneRobotDialog(QtWidgets.QDialog):
 
     def begin(self):
         try:
+            physical = getattr(self.viewer, 'real_robot_dialog', None)
+            if physical is not None and (getattr(physical, 'mirror_worker', None) is not None
+                    or (getattr(physical, 'busy', False) and physical._shared_mode())):
+                raise ValueError('真机同源控制占用仿真；请先停止同源控制并关闭镜像')
             sides,hands=self.selected()
             data,self.signature=pose_sample(self.viewer.engine,sides,hands,self.manual.isChecked())
             data.update(task=self.task.currentData(),scale=self.scale.currentData(),

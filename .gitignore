@@ -4,6 +4,9 @@ no-improtent/
 # Original Windows reference project stays local.
 /OptUSBProj/
 
+# Orbbec SDK runtime logs (not source code).
+/Log/
+
 # ROS/colcon generated outputs stay local; retain sources and mesh assets.
 /urdf-model/build/
 /urdf-model/install/
@@ -35,6 +38,7 @@ OptUSBProj-ubuntu/local_config.json
 OptUSBProj-ubuntu/local_config.json.tmp
 OptUSBProj-ubuntu/recordings/
 OptUSBProj-ubuntu/calibrations/
+OptUSBProj-ubuntu/config/real_robot_checkpoints/
 
 # Downloaded MediaPipe task model (not source code).
 OptUSBProj-ubuntu/assets/mediapipe/*.task

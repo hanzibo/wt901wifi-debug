@@ -984,19 +984,24 @@ class FusionWindow(BodyWindow):
 
     def _poll(self) -> None:
         poll_started=time.monotonic()
+        from .real_robot_timing import acquisition_poll, acquisition_feed
+        acquisition_poll(self,poll_started)
         try:
             timed_packets = self.source.poll_timed()
         except (OSError, ValueError) as exc:
             self.poll_timer.stop()
             self.statusBar().showMessage(f"数据接收/回放失败：{exc}")
             return
+        acquisition_poll(self,poll_started,timed_packets)
         packets = []
         runtime=self.source.take_runtime() if self.replay_mode and hasattr(self.source,'take_runtime') else {}
         for received_ns, packet in timed_packets:
             packets.append(packet)
             received_at = time.monotonic() if self.replay_mode else received_ns / 1e9
             self._check_calibration_reconnect(packet.device_id, received_at)
+            feed_started = time.monotonic()
             self.engine.feed(packet, received_at=received_at)
+            acquisition_feed(self,packet,received_ns,feed_started)
             self._feed_gripper_packet(round(received_at*1e9), packet)
             recorded_runtime = runtime.get((received_ns, packet.device_id))
             if recorded_runtime is not None:
@@ -1138,6 +1143,10 @@ class FusionWindow(BodyWindow):
         return self._recording_controller._stop_session(auto=auto)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        # Request physical command braking before any blocking camera shutdown.
+        if self.real_robot_dialog is not None and not self.real_robot_dialog.close():
+            event.ignore()
+            return
         if self.palm_visual_dialog is not None:
             if not self.palm_visual_dialog.shutdown():event.ignore();return
             self.palm_visual_dialog.close()

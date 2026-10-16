@@ -31,12 +31,15 @@ class SceneSolver:
             for side in models
         }
 
-    def solve(self, sample: SceneSnapshot, previous, arm_speed, wrist_speed, dt) -> SolveResult:
+    def solve(self, sample: SceneSnapshot, previous, arm_speed, wrist_speed, dt,
+              *, step_override=None) -> SolveResult:
         models, C = self.models, self.axes
         human_rest, human_neutral = self.human_rest, self.human_neutral
         side_ms = {}
         targets={};errors={};segment_errors={};palm_targets={};relative_targets={}
-        step=joint_steps(arm_speed,wrist_speed,dt)
+        step=joint_steps(arm_speed,wrist_speed,dt) if step_override is None else np.asarray(step_override)
+        if step.shape != (6,) or not np.isfinite(step).all() or np.any(step <= 0):
+            raise ValueError('关节求解步长无效')
         for side,human in sample['sides'].items():
             side_start=self.clock()
             directions=[C@v for v in human['directions']]
