@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=AprilTag · 奥比中光姿态验证
+Comment=识别纸面标签并显示坐标轴；不连接机器人
+Exec=/usr/bin/env -u QT_QPA_PLATFORM_PLUGIN_PATH -u QT_PLUGIN_PATH QT_QPA_PLATFORM=xcb /home/hzb/miniconda3/envs/OptUSBProj-yolo/bin/python /home/hzb/Work/WT901/demos/apriltag_pose_demo.py
+Path=/home/hzb/Work/WT901
+Icon=camera-photo
+Terminal=false
+Categories=Science;
+StartupNotify=true

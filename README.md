@@ -1,6 +1,6 @@
 # WT901WIFI：人体姿态、RGB-D 纠偏与机器人遥操作预览
 
-本仓库在 Ubuntu 上实现 WT901WIFI 多设备采集、人体姿态映射、穿戴标定、RGB-D 辅助航向纠偏，以及 X1 的 **RViz 运动学预览**和新机器人的 **CoppeliaSim 遥操作预览**。当前主路线位于 [OptUSBProj Ubuntu 版](OptUSBProj-ubuntu/README.md)；根目录的 [双手手腕控制台](wrist_demo.py) 保留为独立调试入口。说明更新于 2026-10-12。当前均为仿真/可视化，不代表真机安全验收。
+本仓库在 Ubuntu 上实现 WT901WIFI 多设备采集、人体姿态映射、穿戴标定、RGB-D 辅助航向纠偏，以及 X1 的 **RViz 运动学预览**和新机器人的 **CoppeliaSim 遥操作预览**。当前主路线位于 [OptUSBProj Ubuntu 版](OptUSBProj-ubuntu/README.md)；根目录的 [双手手腕控制台](wrist_demo.py) 保留为独立调试入口。说明更新于 2026-10-16。另有默认不发送的实验性真机单肘 / 单臂 / 双臂控制，不代表真机安全验收。
 
 主要数据链路为：WT901 原始数据 → 姿态估计 → 穿戴轴映射与中立参考 → STL 人体模型 → 肘腕目标及 IK → X1 `/joint_states` 或 CoppeliaSim 场景关节角。双 IMU 的离散开合输入还可驱动 X1 夹爪或新机器人预先配置的手指端点。Gemini 336L 的彩色图像经二维关键点检测后，结合真实配准深度得到骨段方向，为四个臂段提供低频航向纠偏；高频传播仍由 IMU 完成。
 
@@ -16,6 +16,9 @@
 | Gemini RGB-D＋IMU、双臂一体标定与纠偏 | `OptUSBProj-ubuntu/fusion_run.py --camera-source orbbec` | 推荐已配置的 `OptUSBProj-yolo`；SDK 独立环境见下文 |
 | X1 双臂／手掌 RViz 随动 | 人体 GUI 内的“X1 双臂实时预览…” | ROS 接收端使用 `x1_ros2_py` |
 | 新机器人双臂／手掌／手指 CoppeliaSim 随动 | 人体 GUI 内的“新机器人双臂实时预览…” | 本机 ZeroMQ API；仅停止状态预览；见[说明](docs/COPPELIASIM_LIVE_RETARGET.md) |
+| 真机单肘 / 单臂 / 双臂受限 IMU 随动（实验） | 人体 GUI 内的“真机受限 IMU 控制…” | `OptUSBProj-yolo`＋[依赖](requirements/real-robot-demo.txt)；先读[单肘验收](docs/REAL_ROBOT_IMU_L4.md) / [六轴逐轴验收与边界](docs/REAL_ROBOT_IMU_LEFT_ARM.md) / [仿真同源平滑接管与双臂测试](docs/REAL_ROBOT_SHARED_TELEOP.md) |
+| 真机手动／A4 电位器单指 demo（实验） | `demos/real_robot_manual_demo.py` 或 `Real-Robot-Manual.desktop` | 默认离线；单指链路独立于双臂控制，不能同时占用机器人串口；见[说明](demos/REAL_ROBOT_MANUAL_DEMO.md) |
+| AprilTag RGB 姿态验证（独立工具） | `demos/apriltag_pose_demo.py` | 仅相机测量，不控制机器人；见[说明](demos/APRILTAG_POSE_DEMO.md) |
 
 ## 当前能力与边界
 
@@ -31,6 +34,13 @@
 - 手部自然掌面参考、视觉估计 C0、历史标定快速恢复、视觉辅助穿戴标定及不限累计纠偏角等仍属实验功能。手腕尚无与四臂段同等的长期 RGB-D 航向纠偏。
 
 **X1 与 CoppeliaSim 链路均为仿真预览，不是实体机器人控制方案。** X1 现提供默认关闭的实验性自碰撞检查与拦截，后续开发暂缓；它依赖 CAD 几何、接触排除及预览状态，不能作为真机安全保证。当前未完成真机安全限位、执行器闭环或急停。
+
+实验性真机左臂/双臂同源模式提供侧举（2/4关节）或前举（1/2/4关节）二选一的特定姿态保持减速暂停
+（默认关闭，默认 7 秒，可自定义），以及独立手动逐轴回位
+（默认每侧 1→3→5→6→4→2，逐步人工确认）。二者均依据指令而非实际位置反馈，
+不保证路径无碰撞；配置和现场验收见[双臂控制说明](docs/REAL_ROBOT_SHARED_TELEOP.md)。
+同源模式另提供可调过渡容差及每次二次确认的倒计时自动接管（默认 10 秒倒计时、指令完成后等 2 秒）；
+原逐步人工确认流程保留。等待不代表实体到位，参数可存入 [Checkpoint](docs/REAL_ROBOT_CHECKPOINTS.md)，授权不会保存。
 
 ## 主路线快速启动
 
