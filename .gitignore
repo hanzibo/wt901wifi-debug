@@ -39,6 +39,7 @@ OptUSBProj-ubuntu/local_config.json.tmp
 OptUSBProj-ubuntu/recordings/
 OptUSBProj-ubuntu/calibrations/
 OptUSBProj-ubuntu/config/real_robot_checkpoints/
+OptUSBProj-ubuntu/config/real_robot_hand_checkpoints/
 
 # Downloaded MediaPipe task model (not source code).
 OptUSBProj-ubuntu/assets/mediapipe/*.task
