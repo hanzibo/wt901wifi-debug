@@ -19,7 +19,7 @@ class CheckpointManager(QtWidgets.QDialog):
         self.setWindowTitle('参数 Checkpoint · '+('双臂同源 IK' if self.mode == 'bilateral_shared_ik' else '左臂同源 IK'))
         self.resize(1000, 720)
         layout = QtWidgets.QVBoxLayout(self)
-        info = QtWidgets.QLabel('保存关节、停止信号、回位参数及接管容差 / 倒计时 / 等待时间；不保存方向、频率、掌向、输出许可、自动启动授权或运行状态。\n'
+        info = QtWidgets.QLabel('保存关节、停止/回位/接管参数，以及手动映射和手掌固定转向开关；不保存转向轴/角度、频率、输出许可、自动启动授权或运行状态。\n'
                                 '保存只写文件；加载只改界面，不发送指令。加载后安全和停止姿态参考必须重新确认。')
         info.setWordWrap(True); layout.addWidget(info)
         splitter = QtWidgets.QSplitter()
@@ -86,7 +86,16 @@ class CheckpointManager(QtWidgets.QDialog):
         for key, bounds in START_RANGES.items():
             self.start_widgets[key] = self.spin(*bounds)
             start_form.addRow(START_LABELS[key], self.start_widgets[key])
-        form.addWidget(starting); form.addStretch()
+        form.addWidget(starting)
+        inputs = QtWidgets.QGroupBox('输入开关（不含转向轴和角度）')
+        input_form = QtWidgets.QVBoxLayout(inputs)
+        self.manual_mapping = QtWidgets.QCheckBox('使用手动轴映射')
+        input_form.addWidget(self.manual_mapping)
+        self.palm_offsets = {}
+        for side in MODES[self.mode]:
+            widget = QtWidgets.QCheckBox(('左手' if side=='left' else '右手')+'手掌目标固定转向')
+            self.palm_offsets[side] = widget; input_form.addWidget(widget)
+        form.addWidget(inputs); form.addStretch()
         scroll = QtWidgets.QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(editor)
         splitter.addWidget(scroll); splitter.setStretchFactor(1, 3); layout.addWidget(splitter, 1)
         self.message = QtWidgets.QLabel(); self.message.setWordWrap(True)
@@ -102,6 +111,7 @@ class CheckpointManager(QtWidgets.QDialog):
         self.items.currentItemChanged.connect(self.select)
         self.name.textChanged.connect(self.edited); self.notes.textChanged.connect(self.edited)
         self.stop_enabled.toggled.connect(self.edited)
+        for widget in (self.manual_mapping, *self.palm_offsets.values()): widget.toggled.connect(self.edited)
         self.stop_kind.currentIndexChanged.connect(self.kind_changed)
         self.stop_seconds.valueChanged.connect(self.edited)
         self.return_order.textChanged.connect(self.edited)
@@ -159,6 +169,9 @@ class CheckpointManager(QtWidgets.QDialog):
             self.current = deepcopy(data)
             self.name.setText(data['name']); self.notes.setPlainText(data['notes'])
             self.stop_enabled.setChecked(data['stop_signal']['enabled'])
+            self.manual_mapping.setChecked(data['input_settings']['manual_mapping'])
+            for side, widget in self.palm_offsets.items():
+                widget.setChecked(data['input_settings']['palm_offset_enabled'][side])
             self.stop_kind.setCurrentIndex(self.stop_kind.findData(data['stop_signal']['kind']))
             self.kind_changed()
             self.stop_seconds.setValue(data['stop_signal']['seconds'])
@@ -181,6 +194,8 @@ class CheckpointManager(QtWidgets.QDialog):
         data['stop_signal'] = dict(enabled=self.stop_enabled.isChecked(), seconds=self.stop_seconds.value(),
                                    kind=self.stop_kind.currentData())
         data['start_settings'] = {k: w.value() for k, w in self.start_widgets.items()}
+        data['input_settings'] = dict(manual_mapping=self.manual_mapping.isChecked(),
+                                     palm_offset_enabled={s:w.isChecked() for s,w in self.palm_offsets.items()})
         try:
             order = [int(x.strip()) for x in self.return_order.text().split(',')]
         except ValueError:
@@ -224,7 +239,7 @@ class CheckpointManager(QtWidgets.QDialog):
             old = self.read()
             data = create(self.mode, old['joints'], old['gesture'], name.strip(), old['notes'],
                           stop_signal=old['stop_signal'], return_settings=old['return_settings'],
-                          start_settings=old['start_settings'])
+                          start_settings=old['start_settings'], input_settings=old['input_settings'])
             data = self.session.store.save(data)
             self.populate(data); self.refresh(data['id'])
             self.message.setText('已另存新文件，原预设和主窗口未改变。')
@@ -237,7 +252,8 @@ class CheckpointManager(QtWidgets.QDialog):
             data = self.session.store.load(self.mode, self.selected_id)
             differences = self.session.differences(data)
             box = QtWidgets.QMessageBox(QtWidgets.QMessageBox.Warning, '确认覆盖参数',
-                '加载将恢复停止姿态类型及开关，但清除接管参考、安全确认和停止姿态参考确认。\n不会自动发送或启动。\n展开详细信息核对差异。',
+                '加载将恢复停止姿态及输入开关（手动映射、手掌固定转向）。转向轴/角度保持当前值，请核对。\n'
+                '清除接管参考、安全确认和停止姿态参考确认；不会自动发送或启动。\n展开详细信息核对差异。',
                 QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.Cancel, self)
             box.setDefaultButton(QtWidgets.QMessageBox.Cancel); box.setDetailedText(differences)
             if box.exec() != QtWidgets.QMessageBox.Yes: return

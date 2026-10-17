@@ -108,20 +108,22 @@ class StoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             store = CheckpointStore(directory)
             old = preset(); old['schema_version'] = 1
+            del old['input_settings']
             del old['stop_signal']; del old['return_settings']; del old['start_settings']
             path = store.path(old['mode'], old['id']); path.parent.mkdir(parents=True)
             path.write_text(json.dumps(old))
             before = path.read_bytes()
             migrated = store.load(old['mode'], old['id'])
-            self.assertEqual(migrated['schema_version'], 4)
+            self.assertEqual(migrated['schema_version'], 5)
             self.assertEqual(migrated['stop_signal'], dict(enabled=False, seconds=7., kind='lateral_raise'))
             self.assertEqual(migrated['return_settings']['order'], [1, 3, 5, 6, 4, 2])
             self.assertEqual(path.read_bytes(), before)
             store.save(migrated, overwrite=True)
-            self.assertEqual(json.loads(path.read_text())['schema_version'], 4)
+            self.assertEqual(json.loads(path.read_text())['schema_version'], 5)
 
     def test_v2_start_settings_migration_and_strict_validation(self):
         old = preset(); old['schema_version'] = 2; del old['start_settings']
+        del old['input_settings']
         del old['stop_signal']['kind']
         self.assertEqual(validate(old)['start_settings'], dict(tolerance=2., countdown=10., settle=2.))
         self.assertNotIn('start_settings', old)
@@ -132,6 +134,23 @@ class StoreTests(unittest.TestCase):
             with self.subTest(key=key, value=value), self.assertRaises(ValueError): validate(data)
         data = preset(); data['start_settings']['authorized'] = True
         with self.assertRaises(ValueError): validate(data)
+
+    def test_input_switches_strict_roundtrip_and_v4_defaults(self):
+        for mode in MODES:
+            data = preset(mode)
+            data['input_settings'] = dict(manual_mapping=True,
+                                         palm_offset_enabled={s:True for s in MODES[mode]})
+            self.assertEqual(validate(data)['input_settings'], data['input_settings'])
+            old = deepcopy(data); old['schema_version']=4; del old['input_settings']
+            self.assertEqual(validate(old)['input_settings'], dict(manual_mapping=False,
+                             palm_offset_enabled={s:False for s in MODES[mode]}))
+            self.assertEqual(old['schema_version'],4)
+            for change in (lambda d:d['input_settings'].update(manual_mapping=1),
+                           lambda d:d['input_settings']['palm_offset_enabled'].update(left='true'),
+                           lambda d:d['input_settings']['palm_offset_enabled'].pop('left'),
+                           lambda d:d['input_settings'].update(authorized=True)):
+                invalid=deepcopy(data); change(invalid)
+                with self.assertRaises(ValueError):validate(invalid)
 
     def test_new_options_validation_and_roundtrip(self):
         changes = [('stop_signal', 'enabled', 1), ('stop_signal', 'seconds', 0.),
@@ -193,9 +212,51 @@ class GuiTests(unittest.TestCase):
         self.assertFalse(d.end_session.enable.isChecked()); self.assertFalse(d.end_session.configured)
         self.assertIsNone(d.worker); self.assertIsNone(d.ik_worker)
         self.assertIn('数值一致', self.session.label.text())
+
+    def test_input_switches_snapshot_apply_dirty_and_manager_copy(self):
+        d=self.dialog
+        for mode in (2,3):
+            d.mode_select.setCurrentIndex(mode)
+            d.manual.setChecked(True); d.shared_offset.setChecked(True)
+            d.right_options[1].setChecked(True)
+            d.shared_offset_axis.setCurrentText('z'); d.shared_offset_angle.setValue(85.)
+            d.right_options[2].setCurrentText('y'); d.right_options[3].setValue(-70.)
+            data=self.session.snapshot('开关测试')
+            d.manual.setChecked(False); d.shared_offset.setChecked(False); d.right_options[1].setChecked(False)
+            self.assertIn('使用手动映射',self.session.differences(data))
+            self.session.apply(data)
+            self.assertTrue(d.manual.isChecked()); self.assertTrue(d.shared_offset.isChecked())
+            self.assertEqual(d.right_options[1].isChecked(),mode==3)
+            self.assertEqual(d.shared_offset_axis.currentText(),'z'); self.assertEqual(d.shared_offset_angle.value(),85.)
+            self.assertEqual(d.right_options[2].currentText(),'y'); self.assertEqual(d.right_options[3].value(),-70.)
+            self.assertFalse(d.safety.isChecked()); self.assertIsNone(d.worker); self.assertIsNone(d.ik_worker)
+            self.assertIn('数值一致',self.session.label.text())
+            d.manual.setChecked(False); self.assertIn('已修改',self.session.label.text())
+            d.manual.setChecked(True); d.shared_offset.setChecked(False)
+            self.assertIn('已修改',self.session.label.text())
+            d.shared_offset.setChecked(True)
+            manager=CheckpointManager(self.session)
+            try:
+                self.assertTrue(manager.manual_mapping.isChecked())
+                self.assertTrue(manager.palm_offsets['left'].isChecked())
+                manager.manual_mapping.setChecked(False); manager.palm_offsets['left'].setChecked(False)
+                manager.save(); saved=manager.read()
+                with patch.object(QtWidgets.QInputDialog,'getText',return_value=('开关副本',True)):manager.save_as()
+                copied=self.session.store.load(self.session.mode(),manager.selected_id)
+                self.assertEqual(copied['input_settings'],saved['input_settings'])
+                self.assertTrue(d.manual.isChecked())  # Saving does not apply.
+                self.session.apply(copied)
+                self.assertFalse(d.manual.isChecked()); self.assertFalse(d.shared_offset.isChecked())
+            finally:
+                manager.dirty=False; manager.close()
+
+    def test_existing_dirty_label_updates(self):
+        d=self.dialog
+        self.session.apply(self.session.snapshot())
+        original=d.axis_rows[0][3].value()
         d.axis_rows[0][3].setValue(31.)
         self.assertIn('已修改', self.session.label.text())
-        d.axis_rows[0][3].setValue(30.)
+        d.axis_rows[0][3].setValue(original)
         self.assertIn('数值一致', self.session.label.text())
 
     def test_invalid_cross_mode_and_widget_bounds_leave_everything_unchanged(self):

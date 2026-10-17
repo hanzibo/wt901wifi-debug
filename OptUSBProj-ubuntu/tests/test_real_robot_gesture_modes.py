@@ -203,13 +203,14 @@ class MigrationTests(unittest.TestCase):
         for version in (1, 2, 3):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as directory:
                 old = preset(); old['schema_version'] = version
+                del old['input_settings']
                 del old['stop_signal']['kind']
                 if version == 1: del old['stop_signal']; del old['return_settings']
                 if version < 3: del old['start_settings']
                 store = CheckpointStore(directory); path = store.path(old['mode'], old['id'])
                 path.parent.mkdir(parents=True); path.write_text(json.dumps(old))
                 before = path.read_bytes(); migrated = store.load(old['mode'], old['id'])
-                self.assertEqual(migrated['schema_version'], 4)
+                self.assertEqual(migrated['schema_version'], 5)
                 self.assertEqual(migrated['stop_signal']['kind'], 'lateral_raise')
                 self.assertEqual(migrated['gesture'], old['gesture'])
                 self.assertEqual(path.read_bytes(), before)

@@ -73,10 +73,11 @@ def number(value):
 def validate(data, mode=None):
     base = ('schema_version', 'mode', 'id', 'name', 'notes', 'created_at',
             'updated_at', 'joints', 'gesture')
-    if not isinstance(data, dict) or type(data.get('schema_version')) is not int or data['schema_version'] not in (1, 2, 3, 4):
+    if not isinstance(data, dict) or type(data.get('schema_version')) is not int or data['schema_version'] not in (1, 2, 3, 4, 5):
         raise ValueError('不支持的 Checkpoint 格式版本')
     expected = base if data['schema_version'] == 1 else (*base, 'stop_signal', 'return_settings')
     if data['schema_version'] >= 3: expected = (*expected, 'start_settings')
+    if data['schema_version'] >= 5: expected = (*expected, 'input_settings')
     keys(data, expected, 'Checkpoint')
     data = deepcopy(data)
     if data['schema_version'] == 1:
@@ -88,6 +89,17 @@ def validate(data, mode=None):
         keys(data['stop_signal'], ('enabled', 'seconds'), '旧版停止信号')
         data['stop_signal']['kind'] = 'lateral_raise'
         data['schema_version'] = 4
+    if data['schema_version'] == 4:
+        data.update(schema_version=5, input_settings=dict(manual_mapping=False,
+                    palm_offset_enabled={side:False for side in MODES.get(data['mode'], ())}))
+    options = data['input_settings']
+    keys(options, ('manual_mapping', 'palm_offset_enabled'), '输入开关')
+    if type(options['manual_mapping']) is not bool:
+        raise ValueError('手动映射开关必须是布尔值')
+    axes(data['mode'])
+    keys(options['palm_offset_enabled'], MODES[data['mode']], '手掌固定转向开关')
+    if any(type(value) is not bool for value in options['palm_offset_enabled'].values()):
+        raise ValueError('手掌固定转向开关必须是布尔值')
     keys(data['start_settings'], DEFAULT_START, '接管设置')
     for key, (lo, hi) in START_RANGES.items():
         if not lo <= number(data['start_settings'][key]) <= hi:
@@ -137,15 +149,17 @@ def validate(data, mode=None):
 
 
 def draft(mode, joints, gesture, name='新预设', notes='', *, stop_signal=None, return_settings=None,
-          start_settings=None):
+          start_settings=None, input_settings=None):
     """Unsaved editor document; may contain values the user must correct."""
     axes(mode)
     now = stamp()
-    return deepcopy(dict(schema_version=4, mode=mode, id=str(uuid4()), name=name,
+    return deepcopy(dict(schema_version=5, mode=mode, id=str(uuid4()), name=name,
                          notes=notes, created_at=now, updated_at=now, joints=joints, gesture=gesture,
                          stop_signal=DEFAULT_STOP if stop_signal is None else stop_signal,
                          return_settings=DEFAULT_RETURN if return_settings is None else return_settings,
-                         start_settings=DEFAULT_START if start_settings is None else start_settings))
+                         start_settings=DEFAULT_START if start_settings is None else start_settings,
+                         input_settings=dict(manual_mapping=False, palm_offset_enabled={s:False for s in MODES[mode]})
+                         if input_settings is None else input_settings))
 
 
 def create(mode, joints, gesture, name='新预设', notes='', **options):

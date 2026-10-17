@@ -32,6 +32,16 @@ class CheckpointSession:
             widget.valueChanged.connect(self.changed)
         owner.mode_select.currentIndexChanged.connect(self.changed)
         for widget in owner.auto_start.widgets.values(): widget.valueChanged.connect(self.changed)
+        for widget in (owner.manual, owner.shared_offset, owner.right_options[1]):
+            widget.toggled.connect(self.changed)
+
+    def input_widgets(self):
+        d = self.owner
+        return {'left': d.shared_offset, **({'right': d.right_options[1]} if d._bilateral_mode() else {})}
+
+    def input_values(self):
+        return dict(manual_mapping=self.owner.manual.isChecked(),
+                    palm_offset_enabled={s:w.isChecked() for s,w in self.input_widgets().items()})
 
     def mode(self):
         if not self.owner._shared_mode():
@@ -66,6 +76,7 @@ class CheckpointSession:
         joints, gesture = self.parameters()
         return (create if validated else draft)(self.mode(), joints, gesture, name, notes,
                                                 start_settings=self.owner.auto_start.values(),
+                                                input_settings=self.input_values(),
                                                 **self.owner.end_session.checkpoint_options())
 
     def changed(self, *_):
@@ -78,6 +89,7 @@ class CheckpointSession:
             dirty = joints != saved['joints'] or gesture != saved['gesture']
             dirty |= any(saved[k] != v for k, v in self.owner.end_session.checkpoint_options().items())
             dirty |= saved['start_settings'] != self.owner.auto_start.values()
+            dirty |= saved['input_settings'] != self.input_values()
             self.label.setText(f'最近加载：{saved["name"]}'+('（已修改，未保存到预设）' if dirty else '（数值一致）'))
 
     def differences(self, data):
@@ -106,6 +118,12 @@ class CheckpointSession:
         for key, previous in self.owner.auto_start.values().items():
             if previous != data['start_settings'][key]:
                 lines.append(f'{START_LABELS[key]}：{previous} → {data["start_settings"][key]}')
+        before = self.input_values(); after = data['input_settings']
+        switches = [('使用手动映射', before['manual_mapping'], after['manual_mapping'])]
+        switches += [(('左手' if s=='left' else '右手')+'手掌固定转向',
+                      before['palm_offset_enabled'][s], value) for s,value in after['palm_offset_enabled'].items()]
+        for label, old, new in switches:
+            if old != new: lines.append(f'{label}：{"开启" if old else "关闭"} → {"开启" if new else "关闭"}')
         return '\n'.join(lines) or '数值与当前界面一致。仍会清除接管参考和安全确认。'
 
     def apply(self, data):
@@ -133,12 +151,16 @@ class CheckpointSession:
         blockers += [QtCore.QSignalBlocker(d.safety), QtCore.QSignalBlocker(d.end_session.enable)]
         blockers.append(QtCore.QSignalBlocker(end.order))
         blockers.append(QtCore.QSignalBlocker(end.kind))
+        blockers += [QtCore.QSignalBlocker(w) for w in (d.manual, *self.input_widgets().values())]
         try:
             for widget, value in updates: widget.setValue(value)
             d.safety.setChecked(False)
             end.enable.setChecked(data['stop_signal']['enabled'])
             end.kind.setCurrentIndex(end.kind.findData(data['stop_signal']['kind']))
             end.order.setText(','.join(map(str, data['return_settings']['order'])))
+            d.manual.setChecked(data['input_settings']['manual_mapping'])
+            for side, widget in self.input_widgets().items():
+                widget.setChecked(data['input_settings']['palm_offset_enabled'][side])
         finally:
             del blockers
         d.end_session.clear_checkpoint_confirmation()
