@@ -2,6 +2,8 @@
 
 当前能力：人体模型的 15 个部件可分配 WT901WIFI；已接入穿戴/相机标定、四臂段 RGB-D 航向纠偏、X1 RViz FK/IK 预览及新机器人 CoppeliaSim 双臂/手指映射。设备通过热点向本机 UDP 1399 发数据。碰撞检查为实验性功能，精度改进目前暂停；上述链路不代表真机安全控制。早期 [重构计划](docs/REFACTOR_PLAN.md) 仅作阶段历史参考；当前结构、工具及验收见 [仓库指南](../docs/REPOSITORY_GUIDE.md)。
 
+实验性真机同源 IK 现可复用双 IMU 离散开合输入驱动每手五个协议量，默认关闭、逐指许可、独立手型 Checkpoint，与双臂共用串口线程。先读[真机五指操作与验收](../docs/REAL_ROBOT_HANDS.md)；仿真十五关节端点不能直接当作真机参数。
+
 目录分工：本层的 `run.py`、`camera_run.py`、`fusion_run.py` 等是兼容现有命令与桌面启动器的程序入口；`optusbproj_ubuntu/` 存放实际业务代码；`tests/` 是离线测试；`assets/` 放模型资源；`docs/` 放专题说明。`recordings/`、`calibrations/` 和 `local_config.json` 是本机生成的数据，已被 Git 忽略。根目录的 `wt901/` 和 `wt901_viz/` 是两条 GUI 路线共用的设备协议与工具；旧版 `OptUSBProj/` 仅供参考，不在运行路径中。
 
 ## 运行

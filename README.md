@@ -18,6 +18,7 @@
 | 新机器人双臂／手掌／手指 CoppeliaSim 随动 | 人体 GUI 内的“新机器人双臂实时预览…” | 本机 ZeroMQ API；仅停止状态预览；见[说明](docs/COPPELIASIM_LIVE_RETARGET.md) |
 | 真机单肘 / 单臂 / 双臂受限 IMU 随动（实验） | 人体 GUI 内的“真机受限 IMU 控制…” | `OptUSBProj-yolo`＋[依赖](requirements/real-robot-demo.txt)；先读[单肘验收](docs/REAL_ROBOT_IMU_L4.md) / [六轴逐轴验收与边界](docs/REAL_ROBOT_IMU_LEFT_ARM.md) / [仿真同源平滑接管与双臂测试](docs/REAL_ROBOT_SHARED_TELEOP.md) |
 | 真机手动／A4 电位器单指 demo（实验） | `demos/real_robot_manual_demo.py` 或 `Real-Robot-Manual.desktop` | 默认离线；单指链路独立于双臂控制，不能同时占用机器人串口；见[说明](demos/REAL_ROBOT_MANUAL_DEMO.md) |
+| 真机双 IMU 五指离散开合（实验） | 真机同源 IK 窗口内“五指端点 / Checkpoint / 输出许可…” | 每手五个协议量；独立预设与逐指许可，和双臂共用发送线程；见[操作与验收](docs/REAL_ROBOT_HANDS.md) |
 | AprilTag RGB 姿态验证（独立工具） | `demos/apriltag_pose_demo.py` | 仅相机测量，不控制机器人；见[说明](demos/APRILTAG_POSE_DEMO.md) |
 
 ## 当前能力与边界
