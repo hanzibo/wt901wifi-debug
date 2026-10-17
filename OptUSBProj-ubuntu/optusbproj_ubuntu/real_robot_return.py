@@ -27,7 +27,7 @@ class ReturnControl(ArmControl):
     task = 'return'
 
     def __init__(self, baseline, limits, config=ReturnConfig()):
-        super().__init__(baseline,limits)
+        super().__init__(baseline,limits,preserve_fingers=True)
         if not (self.size == 12 and len(config.sides) == 2 or
                 self.size == 6 and limits.side == 'left' and config.sides == ('left',)):
             raise ValueError('回位配置须与双臂或仅左臂许可一致')

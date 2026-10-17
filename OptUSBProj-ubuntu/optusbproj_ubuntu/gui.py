@@ -298,11 +298,19 @@ class BodyWindow(QtWidgets.QMainWindow):
             self.gripper_gesture_dialog = BilateralGestureWindow(
                 SharedGestureSource(), Path(__file__).resolve().parents[1]/'recordings/imu_gripper', self)
             self.gripper_gesture_dialog.hand_output.connect(self._route_scene_hand)
+            self.gripper_gesture_dialog.hand_observation.connect(self._route_real_hand)
             for device, packet in self.engine.packets.items():
                 self._feed_gripper_packet(round(self.engine.received_at[device]*1e9), packet)
+        if self.real_robot_dialog is not None and self.real_robot_dialog.hand_session is not None:
+            for side in ('left','right'):self.real_robot_dialog.hand_session.sync_policy(side)
         self.gripper_gesture_dialog.show()
         self.gripper_gesture_dialog.raise_()
         self.gripper_gesture_dialog.activateWindow()
+
+    def _route_real_hand(self, side, data):
+        dialog = self.real_robot_dialog
+        if dialog is not None and dialog.hand_session is not None:
+            dialog.hand_session.receive(side,data)
 
     def _route_scene_hand(self,side,data):
         if self.scene_robot_dialog is not None:

@@ -72,11 +72,13 @@ class EndSession:
         self.next_button = QtWidgets.QPushButton('确认上一轴实际稳定，执行下一步')
         self.continuous_button = QtWidgets.QPushButton('一键连续顺序回位（一次确认，依次执行）')
         self.confirm_button = QtWidgets.QPushButton('确认真机实际已回上电姿态（不自动随动）')
+        self.finger_return_button = QtWidgets.QPushButton('手指平滑回零（臂回位后，二次确认）')
         self.return_button.clicked.connect(lambda:self.start_return())
         self.continuous_button.clicked.connect(lambda:self.start_return(continuous=True))
         self.next_button.clicked.connect(self.next_step)
         self.confirm_button.clicked.connect(self.confirm_home)
-        for widget in (self.return_button,self.continuous_button,self.next_button,self.confirm_button): layout.addWidget(widget)
+        self.finger_return_button.clicked.connect(self.start_finger_return)
+        for widget in (self.return_button,self.continuous_button,self.next_button,self.finger_return_button,self.confirm_button): layout.addWidget(widget)
         self.return_label = QtWidgets.QLabel('回位手动触发，不自动运行；顺序不保证无碰撞。')
         self.return_label.setWordWrap(True);layout.addWidget(self.return_label)
         self.configuration_widgets = [self.kind,self.enable,self.seconds,self.capture,self.validate,self.side_order,self.order,
@@ -201,6 +203,11 @@ class EndSession:
         self.continuous_button.setEnabled(self.return_button.isEnabled())
         self.next_button.setEnabled(ready and self.returning and state is not None and state.get('phase')=='await_step')
         self.confirm_button.setEnabled(ready and idle and self.await_home and pending)
+        nonzero_fingers = frame is not None and any(decode(frame)[1])
+        self.finger_return_button.setEnabled(ready and idle and self.await_home and pending and bool(nonzero_fingers))
+        self.confirm_button.setText('臂已回位但手指非零：请先执行手指平滑回零' if self.await_home and nonzero_fingers
+                                    else '确认真机实际已回上电姿态（不自动随动）')
+        if nonzero_fingers: self.confirm_button.setEnabled(False)
         if self.await_home:
             d.capture_button.setEnabled(False);d.start_button.setEnabled(False)
 
@@ -234,6 +241,26 @@ class EndSession:
             d.busy = True
             self.return_label.setText('回位已提交；首帧保持起点。人体与 IMU 不控制回位。')
         except Exception as exc: self.return_label.setText('回位未启动：'+str(exc))
+        d._controls()
+
+    def start_finger_return(self):
+        d=self.owner
+        if d.busy or d.ik_worker is not None or d.worker is None or not self.await_home:return
+        try:
+            frame,state,pending=d.worker.return_snapshot()
+            if not pending or frame is None or state is None or state.get('phase')!='complete':
+                raise ValueError('须先完成手臂顺序回位')
+            if QtWidgets.QMessageBox.warning(d,'二次确认：手指回协议 0，不是位置反馈',
+                    '确认双臂已实际稳定回位，手中无物体，手指张开路径无障碍且有独立断电手段？\n'
+                    '仅将本次曾明确授权且非零的手指平滑回到协议 0；双臂、头腰保持不动。\n'
+                    '使用各指最后授权的速度/加速度及范围，不依赖 IMU。完成后仍须人工确认真实到位。',
+                    QtWidgets.QMessageBox.Yes|QtWidgets.QMessageBox.Cancel,QtWidgets.QMessageBox.Cancel)!=QtWidgets.QMessageBox.Yes:
+                return
+            if d.busy or d.ik_worker is not None or d.worker is None:raise ValueError('确认期间状态已改变')
+            d.worker.begin_finger_return()
+            self.returning=True;self.await_home=False;d.busy=True
+            self.return_label.setText('手指平滑回零已提交；首帧保持起点，不自动恢复随动。')
+        except Exception as exc:self.return_label.setText('手指回零未启动：'+str(exc))
         d._controls()
 
     def next_step(self):
@@ -271,6 +298,9 @@ class EndSession:
         axis = state.get('return_axis') or '无剩余轴'
         self.return_label.setText(f'顺序回位：{state.get("phase")}；下一/当前轴 {axis}；'
                                  f'步骤 {min(state["return_step"],state["return_count"])} / {state["return_count"]}\n'+state.get('reason',''))
+        if state.get('return_kind')=='fingers':
+            self.return_label.setText('手指平滑回零：'+state['phase']+'；'+state.get('reason','')+'\n'+
+                '\n'.join(f'{s}: {m["command"]} → {m["target"]}' for s,m in state['finger_return'].items()))
         if state['mode'] == 'paused':
             self.returning = False
             self.await_home = state.get('phase') == 'complete'

@@ -20,6 +20,7 @@ from .real_robot_end_panel import EndSession
 from .real_robot_checkpoint_gui import CheckpointSession
 from .real_robot_auto_start import AutoStartSession
 from .real_robot_start_diagnostics import reference_deltas
+from .real_robot_hand_gui import HandSession
 
 
 def pose_distance(a, b):
@@ -40,6 +41,7 @@ class RealRobotModesDialog(RealRobotDialog):
         self.end_session = None
         self.checkpoints = None
         self.auto_start = None
+        self.hand_session = None
         self.ik_worker = None
         self.arm_history = deque()
         self.arm_sample = None
@@ -62,7 +64,7 @@ class RealRobotModesDialog(RealRobotDialog):
                                   '双臂仿真同源 IK（可逐轴启用左 / 右臂）'])
         layout.insertWidget(1, self.mode_select)
         layout.itemAt(0).widget().setText(
-            '真实硬件，无位置反馈！头腰保持 90°，手指量保持 0；右臂仅双臂模式可动。\n'
+            '真实硬件，无位置反馈！头腰保持 90°；手指默认不动，须单独授权；右臂仅双臂模式可动。\n'
             '只有明确勾选的关节可动；显示均为指令值，暂停不是物理急停。\n'
             '预留安全空间及独立断电手段；禁止同时打开手动串口 demo。')
         self.arm_panel = QtWidgets.QGroupBox('左臂六轴：默认勾选六轴，仍须安全确认与明确启动')
@@ -113,7 +115,7 @@ class RealRobotModesDialog(RealRobotDialog):
         for widget in (self.shared_offset, self.shared_offset_axis,
                        self.shared_offset_angle, self.shared_offset_copy):
             offset_row.addWidget(widget)
-        self.mirror_check = QtWidgets.QCheckBox('镜像最终发送角到 CoppeliaSim（仅停止的原场景；端口 23000）')
+        self.mirror_check = QtWidgets.QCheckBox('镜像最终发送量到 CoppeliaSim（手指为名义近似；停止的原场景；23000）')
         self.mirror_check.toggled.connect(self._mirror_changed)
         self.follow_button = QtWidgets.QPushButton('确认真机已稳定到位，开始同源跟随')
         self.follow_button.clicked.connect(self._confirm_follow)
@@ -158,6 +160,8 @@ class RealRobotModesDialog(RealRobotDialog):
         self.content_layout.insertWidget(2, self.auto_start.panel)
         self.checkpoints = CheckpointSession(self)
         self.content_layout.insertWidget(2, self.checkpoints.panel)
+        self.hand_session = HandSession(self)
+        self.content_layout.insertWidget(4, self.hand_session.panel)
         self._controls()
 
     def _arm_mode(self):
@@ -402,6 +406,8 @@ class RealRobotModesDialog(RealRobotDialog):
             self.checkpoints.controls()
         if self.auto_start is not None:
             self.auto_start.controls()
+        if self.hand_session is not None:
+            self.hand_session.panel.setVisible(self._shared_mode())
 
     def _arm_event(self, event, **data):
         if self.worker is not None:
@@ -740,6 +746,8 @@ class RealRobotModesDialog(RealRobotDialog):
         super()._finished()
 
     def closeEvent(self, event):
+        if self.hand_session is not None:
+            self.hand_session.dialog.close()
         if self.auto_start is not None: self.auto_start.cancel('窗口关闭', stop=True)
         if self.mirror_worker is not None:
             self.closing = True

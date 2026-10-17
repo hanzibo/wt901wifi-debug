@@ -6,6 +6,7 @@ import math
 from PySide6.QtCore import QThread, Signal
 from .real_robot_control import ElbowControl
 from .real_robot_stop_gesture import GESTURE_KINDS
+from .real_robot_hand import HandBank
 
 
 class ElbowSerialWorker(QThread):
@@ -35,6 +36,43 @@ class ElbowSerialWorker(QThread):
         self.target_timing = None
         self.target_received_at = None
         self.gap_deadline = None
+        self.hands = HandBank()
+        self.authorized_hands = {}
+
+    def observe_hand(self, side, data):
+        with self.lock:
+            self.hands.observe(side, data, time.monotonic())
+            if self.active:
+                self.recorder.record('hand_observation', side=side, **data)
+
+    def enable_hand(self, side, config, *, allow_residual=False):
+        with self.lock:
+            if (not self.active or self.task != 'follow' or not self.last_state
+                    or self.last_state.get('phase') != 'following' or self.last_state['mode'] != 'active'
+                    or self.pause_reason or self.quit_requested):
+                raise ValueError('须先进入健康的同源跟随，再明确启用手指')
+            if side=='right' and len(self.authorized_limits.indices)!=12:
+                raise ValueError('左臂模式不许可右手')
+            self.hands.enable(side, config, self.authorized_limits.frequency, time.monotonic(),allow_residual=allow_residual)
+            previous=self.authorized_hands.get(side)
+            if previous is None:self.authorized_hands[side]=config
+            else:
+                from dataclasses import replace
+                merged={name:tuple(new if enabled else old for new,old,enabled in
+                                  zip(getattr(config,name),getattr(previous,name),config.enabled))
+                        for name in ('opened','closed','lower','upper','speed','acceleration')}
+                self.authorized_hands[side]=replace(config,**merged,
+                    enabled=tuple(a or b for a,b in zip(config.enabled,previous.enabled)))
+            self.recorder.record('hand_enabled', side=side, config=vars(config), feedback=False,residual_bypass=allow_residual)
+
+    def stop_hand(self, side):
+        with self.lock:
+            self.hands.stop('用户停用该手',side)
+            self.recorder.record('hand_stop', side=side)
+
+    def hand_snapshot(self):
+        with self.lock:
+            return self.hands.status()
 
     def heartbeat(self):
         with self.lock:
@@ -57,6 +95,8 @@ class ElbowSerialWorker(QThread):
                     or self.last_state.get('phase') != 'complete' or self.quit_requested
                     or self.last_written is None or any(q != 90. for q in decode(self.last_written)[0])):
                 raise ValueError('没有本次连接内成功完成的回位指令')
+            if any(decode(self.last_written)[1]):
+                raise ValueError('仅手臂回位；手指非零。请先确认并执行手指平滑回零，再确认全机上电构型。')
             self.home_pending = False
             self.recorder.record('home_manually_confirmed', frame_hex=self.last_written.hex(), measured=False)
             return self.last_written
@@ -84,6 +124,9 @@ class ElbowSerialWorker(QThread):
             self.home_pending = False
 
     def _reserve(self, control, target, valid_until):
+        if getattr(control,'task',None)!='return' and not getattr(control,'controls_fingers',False):
+            self.authorized_hands.clear()
+        self.hands.reset(control.baseline)
         self.pending_start = (control, valid_until)
         self.arm_target_size = getattr(control, 'size', 6)
         self.latest = (target, valid_until)
@@ -95,6 +138,20 @@ class ElbowSerialWorker(QThread):
         self.target_timing = None
         self.target_received_at = None
         self.gap_deadline = None
+
+    def begin_finger_return(self):
+        from .real_robot_finger_return import FingerReturnControl
+        with self.lock:
+            if (self.active or self.pending_start is not None or self.quit_requested
+                    or not self.home_pending or self.last_written is None or self.last_state is None
+                    or self.last_state.get('phase')!='complete' or self.last_state.get('mode')!='paused'
+                    or self.authorized_limits is None):
+                raise ValueError('须先完成本次手臂回位，保持连接并人工核对路径')
+            control=FingerReturnControl(self.last_written,self.authorized_limits,self.authorized_hands)
+            self._reserve(control,None,time.monotonic()+1.)
+            self.task='return';self.latest=None;self.heartbeat_at=time.monotonic();self.home_pending=False
+            self.recorder.record('finger_return_requested',baseline=control.baseline.hex(),feedback=False,
+                                 configs={s:vars(c) for s,c in self.authorized_hands.items()})
 
     def _input_guard(self, control, now, deadline, reason):
         """250 ms freshness, then bounded deceleration; never extend on old data.
@@ -264,6 +321,12 @@ class ElbowSerialWorker(QThread):
                             control.brake(reason)
                         if now >= next_tick:
                             frame = control.step()
+                            if getattr(control,'controls_fingers',False):
+                                from .real_robot_protocol import decode
+                                self.hands.values=decode(frame)[1]
+                            else:
+                                frame = self.hands.merge(frame, now, arm_mode=control.mode,
+                                    following=self.task=='follow' and getattr(control,'phase',None)=='following')
                             before = time.monotonic()
                             count = serial.write(frame)
                             if count != len(frame):
@@ -287,16 +350,19 @@ class ElbowSerialWorker(QThread):
                                                          kind=gesture.config.kind, indices=gesture.config.indices,
                                                          reason=self.pause_reason)
                             self.last_state = control.status()
+                            if control.mode == 'paused' and not self.hands.stopped:
+                                self.last_state = {**self.last_state, 'mode':'braking',
+                                                   'reason':'臂已暂停，等待手指指令侧减速结束'}
                             self.recorder.record('write', frame_hex=frame.hex(), count=count,
                                                  input_age_ms=age * 1000,
                                                  gap_ms=None if previous_write is None else (before-previous_write)*1000,
-                                                 write_ms=(after-before)*1000, **control.status())
+                                                 write_ms=(after-before)*1000, hands=self.hands.status(), **control.status())
                             previous_write = before
                             self.sent.emit(frame)
-                            self.progress.emit(control.status())
+                            self.progress.emit(self.last_state)
                             # Never catch up with a burst after an OS/USB scheduling delay.
                             next_tick = after + 1 / control.limits.frequency
-                            if control.mode == 'paused':
+                            if control.mode == 'paused' and self.hands.stopped:
                                 if self.task == 'return' and control.phase == 'complete':
                                     self.home_pending = True
                                     self.recorder.record('return_commands_complete', frame_hex=frame.hex(), feedback=False)

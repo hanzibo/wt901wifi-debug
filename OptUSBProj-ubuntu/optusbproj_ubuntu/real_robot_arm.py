@@ -60,14 +60,14 @@ class ArmLimits:
 
 class ArmControl:
     """Independent per-axis acceleration-limited trajectories, latest target only."""
-    def __init__(self, baseline, limits):
+    def __init__(self, baseline, limits, *, preserve_fingers=False):
         import ruckig
         self.r, self.limits, self.baseline = ruckig, limits, baseline
         self.angles, self.fingers = decode(baseline)
         self.indices = limits.indices
         self.size = len(self.indices)
         self.names = tuple(('R' if i < 6 else 'L')+str(i%6+1) for i in self.indices)
-        if any(x != 90. for i, x in enumerate(self.angles) if i not in self.indices) or any(self.fingers):
+        if any(x != 90. for i, x in enumerate(self.angles) if i not in self.indices) or (any(self.fingers) and not preserve_fingers):
             raise ValueError('未参与的手臂 / 头腰必须为 90°；手指量必须为 0')
         if not any(limits.enabled):
             raise ValueError('至少明确勾选一个关节输出')

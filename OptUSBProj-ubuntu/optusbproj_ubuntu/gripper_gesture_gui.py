@@ -105,6 +105,7 @@ class SharedGestureSource:
 
 class GestureWindow(QtWidgets.QWidget):
     hand_output=QtCore.Signal(object)
+    hand_observation=QtCore.Signal(object)
     def __init__(self, source, output_root, parent=None, panel_joint=None):
         super().__init__(parent, QtCore.Qt.WindowType.Window)
         self.embedded = parent is not None
@@ -114,6 +115,10 @@ class GestureWindow(QtWidgets.QWidget):
         self.last_send = 0.
         self.last_ack = None
         self.discrete = DiscreteClosure()
+        self.real_discrete = DiscreteClosure()
+        self.real_filtered = self.real_stamp = None
+        self.real_revision = 0
+        self.real_residual_bypass = False
         self.role_validator = None
         self.host_bias_ready = {}
         self.source=source;self.output_root=Path(output_root);self.engine=PoseEngine()
@@ -212,13 +217,39 @@ class GestureWindow(QtWidgets.QWidget):
         self.log_event('reference_cleared');self.controls()
 
     def reset_discrete(self,*_):
+        self.real_revision += 1
         self.send_preview.setChecked(False)
         self.send_scene.setChecked(False)
         try:
             self.discrete=DiscreteClosure(self.open_threshold.value()/100,self.closed_threshold.value()/100,self.dwell.value())
+            self.real_discrete=DiscreteClosure(self.open_threshold.value()/100,self.closed_threshold.value()/100,self.dwell.value())
+            self.real_filtered=self.real_stamp=None
             self.state_label.setText('离散状态：待判定；两阈值之间保持，必须重新越过阈值确认')
         except ValueError as exc:
-            self.discrete=None;self.state_label.setText(str(exc))
+            self.discrete=self.real_discrete=None;self.state_label.setText(str(exc))
+
+    def set_real_residual_policy(self, enabled):
+        if self.real_residual_bypass == bool(enabled):return
+        self.real_residual_bypass=bool(enabled)
+        self.real_revision+=1
+        self.real_filtered=self.real_stamp=None
+        try:self.real_discrete=DiscreteClosure(self.open_threshold.value()/100,self.closed_threshold.value()/100,self.dwell.value())
+        except ValueError:self.real_discrete=None
+
+    def update_real_state(self, closure, stamp, residual, allowed):
+        # Preview's experimental residual bypass must not contaminate either
+        # the real classifier's dwell or its low-pass history.
+        if (not allowed or closure is None or not math.isfinite(closure)
+                or not math.isfinite(residual) or residual<0
+                or (residual>20. and not self.real_residual_bypass) or self.real_discrete is None):
+            return False
+        if stamp!=self.real_stamp:
+            dt=0. if self.real_stamp is None else stamp-self.real_stamp
+            alpha=1. if self.real_filtered is None else 1-math.exp(-dt/.12)
+            self.real_filtered=closure if self.real_filtered is None else self.real_filtered+alpha*(closure-self.real_filtered)
+            self.real_stamp=stamp
+            self.real_discrete.update(self.real_filtered,stamp)
+        return True
 
     def preview_toggled(self, enabled):
         self.last_ack=None
@@ -318,6 +349,8 @@ class GestureWindow(QtWidgets.QWidget):
     def tick(self):
         now=time.monotonic()
         output_allowed=False
+        real_allowed=False
+        real_residual=None
         try:
             rows=(self.source.poll_observed() if hasattr(self.source,'poll_observed') else
                   [(ns,packet,None) for ns,packet in self.source.poll_timed()])
@@ -367,6 +400,8 @@ class GestureWindow(QtWidgets.QWidget):
             self.update_capture(pair,now)
             if self.calibration:
                 result=self.calibration.evaluate(*pair[1:]);angle=result.angle_deg;residual=result.residual_deg
+                real_residual=residual
+                real_allowed=self.update_real_state(result.closure,pair[0],residual,self.capture is None)
                 self.metric_label.setText(f'手势角 {angle:+.1f}° · 离轴残差 {residual:.1f}°'+
                     (' · 尚未采闭合端点' if result.closure is None else f' · 原始闭合量 {result.closure*100:.1f}%'))
                 valid=residual<=20.
@@ -383,7 +418,7 @@ class GestureWindow(QtWidgets.QWidget):
                 if not output_allowed and self.discrete is not None:self.discrete.pause()
                 if self.capture is None:
                     warning=('实验模式，仅提示，闭合量继续更新。' if self.warn_only.isChecked() else '平滑闭合量保持。')
-                    self.status.setText('离轴残差>20°：'+warning+'请检查非标定动作／绑带／漂移。' if not valid else '观测中；双阈值离散判断，不控制真实机器人。')
+                    self.status.setText('离轴残差>20°：'+warning+'请检查非标定动作／绑带／漂移。' if not valid else '观测中；此处只产生手势。真机输出须在真机窗口单独授权。')
                 if pair[0]!=self.last_plot_stamp:
                     self.plot_rows.append((pair[0]-self.start,angle,residual));self.last_plot_stamp=pair[0]
                     self.plot.set_rows(self.plot_rows)
@@ -395,10 +430,12 @@ class GestureWindow(QtWidgets.QWidget):
                     self.last_log_stamp=pair[0]
             if self.record_file and now-self.last_flush>1:self.record_file.flush();self.last_flush=now
         except ValueError as exc:
+            real_allowed=False
             if self.discrete is not None:self.discrete.pause()
             self.status.setText(str(exc))
             if self.capture:self.cancel_capture();self.status.setText('采样取消：'+str(exc))
         except OSError as exc:
+            real_allowed=False
             output_allowed=False
             if self.discrete is not None:self.discrete.pause()
             self.stop_record();self.status.setText('接收／记录错误：'+str(exc))
@@ -408,6 +445,15 @@ class GestureWindow(QtWidgets.QWidget):
             'valid':bool(output_allowed and self.discrete is not None and self.discrete.state is not None),
             'state':None if self.discrete is None else self.discrete.state,
             'stamp':self.last_filter_stamp if output_allowed and self.last_filter_stamp is not None else 0.})
+        if not real_allowed and self.real_discrete is not None:
+            self.real_discrete.pause()
+            self.real_filtered=None
+        self.hand_observation.emit(dict(
+            valid=bool(real_allowed and self.real_discrete is not None and self.real_discrete.state is not None),
+            state=None if self.real_discrete is None else self.real_discrete.state,
+            stamp=self.real_stamp or 0.,
+            signature=(self.hand.currentData(),self.finger.currentData(),self.real_revision),
+            residual_deg=real_residual,residual_bypass=self.real_residual_bypass))
         self.controls()
 
     def toggle_record(self):
@@ -456,15 +502,16 @@ class BilateralDemoSource(DemoSource):
 class BilateralGestureWindow(QtWidgets.QWidget):
     """One upstream receiver, two independent gesture/state/output channels."""
     hand_output=QtCore.Signal(str,object)
+    hand_observation=QtCore.Signal(str,object)
     def __init__(self, source, output_root, parent=None):
         super().__init__(parent,QtCore.Qt.WindowType.Window)
         self.source=source;self.embedded=parent is not None;self._closed=False
-        self.setWindowTitle('左右手四 IMU · 离散开合（RViz / CoppeliaSim 预览）')
+        self.setWindowTitle('左右手四 IMU · 离散开合输入与仿真预览')
         self.resize(1450,940)
         layout=QtWidgets.QVBoxLayout(self)
         note=QtWidgets.QLabel('左、右各选手背＋指段，共四台不同设备；每侧独立采集开手/闭合、设置阈值及启用输出。\n'
             +('只读复用主窗口姿态及静止学习，不重复积分。' if self.embedded else '独占 UDP1399，请关闭其他人体/手腕 GUI。')+
-            '左侧固定 RViz 关节7，右侧固定57；只做预览，不控制真机，仍不消除长期漂移。')
+            '左侧固定 RViz 关节7，右侧固定57；本窗口不直接发送真机指令。真机五指须在真机窗口单独授权。仍不消除长期漂移。')
         note.setWordWrap(True);layout.addWidget(note)
         self.assignment_status=QtWidgets.QLabel('请选择设备；可先测试单侧。');layout.addWidget(self.assignment_status)
         top=QtWidgets.QHBoxLayout();layout.addLayout(top)
@@ -475,7 +522,7 @@ class BilateralGestureWindow(QtWidgets.QWidget):
             if hasattr(parent,'_show_scene_robot'):scene.clicked.connect(parent._show_scene_robot)
             else:scene.setEnabled(False)
             top.addWidget(scene)
-        stop=QtWidgets.QPushButton('停用左右夹爪输出（保持末次位置）');stop.clicked.connect(self.stop_outputs);top.addWidget(stop)
+        stop=QtWidgets.QPushButton('停用左右仿真夹爪输出（不影响真机许可）');stop.clicked.connect(self.stop_outputs);top.addWidget(stop)
         split=QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal);layout.addWidget(split,1)
         self.panels={}
         for side,title,joint in (('left','左手 → RViz 左夹爪 · 7','7'),('right','右手 → RViz 右夹爪 · 57','57')):
@@ -486,6 +533,7 @@ class BilateralGestureWindow(QtWidgets.QWidget):
             panel.setWindowFlags(QtCore.Qt.WindowType.Widget);panel.timer.stop()
             panel.role_validator=lambda panel=panel:self.validate_roles(panel)
             panel.hand_output.connect(lambda data,s=side:self.hand_output.emit(s,data))
+            panel.hand_observation.connect(lambda data,s=side:self.hand_observation.emit(s,data))
             panel.plot.setMinimumHeight(150)
             column.addWidget(panel);split.addWidget(group);self.panels[side]=panel
         split.setSizes([700,700])

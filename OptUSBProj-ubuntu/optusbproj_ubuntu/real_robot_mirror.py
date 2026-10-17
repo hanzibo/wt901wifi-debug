@@ -14,6 +14,14 @@ def mirror_targets(frame, signs):
             for s,start in (('right',0),('left',6))}
 
 
+def mirror_hand_targets(frame):
+    """Historical nominal visualization, NOT measured finger joint angles."""
+    _,fingers=decode(frame)
+    maximum=np.deg2rad([18,65,55,60,50,40,70,50,45,75,55,55,80,65,65])
+    return {side:maximum*np.repeat(np.asarray(fingers[start:start+5])/4095.,3)
+            for side,start in (('right',0),('left',5))}
+
+
 class CommandMirror(QThread):
     ready = Signal()
     failed = Signal(str)
@@ -63,7 +71,10 @@ class CommandMirror(QThread):
                         return
                     frame, signs = self.pending
                     self.pending = None
-                bridge.exchange(mirror_targets(frame, signs))
+                if bridge.data.get('hands'):
+                    bridge.exchange(mirror_targets(frame, signs), hand_targets=mirror_hand_targets(frame))
+                else:
+                    bridge.exchange(mirror_targets(frame, signs))
         except Exception as exc:
             self.failed.emit(str(exc))
         finally:
