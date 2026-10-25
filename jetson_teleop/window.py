@@ -205,5 +205,10 @@ class Window(QtWidgets.QWidget):
             event.ignore()
             QtCore.QTimer.singleShot(100, self.close)
             return
+        if getattr(self, 'imu_manager', None) is not None and self.imu_manager.isVisible():
+            # The separate manager still needs the existing acquisition timer.
+            self.hide()
+            event.ignore()
+            return
         self.timer.stop()
         super().closeEvent(event)

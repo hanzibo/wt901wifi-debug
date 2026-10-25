@@ -89,6 +89,35 @@ class OnboardingTests(unittest.TestCase):
         sock.assert_not_called()
         self.assertIsNone(self.dialog.expected_id)
 
+    def test_remote_receiver_uses_selected_port_not_pc_listener(self):
+        self.dialog.network_mode.setCurrentIndex(2)
+        self.dialog.external_ssid.setText('HUAWEI-509')
+        self.dialog.external_ip.setText('192.168.3.8')
+        self.dialog.external_port.setValue(1400)
+        self.source.sock.getsockname.return_value = ('10.42.0.1',1399)
+        self.ap(); self.password()
+        confirm, sock = self.send()
+        sock.return_value.__enter__.return_value.sendto.assert_called_once_with(
+            b'IPWIFI:"HUAWEI-509","test-secret-123";UDP192.168.3.8,1400\r\n',
+            ('192.168.4.1',9250))
+        self.assertTrue(self.dialog.join_target['remote'])
+        self.assertIn('板子',confirm.call_args.args[2])
+        self.source.seen_devices.return_value = {'WT5500011381': ('192.168.3.6',time.monotonic())}
+        self.dialog.check_join()
+        self.assertFalse(self.dialog.join_reported)
+        self.assertIn('尚未在本机验证',self.dialog.result_label.text())
+
+    def test_remote_mode_does_not_overwrite_board_ip_with_pc_wifi(self):
+        self.dialog.network_mode.setCurrentIndex(2)
+        self.dialog.external_ip.setText('192.168.3.8')
+        self.dialog.external_ssid.setText('HUAWEI-509')
+        self.dialog.current_ssid = 'bjut_wifi'
+        self.dialog.mode = 'infrastructure'
+        self.dialog._on_local_ip(True,'10.22.17.185/24\n','')
+        self.dialog._capture_external_address()
+        self.assertEqual(self.dialog.external_ip.text(),'192.168.3.8')
+        self.assertEqual(self.dialog.external_ssid.text(),'HUAWEI-509')
+
     def test_invalid_targets_password_and_listener_never_write(self):
         self.external()
         self.ap()

@@ -25,7 +25,36 @@ CMAKE_BUILD_PARALLEL_LEVEL=2 ~/.local/bin/uv pip install --python .venv/bin/pyth
 也可运行 `bash jetson_teleop/launch.sh`。本目录附带 `WT901-Jetson.desktop`，
 其中路径针对当前板子用户 `mic-711on`；更换用户/仓库位置时须修改，不用于 PC 启动。
 
+## 独立 IMU 接入与管理
+
+桌面入口 `WT901-Jetson-IMU.desktop` 或 `bash jetson_teleop/launch.sh --imu-only`
+只打开管理窗口，显示板子所有网卡 IPv4、实际监听端口、在线 / 离线设备 ID、分配部位、
+设备发送端点、两秒平均收包 Hz、距末包 ms、电量估计和 RSSI。不启动机器人输出。
+两种桌面入口使用仅同用户可访问的本地 IPC，只负责打开窗口，不传递启动或运动指令；
+管理与控制始终共用一个进程里的单个 UDP 1399 socket。重复点击不会新增接收者或抢包。
+若已运行，第二次指定的配置路径不会重新加载；更换运行配置须安全退出后重启。
+关闭控制主窗口但保留管理窗口时，会先按原逻辑制动、关闭串口，然后继续收包。
+
+PC 辅助配置步骤：
+
+1. 原电脑热点下找到在线 IMU，确认没有真机输出后切回 AP/UDP；然后 PC 连接该设备 AP。
+2. 重启 PC 手腕程序以加载新版，进入“接入新设备”，选择
+   **外部 Wi-Fi / 路由器（其他设备 / Jetson 接收）**。
+3. 填路由器 SSID（如 `HUAWEI-509`）及密码，UDP 目标填板子有线 IPv4
+   （当前 `192.168.3.8`），端口 `1399`；不要使用当前 `bjut_wifi` 的自动地址或路由器 `.1`。
+4. 确认写入后，在板子的 IMU 管理窗口验证设备 ID、Hz 和距末包时间。
+   PC 显示“配置已发送，远端未验证”，不会因为自己未收到数据而误报失败或接入成功。
+5. 多台设备逐一重复；板子 / PC DHCP 地址变化后须重新核对接收目标。
+
+管理窗口的“将选中的在线 IMU 切回 AP / UDP”仅操作选中设备，默认确认选项为“否”。
+任何真机串口连接（即使暂停）、IK / 启动 / 回位期间都不允许执行；确认后再次核对状态和
+设备新鲜度，再复用原 `GuiUdpSource.switch_to_ap_udp`。UDP 没有设备确认回执，
+收包消失也不能证明成功，必须到 PC 的 Wi-Fi 列表验证对应 ID 热点；失败时按设备说明恢复 AP。
+
 Qt 只安装 PySide6-Essentials（Core/Gui/Widgets），无需 Addons。
+实际 X11 桌面还需 Ubuntu 的 `libxcb-cursor0`（离屏测试不会检查此依赖）。
+有管理员权限时安装该系统包；无管理员权限时，可把官方 arm64 deb 解包到
+`jetson_teleop/.runtime/`，`launch.sh` 会仅为本程序加载其中的运行库。
 Ruckig 0.19.4 在 ARM 上需要源码编译（CMake ≥3.15、C++ 编译器和 Ninja）；
 该板已有的 GCC 9 / CMake 3.16 已满足构建要求，不可擅自换规划算法。
 部署时可临时设置 `http_proxy` / `https_proxy`，不改系统网络配置。

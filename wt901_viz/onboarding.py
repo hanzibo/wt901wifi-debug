@@ -100,10 +100,11 @@ class DeviceSetupDialog(QtWidgets.QDialog):
         device_layout.addWidget(self.ap_password)
         layout.addWidget(device_group)
 
-        sta_group = QtWidgets.QGroupBox("2. 写入目标 Wi-Fi 与本电脑 UDP 接收地址")
+        sta_group = QtWidgets.QGroupBox("2. 写入目标 Wi-Fi 与 UDP 接收端地址")
         form = QtWidgets.QFormLayout(sta_group)
         self.network_mode = QtWidgets.QComboBox()
-        self.network_mode.addItems(["电脑热点（原模式）", "外部 Wi-Fi / 手机热点（电脑接收）"])
+        self.network_mode.addItems(["电脑热点（原模式）", "外部 Wi-Fi / 手机热点（电脑接收）",
+                                    "外部 Wi-Fi / 路由器（其他设备 / Jetson 接收）"])
         form.addRow("接入方式", self.network_mode)
         self.hotspot_ssid = QtWidgets.QLineEdit()
         self.hotspot_ssid.setPlaceholderText("电脑热点名称")
@@ -134,8 +135,8 @@ class DeviceSetupDialog(QtWidgets.QDialog):
         self.server_label = QtWidgets.QLabel("等待读取电脑热点地址…")
         form.addRow("电脑热点 SSID", self.hotspot_ssid)
         form.addRow("外部 Wi-Fi SSID", self.external_ssid)
-        form.addRow("本电脑目标 IPv4", self.external_ip)
-        form.addRow("本程序 UDP 端口", self.external_port)
+        form.addRow("UDP 目标 IPv4", self.external_ip)
+        form.addRow("UDP 目标端口", self.external_port)
         form.addRow(self.capture_address)
         form.addRow(self.external_hint)
         form.addRow("目标 Wi-Fi 密码", self.hotspot_password)
@@ -169,10 +170,30 @@ class DeviceSetupDialog(QtWidgets.QDialog):
         QtCore.QTimer.singleShot(0, self.refresh)
 
     def _external_mode(self):
-        return self.network_mode.currentIndex() == 1
+        return self.network_mode.currentIndex() in (1, 2)
+
+    def _remote_mode(self):
+        return self.network_mode.currentIndex() == 2
 
     def _network_mode_changed(self):
         external = self._external_mode()
+        remote = self._remote_mode()
+        if remote and self.external_ip.text() == self.local_ip:
+            self.external_ip.clear()
+        self.external_port.setReadOnly(not remote)
+        self.external_port.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.UpDownArrows if remote
+                                           else QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+        if not remote:
+            self.external_port.setValue(self.source.sock.getsockname()[1])
+        self.external_ip.setPlaceholderText('例如 192.168.3.8：板子有线 IPv4，不是路由器 .1' if remote
+                                           else '本电脑在目标网络中的 IPv4')
+        self.external_hint.setText(
+            '由本电脑连接设备 AP 写入；IMU 加入目标路由器的 2.4 GHz Wi-Fi，向板子有线 IPv4 发送 UDP。\n'
+            '请手动填写路由器 SSID（如 HUAWEI-509）和板子地址（如 192.168.3.8:1399）。\n'
+            '本电脑不必与 IMU 保持同一 Wi-Fi；接入成功须到板子的 IMU 管理窗口查看，不能在本机验证。'
+            if remote else
+            '先记录电脑在目标外部 Wi-Fi 下的 IPv4，再连接设备 AP 写入。\n'
+            '写入后回到目标网络，电脑和 IMU 须能互访；路由器可使用电脑有线 IPv4。')
         self.device_instruction.setText(
             "先记录目标外部 Wi-Fi 的 SSID / 电脑地址，再连接 WT 设备 AP；"
             "可用 Ubuntu Wi-Fi 菜单连接后点“刷新状态”。"
@@ -187,7 +208,8 @@ class DeviceSetupDialog(QtWidgets.QDialog):
         self.confirm_password.clear()
         if not self.expected_id:
             self.result_label.setText(
-                "写入后请用系统 Wi-Fi 菜单回到目标外部热点，等待本电脑收到该设备数据。"
+                ("写入后请在目标板子上检查实时设备 ID / 收包率；本电脑不验证远端接入。" if remote else
+                 "写入后请用系统 Wi-Fi 菜单回到目标外部热点，等待本电脑收到该设备数据。")
                 if external else "写入后启动电脑热点，等待设备以 STA 模式接入。")
         self._render_status()
 
@@ -196,6 +218,9 @@ class DeviceSetupDialog(QtWidgets.QDialog):
                 and not DEVICE_SSID.fullmatch(self.current_ssid) and bool(self.local_ip))
 
     def _capture_external_address(self):
+        if self._remote_mode():
+            self._log('远端接收模式须手动填写板子有线 IPv4，不会覆盖为本电脑 Wi-Fi 地址。')
+            return
         if not self._external_connection():
             self._log("请先连接目标外部 Wi-Fi 并刷新状态，再读取本电脑地址。")
             return
@@ -277,7 +302,7 @@ class DeviceSetupDialog(QtWidgets.QDialog):
         self.local_ip = out.splitlines()[0].split("/")[0].strip() if ok and out.strip() else ""
         self.local_network = (ipaddress.IPv4Interface(out.splitlines()[0].strip()).network
                               if self.local_ip else None)
-        if self._external_connection():
+        if self._external_connection() and not self._remote_mode():
             if not self.external_ssid.text():
                 self.external_ssid.setText(self.current_ssid)
             if not self.external_ip.text() and self.external_ssid.text() == self.current_ssid:
@@ -327,7 +352,8 @@ class DeviceSetupDialog(QtWidgets.QDialog):
             text = f"当前：Wi-Fi 网卡 {self.interface} 未连接。请扫描 WT 设备。"
         if self._external_mode():
             text += f"\n外部 Wi-Fi 模式；当前电脑 Wi-Fi IPv4：{self.local_ip or '未获取'}。"
-            text += "写入后须让电脑回到目标热点；不会自动启动电脑热点。"
+            text += ("远端接收模式：填写板子有线 IPv4，接入结果在板子验证。" if self._remote_mode() else
+                     "写入后须让电脑回到目标热点；不会自动启动电脑热点。")
         elif not self.profile_ssid or not self.profile_ip:
             text += "\n未找到可用的电脑热点配置 WT901-LAN；请先在系统中创建热点。"
         elif self.profile_mode != "ap" or self.profile_ipv4_method != "shared":
@@ -347,7 +373,7 @@ class DeviceSetupDialog(QtWidgets.QDialog):
                          and self.profile_band == "bg" and bool(self.profile_ip))
         self.hotspot_up_button.setEnabled(idle and profile_ready and not hotspot_active
                                           and not self._external_mode())
-        self.capture_address.setEnabled(idle and self._external_connection())
+        self.capture_address.setEnabled(idle and self._external_connection() and not self._remote_mode())
         self.network_mode.setEnabled(idle)
         self.scan_button.setEnabled(idle and bool(self.interface) and self.mode != "ap")
         self.connect_button.setEnabled(idle and bool(self.device_combo.currentText())
@@ -452,17 +478,17 @@ class DeviceSetupDialog(QtWidgets.QDialog):
             address = ipaddress.IPv4Address(server_ip)
             if (address.is_unspecified or address.is_loopback or address.is_multicast
                     or address.is_link_local or address == ipaddress.IPv4Address('255.255.255.255')):
-                raise ValueError("接收地址须为本电脑在目标 Wi-Fi 中的有效单播 IPv4")
+                raise ValueError("接收地址须为接收端在目标网络中的有效单播 IPv4")
             if external and (DEVICE_SSID.fullmatch(ssid) or
                              server_ip in (DEVICE_AP_IP, self.local_ip)):
                 raise ValueError("请填写外部 Wi-Fi 与电脑地址，不要填写 WT 设备 AP 的 SSID / 地址")
             if ipaddress.IPv4Address(self.local_ip) not in ipaddress.IPv4Network("192.168.4.0/24"):
                 raise ValueError("当前连接不在设备默认的 192.168.4.0/24 网段")
             listen_ip = self.source.sock.getsockname()[0]
-            if listen_ip not in ("0.0.0.0", server_ip):
+            if not self._remote_mode() and listen_ip not in ("0.0.0.0", server_ip):
                 raise ValueError(
                     f"GUI 正监听 {listen_ip}；请用 --listen-ip 0.0.0.0 重启后再配置")
-            port = self.source.sock.getsockname()[1]
+            port = self.external_port.value() if self._remote_mode() else self.source.sock.getsockname()[1]
             command = build_sta_command(ssid, self.hotspot_password.text(), server_ip, port)
         except ValueError as exc:
             self._log(f"配置未发送：{exc}")
@@ -470,8 +496,10 @@ class DeviceSetupDialog(QtWidgets.QDialog):
         answer = QtWidgets.QMessageBox.question(
             self, "确认写入 STA 配置",
             f"当前目标设备：{self.current_ssid}\n"
-            f"它将连接 Wi-Fi {ssid}，并以 UDP 发送到本电脑 {server_ip}:{port}。\n"
-            + ("请确认该地址是电脑在目标 Wi-Fi 中的地址，不是路由器或板子地址。\n"
+            f"它将连接 Wi-Fi {ssid}，并以 UDP 发送到{'远端接收设备' if self._remote_mode() else '本电脑'} {server_ip}:{port}。\n"
+            + ("请确认目标是板子的有线 IPv4，且板子已开启 IMU 管理或控制程序。接入结果须在板子验证。\n"
+               if self._remote_mode() else
+               "请确认该地址是电脑在目标 Wi-Fi 中的地址，不是路由器或板子地址。\n"
                "须启用 2.4 GHz 并允许热点终端互访。发送后请用系统菜单重新连接该 Wi-Fi。\n"
                if external else "发送后设备 AP 可能立刻消失；请再启动电脑热点。\n") +
             "若密码错误无法入网，"
@@ -486,7 +514,7 @@ class DeviceSetupDialog(QtWidgets.QDialog):
             self._log(f"发送失败：{exc}")
             return
         self.expected_id = self.current_ssid
-        self.join_target = {'external': external, 'ssid': ssid, 'ip': server_ip,
+        self.join_target = {'external': external, 'remote': self._remote_mode(), 'ssid': ssid, 'ip': server_ip,
                             'network': None if external else self.profile_network}
         self.sent_at = time.monotonic()
         self.join_reported = False
@@ -495,7 +523,9 @@ class DeviceSetupDialog(QtWidgets.QDialog):
         self._log(f"已向 {self.expected_id} 发送 STA + UDP 配置；发送成功不等于设备已接入。")
         self.result_label.setText(
             f"已发送给 {self.expected_id}。" +
-            (f"请用系统 Wi-Fi 菜单连接 {ssid}，保持电脑地址 {server_ip}，等待实时数据。"
+            (f"设备将向远端 {server_ip}:{port} 发送。请在板子上确认 {self.expected_id} 的实时收包；本机不判定成功。"
+             if self._remote_mode() else
+             f"请用系统 Wi-Fi 菜单连接 {ssid}，保持电脑地址 {server_ip}，等待实时数据。"
              if external else "请点击“启动电脑热点”，等待该 ID 的实时数据出现。"))
         QtCore.QTimer.singleShot(1500, self.refresh)
 
@@ -503,6 +533,10 @@ class DeviceSetupDialog(QtWidgets.QDialog):
         if not self.expected_id or self.join_reported or not self.join_target:
             return
         target = self.join_target
+        if target.get('remote'):
+            self.result_label.setText(
+                f"配置已发送，远端接入尚未在本机验证：{self.expected_id} → {target['ip']}。请查看板子 IMU 管理窗口。")
+            return
         network = target['network']
         if target['external']:
             if self.current_ssid != target['ssid'] or not self._external_connection():

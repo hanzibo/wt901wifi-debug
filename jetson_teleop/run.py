@@ -74,6 +74,7 @@ def main():
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--probe', type=float, metavar='SECONDS')
     modes.add_argument('--self-test', action='store_true')
+    modes.add_argument('--imu-only', action='store_true', help='只显示独立 IMU 管理窗口，不显示真机控制')
     args = parser.parse_args()
     if args.probe is not None:
         if not 1 <= args.probe <= 600:
@@ -83,17 +84,40 @@ def main():
         return smoke()
     from jetson_teleop.config import load
     from jetson_teleop.window import Window
+    from jetson_teleop.imu_manager import ImuManager
+    from jetson_teleop.single_instance import endpoint, forward, InstanceServer
     from wt901.gui_udp import GuiUdpSource
-    from PySide6.QtWidgets import QApplication
-    config = load(args.config)
+    from PySide6.QtWidgets import QApplication, QMessageBox
     app = QApplication(sys.argv[:1])
-    source = GuiUdpSource(args.listen_port, args.listen_ip)
+    name = endpoint(args.listen_port)
+    action = 'imu' if args.imu_only else 'control'
+    if forward(name, action):
+        return 0
+    server = InstanceServer(name)
+    source = None
     try:
+        config = load(args.config)
+        source = GuiUdpSource(args.listen_port, args.listen_ip)
         window = Window(source, config)
-        window.show()
+        manager = ImuManager(window)
+        window.imu_manager = manager
+
+        def show(which):
+            target = manager if which == 'imu' else window
+            target.showNormal()
+            target.raise_()
+            target.activateWindow()
+
+        server.requested.connect(show)
+        show(action)
         return app.exec()
+    except (OSError, ValueError, RuntimeError) as exc:
+        QMessageBox.critical(None, 'WT901 启动失败', str(exc)+'\n若 UDP 端口被占用，请关闭旧版接收程序后重试。')
+        return 1
     finally:
-        source.close()
+        server.close()
+        if source is not None:
+            source.close()
 
 
 if __name__ == '__main__':

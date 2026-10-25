@@ -2,3 +2,4 @@
 runtime.local.json
 checkpoints/
 *.png
+.runtime/

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=WT901 Jetson IMU 接入与管理
+Comment=查看板子有线 IP、在线 IMU、收包率，确认后切回设备 AP
+Exec=/home/mic-711on/Work/WT901/jetson_teleop/launch.sh --imu-only
+Path=/home/mic-711on/Work/WT901
+Terminal=false
+Categories=Science;Robotics;
