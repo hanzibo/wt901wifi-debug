@@ -35,7 +35,7 @@ def pose_distance(a, b):
 
 
 class RealRobotModesDialog(RealRobotDialog):
-    def __init__(self, viewer):
+    def __init__(self, viewer, *, include_fingers=True):
         # Base construction calls overridden _controls: initialize guards first.
         self.mode_select = None
         self.end_session = None
@@ -160,8 +160,9 @@ class RealRobotModesDialog(RealRobotDialog):
         self.content_layout.insertWidget(2, self.auto_start.panel)
         self.checkpoints = CheckpointSession(self)
         self.content_layout.insertWidget(2, self.checkpoints.panel)
-        self.hand_session = HandSession(self)
-        self.content_layout.insertWidget(4, self.hand_session.panel)
+        if include_fingers:
+            self.hand_session = HandSession(self)
+            self.content_layout.insertWidget(4, self.hand_session.panel)
         self.content_layout.removeWidget(self.runtime_recording.panel)
         self.content_layout.insertWidget(2, self.runtime_recording.panel)
         self._controls()

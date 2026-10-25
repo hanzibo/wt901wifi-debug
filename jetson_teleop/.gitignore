@@ -1,0 +1,4 @@
+.venv/
+runtime.local.json
+checkpoints/
+*.png

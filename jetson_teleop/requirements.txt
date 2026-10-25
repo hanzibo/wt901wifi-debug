@@ -1,0 +1,7 @@
+# Ubuntu 20.04 / glibc 2.31 / aarch64 / Python 3.11 baseline.
+numpy==1.26.4
+scipy==1.13.1
+PySide6==6.7.3
+pyserial==3.5
+ruckig==0.19.4
+psutil>=7,<8
