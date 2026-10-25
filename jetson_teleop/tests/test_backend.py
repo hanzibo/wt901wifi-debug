@@ -131,13 +131,13 @@ class BackgroundTests(unittest.TestCase):
 
     def test_short_gap_recovers_without_gui_and_gesture_still_stops(self):
         writer, job, control = self.start_mock(gesture=True)
-        self.wait(lambda:control.phase=='await_confirmation',gui=False)
+        self.wait(lambda:writer.input_snapshot()['phase']=='await_confirmation',gui=False)
         self.feed_pause.set()
         try:
-            self.wait(lambda:writer.last_state['mode']=='gap',timeout=1.,gui=False)
+            self.wait(lambda:writer.input_snapshot()['mode']=='gap',timeout=1.,gui=False)
         finally:
             self.feed_pause.clear()
-        self.wait(lambda:writer.last_state['mode']=='active',gui=False)
+        self.wait(lambda:writer.input_snapshot()['mode']=='active',gui=False)
         self.assertTrue(writer.active)
         writer.confirm_follow()
         self.wait(lambda:control.gesture.triggered,gui=False)
