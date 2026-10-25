@@ -153,11 +153,70 @@ class AutoStartTests(unittest.TestCase):
         self.arm(); self.a.widgets['tolerance'].setValue(3.)
         self.assertFalse(self.a.pending)
         self.arm(); self.d.busy = True; self.a.phase = 'transition'
-        self.a.progress(dict(mode='gap', reason='no fresh IK'))
+        self.a.progress(dict(mode='braking', reason='hard timeout'))
         self.d.worker.pause.assert_called_once()
         self.assertFalse(self.a.authorized)
         self.a.progress(dict(mode='active', phase='await_confirmation'))
         self.assertFalse(self.a.pending)
+
+    def test_gap_then_fresh_active_continues_without_cancel_or_follow(self):
+        for mode in (2, 3):
+            with self.subTest(mode=mode):
+                self.d.mode_select.setCurrentIndex(mode)
+                self.d.safety.setChecked(True); self.fresh(); self.arm()
+                self.d.busy = True; self.a.phase = 'transition'
+                self.a.progress(dict(mode='gap', phase='transition'))
+                self.assertTrue(self.a.pending); self.assertTrue(self.a.authorized)
+                self.d.worker.pause.assert_not_called()
+                self.d._confirm_follow = Mock()
+                self.a.tick()
+                self.d._confirm_follow.assert_not_called()
+                # A queued gap notification can arrive after writer recovery.
+                self.a.progress(dict(mode='active', phase='transition'))
+                self.assertIsNone(self.a.gap_until)
+                self.assertEqual(self.a.phase, 'transition')
+                self.a.cancel('test'); self.d.busy = False
+
+    def test_gap_restarts_settle_wait_and_does_not_extend_grace(self):
+        self.arm(); self.d.busy = True; self.a.phase = 'settling'
+        self.a.wait_until = time.monotonic()-1
+        self.d._confirm_follow = Mock()
+        self.a.progress(dict(mode='gap', phase='await_confirmation'))
+        deadline = self.a.gap_until
+        self.a.progress(dict(mode='gap', phase='await_confirmation'))
+        self.assertEqual(self.a.gap_until, deadline)
+        self.a.tick(); self.d._confirm_follow.assert_not_called()
+        self.a.progress(dict(mode='active', phase='await_confirmation'))
+        self.assertGreater(self.a.wait_until, time.monotonic())
+        self.a.tick(); self.d._confirm_follow.assert_not_called()
+
+    def test_motion_stale_input_waits_only_within_existing_grace(self):
+        self.arm(); self.d.busy = True; self.a.phase = 'transition'
+        now = time.monotonic()
+        self.a.input_deadline = now-.1; self.d.arm_sample = None
+        self.a.tick(now)
+        self.assertTrue(self.a.pending)
+        self.d.worker.pause.assert_not_called()
+        self.a.tick(now+.16)
+        self.assertFalse(self.a.pending); self.assertFalse(self.a.authorized)
+        self.d.worker.pause.assert_called_once()
+        self.a.progress(dict(mode='active', phase='following'))
+        self.assertFalse(self.a.pending)
+
+    def test_gap_hard_timeout_and_paused_do_not_resume(self):
+        for mode in ('braking', 'paused', 'expired'):
+            with self.subTest(mode=mode):
+                self.d.busy = False; self.fresh(); self.arm()
+                self.d.busy = True; self.a.phase = 'transition'
+                self.a.progress(dict(mode='gap', phase='transition'))
+                if mode == 'expired':
+                    self.a.gap_until = time.monotonic()-.01
+                    self.a.tick()
+                else:
+                    self.a.progress(dict(mode=mode, reason='hard timeout or user pause'))
+                self.assertFalse(self.a.pending); self.assertFalse(self.a.authorized)
+                self.a.progress(dict(mode='active', phase='following'))
+                self.assertFalse(self.a.pending)
 
     def test_discontinuous_history_rejected_at_deadline(self):
         self.arm(); self.d._start = Mock()

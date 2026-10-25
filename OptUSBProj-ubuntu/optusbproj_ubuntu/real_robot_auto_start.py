@@ -14,6 +14,7 @@ class AutoStartSession:
         self.authorized = False
         self.deadline = self.last_tick = self.wait_until = None
         self.signature = None
+        self.input_deadline = self.gap_until = None
         self.panel = QtWidgets.QGroupBox('同源接管设置 / 倒计时自动启动（每次单独确认）')
         layout = QtWidgets.QVBoxLayout(self.panel)
         form = QtWidgets.QFormLayout()
@@ -88,6 +89,8 @@ class AutoStartSession:
                 raise ValueError('确认期间配置、连接或输入变化，请重新授权')
             d.arm_capture = None; d.arm_history.clear()
             self.signature = signature
+            self.input_deadline = d.arm_sample[1]
+            self.gap_until = None
             self.authorized = True; self.phase = 'countdown'
             self.last_tick = time.monotonic(); self.deadline = self.last_tick + settings['countdown']
             self.owner._arm_event('auto_start_authorized', settings=settings, feedback=False)
@@ -102,6 +105,7 @@ class AutoStartSession:
         d = self.owner
         self.phase = 'idle'; self.authorized = False
         self.deadline = self.last_tick = self.wait_until = None
+        self.input_deadline = self.gap_until = None
         d.arm_capture = None
         self.label.setText('自动流程已取消：'+reason+'；不会自动重试。')
         d.start_notice.setText(self.label.text())
@@ -115,12 +119,27 @@ class AutoStartSession:
         now = time.monotonic() if now is None else now
         if (not d.connected or d.worker is None or not d.safety.isChecked()
                 or not d.worker.isRunning()
-                or d.arm_sample is None or now > d.arm_sample[1]
-                or d.arm_sample[2] != self.signature):
-            self.cancel('连接、安全许可或新鲜输入无效', stop=True); return
+                or (d.arm_sample is not None and d.arm_sample[2] != self.signature)):
+            self.cancel('连接、安全许可或输入配置无效', stop=True); return
         if self.last_tick is not None and now-self.last_tick > .5:
             self.cancel('界面调度中断超过 0.5 秒', stop=True); return
         self.last_tick = now
+        if d.arm_sample is not None:
+            self.input_deadline = d.arm_sample[1]
+        if d.arm_sample is None or now > self.input_deadline:
+            # Countdown still requires fresh input. During motion the writer owns
+            # the existing 250 ms deceleration grace; never authorize follow here.
+            if (self.phase == 'countdown' or self.input_deadline is None
+                    or now > self.input_deadline + .25):
+                self.cancel('新鲜输入未在保护期限内恢复', stop=True); return
+            if self.phase == 'settling':
+                self.wait_until = now + self.values()['settle']
+            self.label.setText('输入短暂中断：减速等待新鲜输入 / IK；尚未允许自动跟随。')
+            return
+        if self.gap_until is not None:
+            if now > self.gap_until:
+                self.cancel('等待新 IK 超过短暂中断容忍期限', stop=True)
+            return
         if self.phase == 'countdown':
             if now < self.deadline:
                 self.label.setText(f'倒计时 {math.ceil(self.deadline-now)} 秒：请摆好姿态；尚未发送。')
@@ -148,9 +167,25 @@ class AutoStartSession:
 
     def progress(self, state):
         if not self.pending: return
+        if (state['mode'] == 'gap' and self.owner.busy
+                and self.phase in ('transition', 'settling', 'confirming')):
+            if self.gap_until is None:
+                self.gap_until = time.monotonic() + .25
+                self.owner._arm_event('auto_start_gap_wait', feedback=False)
+            self.label.setText('控制正在减速等待新 IK；保护期限内恢复后继续，硬超时仍取消。')
+            return
         if state['mode'] != 'active':
             self.cancel('控制进入 '+state['mode']+'：'+state.get('reason',''), stop=True)
-        elif self.phase == 'transition' and state.get('phase') == 'await_confirmation':
+            return
+        if self.gap_until is not None:
+            if time.monotonic() > self.gap_until:
+                self.cancel('等待新 IK 超过短暂中断容忍期限', stop=True); return
+            self.gap_until = None
+            if self.phase == 'settling':
+                self.wait_until = time.monotonic() + self.values()['settle']
+            self.owner._arm_event('auto_start_gap_recovered', feedback=False)
+            self.label.setText('新 IK 已恢复，继续本次已授权接管；仍须保持人体姿态。')
+        if self.phase == 'transition' and state.get('phase') == 'await_confirmation':
             self.phase = 'settling'; self.wait_until = time.monotonic() + self.values()['settle']
             self.owner._arm_event('auto_start_settling', seconds=self.values()['settle'], feedback=False)
         elif self.phase == 'confirming' and state.get('phase') == 'following':
