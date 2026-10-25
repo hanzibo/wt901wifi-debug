@@ -32,6 +32,10 @@ from optusbproj_ubuntu.real_robot_recording import Recorder
 from optusbproj_ubuntu.real_robot_transport import ElbowSerialWorker
 
 APP = QApplication.instance() or QApplication([])
+# Production run.main warms the JIT before creating the live window. Tests that
+# construct Window directly must honor that same initialization boundary.
+from jetson_teleop.fast_geometry import warmup
+warmup()
 
 
 def raw_config():
@@ -204,7 +208,7 @@ class GuiTests(ConfigTests):
         d = self.prepare_async_start()
         d.auto_start.phase = 'locking'; d.auto_start.authorized = True
         solver = Mock(); solver.solve.return_value = dict(target=[90.]*6)
-        with patch('jetson_teleop.window.SharedArmIK', return_value=solver), patch.object(
+        with patch('jetson_teleop.fast_geometry.prepare', side_effect=lambda s:s), patch('jetson_teleop.window.SharedArmIK', return_value=solver), patch.object(
                 RealRobotModesDialog, '_start') as original:
             d._start(automatic=True)
             self.wait_gui(lambda:d.ik_worker is None)
@@ -267,7 +271,7 @@ class GuiTests(ConfigTests):
             return dict(target=[90.]*6)
         solver = Mock(); solver.solve.side_effect = solve
         timer = QTimer(); timer.setInterval(5); timer.timeout.connect(lambda:ticks.append(1))
-        with patch('jetson_teleop.window.SharedArmIK', return_value=solver), patch.object(
+        with patch('jetson_teleop.fast_geometry.prepare', side_effect=lambda s:s), patch('jetson_teleop.window.SharedArmIK', return_value=solver), patch.object(
                 RealRobotModesDialog, '_start') as original:
             timer.start(); d._start()
             self.assertFalse(d.busy)

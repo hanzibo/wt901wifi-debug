@@ -145,11 +145,12 @@ class ControlDialog(RealRobotModesDialog):
             context = self._initial_context()
             _, baseline, limits, mode, left_palm, right_palm, left_offset, right_offset, _ = context
             def factory():
+                from .fast_geometry import prepare
                 if mode == 3:
-                    return BilateralIK(baseline, limits,
+                    return prepare(BilateralIK(baseline, limits,
                         palms={'left': left_palm, 'right': right_palm},
-                        offsets={'left': left_offset, 'right': right_offset})
-                return SharedArmIK(baseline, limits, palm=left_palm, offset=left_offset)
+                        offsets={'left': left_offset, 'right': right_offset}))
+                return prepare(SharedArmIK(baseline, limits, palm=left_palm, offset=left_offset))
             worker = InitialIKWorker(factory, deepcopy(self.arm_capture[0]), self)
             worker.context, worker.capture, worker.automatic = context, self.arm_capture, automatic
             worker.prepared.connect(self._initial_ready)
@@ -177,7 +178,8 @@ class ControlDialog(RealRobotModesDialog):
                     or (worker.automatic and not (self.auto_start.authorized
                                                    and self.auto_start.phase == 'preparing'))):
                 raise ValueError('初始求解期间配置、授权或参考变化，结果已丢弃')
-            self._arm_event('initial_ik_finished', solve_ms=prepared[2], asynchronous=True)
+            self._arm_event('initial_ik_finished', solve_ms=prepared[2], asynchronous=True,
+                            ik_backend='numba_geometry')
             # Re-enter all original start gates, including current input/pose
             # revalidation and manual modal confirmation. No worker writes UART.
             self.ik_worker = None
@@ -275,6 +277,8 @@ class Window(QtWidgets.QWidget):
         self.engine = PoseEngine(config['assignments'], config['axis_mappings'],
                                  {key: GYRO_TILT for key in config['assignments']})
         self.pose_service = None
+        self.diagnostic_log = None
+        self.last_diagnostic = None
         self.setWindowTitle('WT901 · Jetson 轻量双臂控制')
         layout = QtWidgets.QVBoxLayout(self)
         layout.addWidget(QtWidgets.QLabel('无视觉 / 无穿戴标定 / 无手指控制；航向仍会漂移。暂停不是物理急停。'))
@@ -332,6 +336,19 @@ class Window(QtWidgets.QWidget):
         button = QtWidgets.QPushButton('打开真机控制 / Checkpoint / 停止手势 / 回位')
         button.clicked.connect(self.show_control)
         layout.addWidget(button)
+        diagnostic_row = QtWidgets.QHBoxLayout()
+        self.diagnostic_button = QtWidgets.QPushButton('开始录制 IK / 收包诊断（不启动真机）')
+        self.diagnostic_button.clicked.connect(self.toggle_diagnostic)
+        self.diagnostic_seconds = QtWidgets.QSpinBox()
+        self.diagnostic_seconds.setRange(5,300); self.diagnostic_seconds.setValue(60)
+        self.diagnostic_seconds.setSuffix(' 秒')
+        diagnostic_row.addWidget(self.diagnostic_button,1)
+        diagnostic_row.addWidget(self.diagnostic_seconds)
+        layout.addLayout(diagnostic_row)
+        self.diagnostic_status = QtWidgets.QLabel('诊断未录制；先采集中立位，再录制实际动作，可不连接机器人。')
+        self.diagnostic_status.setWordWrap(True)
+        self.diagnostic_status.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        layout.addWidget(self.diagnostic_status)
         self.review.toggled.connect(self.invalidate_zero)
         self.timer = QtCore.QTimer(self)
         self.timer.setInterval(10)
@@ -347,6 +364,47 @@ class Window(QtWidgets.QWidget):
             self.pose_service.start()
             self.timer.setInterval(100)
             self.control.timer.setInterval(100)
+
+    def toggle_diagnostic(self):
+        if self.diagnostic_log is not None:
+            self.stop_diagnostic()
+            return
+        if self.pose_service is None:
+            self.diagnostic_status.setText('诊断录制需要后台采集服务。')
+            return
+        try:
+            from .diagnostics import DiagnosticLog
+            d = self.control
+            limits = d._limits()
+            sides = ('right','left') if d._bilateral_mode() else ('left',)
+            settings = dict(mode=d.checkpoints.mode(), config=deepcopy(self.config),
+                limits={s:vars(getattr(limits,s) if hasattr(limits,'sides') else limits) for s in sides},
+                palms={'left':d.shared_palm.isChecked(),'right':d.right_options[0].isChecked()},
+                offsets={'left':d._palm_offset(),'right':d._right_offset()},
+                profiles={s:load_profile(s) for s in sides}, backend='numba_geometry')
+            root = Path(__file__).resolve().parents[1]/'recordings'/'jetson_ik'
+            log = DiagnosticLog(root,settings,self.diagnostic_seconds.value())
+            try:self.pose_service.call(lambda:setattr(self.pose_service,'diagnostic',log))
+            except Exception:
+                log.close();raise
+            self.diagnostic_log = log
+            self.last_diagnostic = log.path
+            self.diagnostic_seconds.setEnabled(False)
+            self.diagnostic_button.setText('停止录制并保存 IK / 收包诊断')
+        except Exception as exc:self.diagnostic_status.setText('诊断启动失败：'+str(exc))
+
+    def stop_diagnostic(self):
+        log = self.diagnostic_log
+        if log is None:return
+        # Detach on the owning thread before closing the asynchronous writer.
+        if not self.pose_service.stopped.is_set() and not self.pose_service.error:
+            try:self.pose_service.call(lambda:setattr(self.pose_service,'diagnostic',None))
+            except RuntimeError:pass
+        log.close();self.diagnostic_log=None
+        state = log.error or ('记录不完整：队列丢弃 '+str(log.dropped)+' 条' if log.dropped else '已保存')
+        self.diagnostic_status.setText(f'{state}：{log.path}')
+        self.diagnostic_button.setText('开始录制 IK / 收包诊断（不启动真机）')
+        self.diagnostic_seconds.setEnabled(True)
 
     def choose_mode(self, index):
         d = self.control
@@ -470,6 +528,13 @@ class Window(QtWidgets.QWidget):
     def poll(self):
         self.acquire()
         now = time.monotonic()
+        log = self.diagnostic_log
+        if log is not None:
+            if now>=log.deadline or log.error:
+                self.stop_diagnostic()
+            else:
+                self.diagnostic_status.setText(
+                    f'录制中，剩余 {max(0,log.deadline-now):.0f} 秒；丢弃 {log.dropped} 条；{log.path}')
         if now >= self.next_display:
             lines = []
             ready_count = 0
@@ -522,5 +587,6 @@ class Window(QtWidgets.QWidget):
         super().closeEvent(event)
 
     def stop_backend(self):
+        self.stop_diagnostic()
         if self.pose_service is not None:
             self.pose_service.close()

@@ -88,6 +88,29 @@ class BackgroundTests(unittest.TestCase):
         self.assertEqual(completed,['left_hand'])
         self.assertNotEqual(signature,self.service.sample(('left',))[1])
 
+    def test_read_only_diagnostic_button_records_live_snapshot_without_uart(self):
+        from jetson_teleop.diagnostics import DiagnosticLog
+        from jetson_teleop.replay_ik import replay
+        w=self.window
+        def temporary_log(root,settings,seconds):
+            return DiagnosticLog(self.root/'diagnostics',settings,seconds)
+        with patch('jetson_teleop.diagnostics.DiagnosticLog',side_effect=temporary_log),patch(
+                'serial.Serial',side_effect=AssertionError('diagnostic must not open serial')):
+            w.diagnostic_button.click()
+            self.assertIsNotNone(w.diagnostic_log)
+            path=w.last_diagnostic
+            self.wait(lambda:w.diagnostic_log.queue.qsize()==0)
+            time.sleep(.15);APP.processEvents()
+            w.diagnostic_button.click()
+            self.assertIsNone(w.diagnostic_log)
+            self.assertIn('已保存',w.diagnostic_status.text())
+            self.assertIsNone(w.control.worker)
+        rows=[json.loads(l) for l in path.read_text().splitlines()]
+        for event in ('metadata','imu_packet','imu_parsed','pose_snapshot','recording_end'):
+            self.assertIn(event,[r['event'] for r in rows])
+        self.assertTrue(rows[-1]['complete'])
+        self.assertGreater(replay(path,max_frames=2)['frames'],0)
+
     def test_ap_and_zero_commands_execute_only_on_owner_thread(self):
         ids = []; key = self.window.config['assignments'][PARTS[0]]
         with patch.object(self.source,'switch_to_ap_udp',side_effect=lambda k:ids.append((k,threading.get_ident()))):

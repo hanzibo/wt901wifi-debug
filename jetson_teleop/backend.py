@@ -75,6 +75,7 @@ class PoseService:
         self.generation = 0
         self.listeners = []
         self.sinks = []
+        self.diagnostic = None  # Optional read-only recorder, independent of control logs.
         self.trace = deque(maxlen=2000)
         self.trace_overwritten = 0
         self.trace_counts = Counter()
@@ -161,6 +162,13 @@ class PoseService:
             self.trace_overwritten += 1
         self.trace.append(row)
         self.trace_counts[event] += 1
+        if event in ('imu_parsed', 'pose_poll', 'pose_feed'):
+            self.record_diagnostic(event, **values)
+
+    def record_diagnostic(self, event, **values):
+        log = self.diagnostic
+        if log is not None:
+            log.record(event, **values)
 
     def _observe(self, row):
         self._diagnose(row['event'], **{k:v for k,v in row.items() if k != 'event'})
@@ -194,6 +202,8 @@ class PoseService:
         catalog = dict(endpoints=self.source.seen_endpoints(max_age=float('inf')),
                        packets=dict(self.source._latest_packets), rates=self.source.receive_stats())
         detached = deepcopy(self.engine) if view else None
+        self.record_diagnostic('pose_snapshot', entries=entries,
+                               generation=self.generation, version=self.version+1)
         with self.lock:
             self.samples = entries
             self.catalog = catalog
@@ -226,6 +236,9 @@ class PoseService:
                     self.engine.feed(packet, stamp/1e9)
                     self._diagnose('pose_feed', device=packet.device_id,
                                    read_mono_ns=stamp, feed_ms=(time.monotonic()-feed_at)*1000)
+                    if self.diagnostic is not None:
+                        self.record_diagnostic('imu_packet', read_mono_ns=stamp,
+                                               packet=vars(packet))
                 now = time.monotonic()
                 self._diagnose('pose_poll', packets=len(packets), duration_ms=(now-before)*1000)
                 if now >= next_sample:
@@ -348,8 +361,13 @@ class LiveIK(QThread):
                 self.sequence += 1
                 self.writer.recorder.record('arm_ik_submit', sequence=self.sequence,
                                             deadline=deadline, backend=True, task_id=self.task_id)
+                self.service.record_diagnostic('ik_begin', sequence=self.sequence,
+                    task_id=self.task_id, payload=payload, deadline=deadline, version=version)
                 result = self.solver.solve(payload)
                 after = time.monotonic()
+                self.service.record_diagnostic('ik_solved', sequence=self.sequence,
+                    task_id=self.task_id, ik_ms=(after-before)*1000, deadline=deadline,
+                    solve_finished_at=after)
                 timing = dict(sequence=self.sequence, submitted_at=before, queue_ms=0.,
                               solve_finished_at=after, backend=True)
                 result.update(deadline=deadline, ik_ms=(after-before)*1000, timing=timing)
@@ -361,6 +379,8 @@ class LiveIK(QThread):
                     except StaleImuInput:
                         continue
                     if time.monotonic() > deadline:
+                        self.service.record_diagnostic('ik_expired', sequence=self.sequence,
+                                                       task_id=self.task_id, deadline=deadline)
                         self.writer.recorder.record('arm_ik_discard', stage='backend_after_solve', **result)
                         continue
                     delivered = time.monotonic()
@@ -369,6 +389,8 @@ class LiveIK(QThread):
                                                          task_id=self.task_id):
                         self.cancelled.set()
                         return
+                    self.service.record_diagnostic('ik_delivered', sequence=self.sequence,
+                        task_id=self.task_id, timing=timing, target=result['target'], deadline=deadline)
                     self.writer.recorder.record('arm_ik', **result)
                 self.result.emit(result)  # Optional display; never authorizes output.
         except SessionEnded:

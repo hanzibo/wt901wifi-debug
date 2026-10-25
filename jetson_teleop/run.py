@@ -96,6 +96,8 @@ def main():
     server = InstanceServer(name)
     source = window = None
     try:
+        from jetson_teleop.fast_geometry import warmup
+        warmup()  # CPU JIT must finish before acquiring live input or allowing motion.
         config = load(args.config)
         source = GuiUdpSource(args.listen_port, args.listen_ip)
         window = Window(source, config)
@@ -111,7 +113,7 @@ def main():
         server.requested.connect(show)
         show(action)
         return app.exec()
-    except (OSError, ValueError, RuntimeError) as exc:
+    except (OSError, ValueError, RuntimeError, ImportError) as exc:
         QMessageBox.critical(None, 'WT901 启动失败', str(exc)+'\n若 UDP 端口被占用，请关闭旧版接收程序后重试。')
         return 1
     finally:

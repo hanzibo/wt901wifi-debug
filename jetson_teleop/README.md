@@ -22,6 +22,38 @@ CMAKE_BUILD_PARALLEL_LEVEL=2 ~/.local/bin/uv pip install --python .venv/bin/pyth
 .venv/bin/python jetson_teleop/run.py
 ```
 
+### CPU IK 加速与只读诊断录制
+
+板子专用依赖增加 `numba==0.61.2`（由 uv 安装到本板 `.venv`）。
+启动界面前预热 JIT；首次可能多等约十余秒，缓存后会缩短。
+同源 IK 仍使用原 SciPy 分阶段优化、SO(3) 旋转对数和数值差分。
+只把 PoE 运动链与位置/正则残差编译为 float64 CPU 内核；不用 GPU、fastmath 或 float32。
+PC 原程序默认不启用该后端。编译或启动自检失败会阻止启动，不静默改用另一套算法。
+原有限位、速度/加速度限制及 250+250 ms 断流保护不变。
+
+主窗口底部新增“开始录制 IK / 收包诊断（不启动真机）”与录制秒数（默认60秒）。
+先按原流程归零臂段与手背，然后点击录制并做实际动作；**可以完全不连接机器人**。
+再次点击停止，或等待定时结束。界面显示文件路径：
+`recordings/jetson_ik/<时间-随机后缀>/diagnostic.jsonl`。
+录制复用已有 UDP 接收器，不开第二个端口、不发送设备命令、不赋予输出许可。
+内容包括 IMU 解析值/收包与内核时序、约50 Hz姿态快照、配置与场景几何。
+若正在控制，还记录实际 IK 求解、过期丢弃及目标提交耗时。
+未连接机器人时没有“真实控制 IK 耗时”，但可以离线回放姿态测量。
+写盘在独立线程，队列有界；丢弃或写盘失败会显示“记录不完整”，不改变控制保护。
+录制时请保持所选模式、checkpoint、掌向设置不变；需要更改时请分段录制。
+
+离线工具不会连接 UDP 或串口，也不会发送机器人指令：
+
+```bash
+.venv/bin/python -m jetson_teleop.benchmark_ik --frames 40 --profile
+.venv/bin/python -m jetson_teleop.replay_ik recordings/jetson_ik/<目录>/diagnostic.jsonl --max-frames 300
+```
+
+回放使用录制时的场景几何、限位、方向和掌向设置，对比原后端与编译后端。
+两套求解器均从中立初值开始，最多取前300个有效快照；不重建录制前的求解器历史。
+报告中位、95分位、最大耗时及两套结果的最大关节差异。
+这是离线计算基准，不是按真实时序运行的闭环测试，也不证明真机机械安全。
+
 也可运行 `bash jetson_teleop/launch.sh`。本目录附带 `WT901-Jetson.desktop`，
 其中路径针对当前板子用户 `mic-711on`；更换用户/仓库位置时须修改，不用于 PC 启动。
 

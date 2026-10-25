@@ -107,16 +107,22 @@ class SceneArm:
         if np.any(lo >= hi):
             raise ValueError('当前角度超出预览限位，请调整后重新连接')
         def residual(q,include_palm=True):
-            # Reuse one PoE chain instead of recalculating it for each point/frame.
-            prefixes=self.prefixes(q)
-            s,e,w=tuple((prefixes[i]@self.homes[i])[:3,3] for i in (1,3,5))
-            if positions is None:
-                r=[5*(e-s-self.lengths[0]*directions[0]),
-                   5*(w-e-self.lengths[1]*directions[1])]
+            compiled = getattr(self, '_compiled_geometry', None)
+            if compiled is not None:
+                # Optional board backend: only geometry/linear residuals are
+                # compiled. Keep SciPy's principal rotation logarithm unchanged.
+                base, prefixes = compiled(q, previous, directions, positions)
+                r = [base]
             else:
-                # Same positional priorities as X1: wrist 5, elbow 2.5.
-                r=[5*(w-positions[1]),2.5*(e-positions[0])]
-            r.extend([.06*(q-previous), .008*(q-self.neutral)])
+                prefixes = self.prefixes(q)
+                s,e,w=tuple((prefixes[i]@self.homes[i])[:3,3] for i in (1,3,5))
+                if positions is None:
+                    r=[5*(e-s-self.lengths[0]*directions[0]),
+                       5*(w-e-self.lengths[1]*directions[1])]
+                else:
+                    r=[5*(w-positions[1]),2.5*(e-positions[0])]
+                r.extend([.06*(q-previous), .008*(q-self.neutral)])
+            # Reuse one PoE chain instead of recalculating it for each point/frame.
             if segment_weight>0:
                 for key,target in (segment_rotations or {}).items():
                     r.append(segment_weight*Rotation.from_matrix(
