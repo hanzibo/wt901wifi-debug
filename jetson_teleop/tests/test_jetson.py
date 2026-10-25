@@ -125,6 +125,13 @@ class GuiTests(ConfigTests):
         self.window.zero('arms')
         self.window.zero('hands')
 
+    def age_devices(self, keys, seconds):
+        for key in keys:
+            device = self.window.engine.assignments[key]
+            ip, stamp = self.source._devices[device]
+            self.source._devices[device] = (ip, time.monotonic()-seconds)
+            self.window.engine.received_at[device] = time.monotonic()-seconds
+
     def test_no_auto_uart_and_explicit_fresh_zero(self):
         w = self.window; d = w.control
         self.assertEqual(w.preset_error, '')
@@ -158,8 +165,7 @@ class GuiTests(ConfigTests):
     def test_stale_input_does_not_allow_zero(self):
         self.feed(PARTS)
         w = self.window; w.review.setChecked(True)
-        for key in PARTS:
-            w.engine.received_at[w.engine.assignments[key]] -= 1
+        self.age_devices(PARTS, 3)
         w.zero(); self.assertFalse(w.zero_confirmed)
 
     def test_missing_preset_fails_closed(self):
@@ -213,13 +219,13 @@ class GuiTests(ConfigTests):
     def test_stale_group_at_deadline_does_not_capture(self):
         w = self.window; w.review.setChecked(True); self.feed(PARTS)
         w.zero_delays['hands'].setValue(3); w.zero('hands')
-        for key in PARTS:
-            w.engine.received_at[w.engine.assignments[key]] -= 1
+        self.age_devices(PARTS, 3)
         group, keys, deadline = w.zero_pending
         w.zero_pending = (group, keys, time.monotonic()-1)
         with patch.object(w.engine, 'zero') as capture:
             w.tick_zero(); capture.assert_not_called()
-        self.assertIn('采集失败', w.message.text())
+        self.assertIn('0/1', w.message.text())
+        self.assertIn('跳过', w.message.text())
         self.assertFalse(w.zero_confirmed)
 
     def test_mode_change_cancels_pending_and_uart_blocks_capture(self):
@@ -243,15 +249,15 @@ class GuiTests(ConfigTests):
         for name in ('vtk', 'pyvista', 'cv2', 'torch', 'mediapipe', 'pyqtgraph'):
             self.assertNotIn(name, sys.modules)
 
-    def test_learning_stages_gate_capture_and_render_real_filter_state(self):
+    def test_learning_stages_are_display_only_for_neutral_capture(self):
         w = self.window; w.review.setChecked(True)
         device = w.engine.assignments[PARTS[0]]
         self.assertFalse(w.engine.tilt_status(device)['gravity_ready'])
         self.feed(PARTS[:3], learn=False)
         with patch.object(w.engine, 'zero') as capture:
-            w.zero('arms'); capture.assert_not_called()
+            w.zero('arms'); self.assertEqual(capture.call_count, 2)
         self.assertIsNone(w.zero_pending)
-        self.assertIn('学习未完成', w.message.text())
+        self.assertIn('2/2', w.message.text())
         for _ in range(20): self.feed(PARTS[:3], learn=False)
         state = w.engine.tilt_status(device)
         self.assertTrue(state['gravity_ready'])
@@ -269,7 +275,7 @@ class GuiTests(ConfigTests):
         self.zero_both(); self.assertTrue(w.zero_confirmed)
         self.assertTrue(w.engine.tilt_status(device)['bias_ready'])  # zero is not reset.
 
-    def test_learning_is_group_specific_and_stale_ready_is_blocked(self):
+    def test_capture_allows_one_second_age_but_skips_over_two_seconds(self):
         w = self.window; w.review.setChecked(True)
         self.feed(PARTS[:2])
         w.zero('arms')
@@ -279,13 +285,31 @@ class GuiTests(ConfigTests):
         self.feed(PARTS[:3]); self.zero_both()
         self.assertTrue(w.zero_confirmed)
         device = w.engine.assignments[PARTS[0]]
-        w.engine.received_at[device] -= 1
+        self.age_devices(PARTS[:3], 1)
         self.assertTrue(w.engine.tilt_status(device)['bias_ready'])
+        self.zero_both(); self.assertTrue(w.zero_confirmed)
+        self.age_devices(PARTS[:1], 3)
+        w.zero('arms')
+        self.assertFalse(w.zero_confirmed)
+        self.assertNotIn(PARTS[0], w.zeroed_parts)
+        self.assertIn(PARTS[1], w.zeroed_parts)
+        self.assertIn('1/2', w.message.text())
+        self.assertIn('跳过', w.message.text())
         w.next_display = 0; w.poll()
-        self.assertFalse(w.zero_button.isEnabled())
+        self.assertTrue(w.zero_button.isEnabled())
         self.assertIn('超时', w.devices.text())
 
-    def test_motion_at_deadline_rejects_capture_but_retains_learning(self):
+    def test_online_device_without_pose_is_skipped(self):
+        w = self.window; w.review.setChecked(True)
+        self.feed(PARTS[:2], learn=False)
+        del w.engine.current[w.engine.assignments[PARTS[0]]]
+        with patch.object(w.engine, 'zero') as capture:
+            w.zero('arms')
+            capture.assert_called_once_with(PARTS[1])
+        self.assertIn('1/2', w.message.text())
+        self.assertFalse(w.zero_confirmed)
+
+    def test_motion_at_deadline_does_not_block_pc_style_capture(self):
         w = self.window; w.review.setChecked(True); self.feed(PARTS)
         w.zero_delays['arms'].setValue(3); w.zero('arms')
         device = w.engine.assignments[PARTS[0]]
@@ -306,8 +330,8 @@ class GuiTests(ConfigTests):
         group, keys, deadline = w.zero_pending
         w.zero_pending = (group, keys, time.monotonic()-1)
         with patch.object(w.engine, 'zero') as capture:
-            w.tick_zero(); capture.assert_not_called()
-        self.assertIn('尚未静止', w.message.text())
+            w.tick_zero(); self.assertEqual(capture.call_count, 2)
+        self.assertIn('2/2', w.message.text())
         self.assertFalse(w.zero_confirmed)
 
     def test_main_mode_selector_syncs_and_resets_neutral(self):

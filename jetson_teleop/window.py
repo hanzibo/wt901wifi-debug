@@ -259,19 +259,12 @@ class Window(QtWidgets.QWidget):
         return [key for key in self.config['assignments']
                 if self.control._bilateral_mode() or key.startswith('left_')]
 
-    def zero_blockers(self, keys, require_static=False):
-        problems = []
-        for key in keys:
-            device = self.engine.assignments[key]
-            state = self.engine.tilt_status(device)
-            label = PARTS[PART_BY_KEY[key]].label
-            if not self.engine.is_live(device, time.monotonic(), .25):
-                problems.append(label+'数据未到 / 超过250 ms')
-            elif not state['gravity_ready'] or not state['bias_ready']:
-                problems.append(label+'重力参考 / 零偏学习未完成')
-            elif require_static and not state['static']:
-                problems.append(label+'尚未静止')
-        return problems
+    def zero_eligible(self, keys):
+        # Match PC BodyWindow._update_zero_countdown: recent UDP + current pose.
+        # Filter initialization and stillness are informative, not zero gates.
+        online = self.source.seen_devices(max_age=2.0)
+        return [key for key in keys if self.engine.assignments[key] in online
+                and self.engine.assignments[key] in self.engine.current]
 
     def zero(self, group='arms'):
         if group not in self.zero_buttons or self.zero_pending is not None:
@@ -280,10 +273,6 @@ class Window(QtWidgets.QWidget):
             self.message.setText('请先断开串口、成功加载预设并核对配置。')
             return
         keys = [key for key in self.active_parts() if key.endswith('_hand') == (group == 'hands')]
-        problems = self.zero_blockers(keys)
-        if problems:
-            self.message.setText('不能开始采集：'+'；'.join(problems)+'。请保持本组设备静止，等待学习完成。')
-            return
         self.zeroed_parts.difference_update(keys)
         self.zero_confirmed = False
         self.control._controls()
@@ -307,18 +296,17 @@ class Window(QtWidgets.QWidget):
         self.zero_pending = None
         self.zero_timer.stop()
         self.zero_cancel.setEnabled(False)
-        problems = self.zero_blockers(keys, require_static=True)
-        if problems:
-            self.message.setText(f'{label}采集失败：'+'；'.join(problems)+'。请保持静止后重新采集。')
-            return
-        for key in keys:
+        completed = self.zero_eligible(keys)
+        for key in completed:
             self.engine.zero(key)
-        self.zeroed_parts.update(keys)
+        self.zeroed_parts.update(completed)
         self.zero_confirmed = set(self.active_parts()).issubset(self.zeroed_parts)
         self.control._controls()
-        self.message.setText(f'{label} {len(keys)} 台中立参考已采集。'+
+        skipped = [PARTS[PART_BY_KEY[key]].label for key in keys if key not in completed]
+        self.message.setText(f'{label} {len(completed)}/{len(keys)} 台中立参考已采集。'+
+                             ('已跳过离线 / 无姿态设备：'+ '、'.join(skipped)+'。' if skipped else '')+
                              ('两组均已完成，可打开控制面板；仍须上电确认、安全许可及明确启动。'
-                              if self.zero_confirmed else '请继续采集另一组；未完成两组前禁止连接串口。'))
+                              if self.zero_confirmed else '请补齐两组所有设备的中立参考；未完成前禁止连接串口。'))
 
     def show_control(self):
         self.control.show()
@@ -352,14 +340,12 @@ class Window(QtWidgets.QWidget):
             self.devices.setText('\n'.join(lines))
             self.learning_summary.setText(
                 f'陀螺＋加计纠倾斜已启用；本模式初始化就绪 {ready_count}/{len(self.active_parts())} 台。'
-                '先保持静止至重力与零偏均就绪，再定时采集中立位；结束瞬间本组须静止。'
+                '建议静止完成学习；中立位采集按 PC 规则：最近2秒在线且有姿态，未在线设备跳过。'
                 '学习就绪不表示停止纠倾斜，快速运动时加计权重会自动降低。')
             for group, button in self.zero_buttons.items():
-                keys = [key for key in self.active_parts() if key.endswith('_hand') == (group == 'hands')]
-                problems = self.zero_blockers(keys)
                 button.setEnabled(self.control.worker is None and self.review.isChecked()
-                                  and not self.preset_error and self.zero_pending is None and not problems)
-                button.setToolTip('；'.join(problems) if problems else '本组初始化已就绪，倒计时结束仍须保持静止。')
+                                  and not self.preset_error and self.zero_pending is None)
+                button.setToolTip('到时采集本组最近2秒在线且有姿态的设备；请保持中立姿态，不作严格静止拦截。')
                 self.zero_delays[group].setEnabled(self.zero_pending is None)
             self.review.setEnabled(self.control.worker is None)
             self.preview.update()
