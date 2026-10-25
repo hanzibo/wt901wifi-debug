@@ -129,7 +129,7 @@ class GuiTests(ConfigTests):
             (self.path.parent/(mode+'.json')).write_text(json.dumps(checkpoint(mode)), encoding='utf-8')
         self.source = GuiUdpSource(0, '127.0.0.1')
         self.addCleanup(self.source.close)
-        self.window = Window(self.source, self.read(raw_config()))
+        self.window = Window(self.source, self.read(raw_config()), background=False)
         for delay in self.window.zero_delays.values():
             delay.setValue(0)
         self.window.timer.stop(); self.window.control.timer.stop()

@@ -228,9 +228,14 @@ class ElbowSerialWorker(QThread):
                 return
             self.latest = (theta, valid_until)
 
-    def update_arm_target(self, target, valid_until, diagnostic=None):
+    def update_arm_target(self, target, valid_until, diagnostic=None, *, task_id=None):
         requested_at = time.monotonic()
         with self.lock:
+            if task_id is not None and (task_id != self.task_id or self.pause_reason
+                    or self.quit_requested or not self.active or self.task != 'follow'
+                    or (math.isfinite(valid_until) and time.monotonic() > valid_until)
+                    or (self.last_state is not None and self.last_state['mode'] in ('paused','braking'))):
+                return False
             if self.task != 'follow' or not self.active:
                 return
             if (len(target) != getattr(self, 'arm_target_size', 6) or not all(math.isfinite(x) for x in target)
@@ -246,6 +251,7 @@ class ElbowSerialWorker(QThread):
                                      (now-self.target_received_at)*1000)
             self.target_received_at = now
             self.recorder.record('arm_target_received', deadline=valid_until, timing=self.target_timing)
+            return True
 
     def pause(self, reason='用户暂停'):
         with self.lock:

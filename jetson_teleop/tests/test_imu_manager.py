@@ -23,7 +23,7 @@ class ManagerTests(unittest.TestCase):
         (root/'config.json').write_text(json.dumps(raw_config()))
         self.source = GuiUdpSource(0,'127.0.0.1')
         self.addCleanup(self.source.close)
-        self.window = Window(self.source, load(root/'config.json'))
+        self.window = Window(self.source, load(root/'config.json'), background=False)
         self.window.timer.stop(); self.window.control.timer.stop()
         self.addCleanup(self.window.close)
         with patch.object(ImuManager, 'refresh_network'):

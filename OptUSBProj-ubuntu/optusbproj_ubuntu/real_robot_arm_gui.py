@@ -491,9 +491,7 @@ class RealRobotModesDialog(RealRobotDialog):
                 self.arm_history.popleft()
             self.input_label.setText(f'{len(sample["device_ages_ms"])} 设备有效，最大年龄 {max(sample["device_ages_ms"].values()):.0f} ms；手掌只分配给各侧 5/6')
             if self.busy and self.arm_capture is not None and signature == self.arm_capture[2] and self.ik_worker is not None:
-                if self._shared_mode() and self.shared_phase != 'following':
-                    self._pose_guard(self.arm_capture[0], side, '过渡期间人体超差')
-                self.ik_worker.submit(side, deadline, self.input_timing)
+                self._submit_arm_sample(side, deadline)
             self._arm_event('arm_input_timing', valid=True, deadline=deadline, **self.input_timing)
         except Exception as exc:
             self._arm_event('arm_input_timing', valid=False, reason=str(exc), **self.input_timing)
@@ -508,6 +506,11 @@ class RealRobotModesDialog(RealRobotDialog):
         if self.auto_start is not None:
             self.auto_start.tick()
         self._controls()
+
+    def _submit_arm_sample(self, side, deadline):
+        if self._shared_mode() and self.shared_phase != 'following':
+            self._pose_guard(self.arm_capture[0], side, '过渡期间人体超差')
+        self.ik_worker.submit(side, deadline, self.input_timing)
 
     def _capture(self):
         if self.end_session is not None and self.end_session.await_home:
@@ -622,7 +625,7 @@ class RealRobotModesDialog(RealRobotDialog):
             else:
                 control = ArmControl(self.origin, limits)
                 solver = RelativeArmIK(self.arm_capture[0], self.origin, limits)
-            worker = ArmIKWorker(solver, self, recorder=self.worker.recorder)
+            worker = self._make_ik_worker(solver)
             worker.result.connect(self._ik_result)
             worker.failed.connect(self._ik_failed)
             worker.finished.connect(self._ik_finished)
@@ -645,6 +648,9 @@ class RealRobotModesDialog(RealRobotDialog):
         except Exception as exc:
             self._start_rejected('initialization_failed', f'启动初始化失败：{exc}', data)
         self._controls()
+
+    def _make_ik_worker(self, solver):
+        return ArmIKWorker(solver, self, recorder=self.worker.recorder)
 
     def _ik_result(self, result):
         if self.sender() is not self.ik_worker or not self.busy or self.arm_capture is None:
@@ -673,6 +679,9 @@ class RealRobotModesDialog(RealRobotDialog):
         result['timing'] = timing
         self.worker.update_arm_target(result['target'], result['deadline'], timing)
         self.worker.recorder.record('arm_ik', **result)
+        self._display_ik_result(result)
+
+    def _display_ik_result(self, result):
         if not self._display_due('ik'):
             return
         orientation = result['orientation_error_deg']

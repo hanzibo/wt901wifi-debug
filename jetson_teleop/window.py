@@ -18,6 +18,7 @@ from optusbproj_ubuntu.real_robot_shared import SharedArmIK
 from optusbproj_ubuntu.real_robot_bilateral import BilateralIK
 from optusbproj_ubuntu.real_robot_timing import acquisition_poll, acquisition_feed
 from .initial_ik import InitialIKWorker
+from .backend import PoseService, LiveIK
 
 
 class ControlDialog(RealRobotModesDialog):
@@ -81,11 +82,37 @@ class ControlDialog(RealRobotModesDialog):
         return ready if self.manual.isChecked() else (False, False)
 
     def _poll(self):
-        # Drain the ONE existing socket before reading the control snapshot.
-        # Both timers run in the GUI thread; no concurrent PoseEngine access.
+        # Production reads a detached view; legacy tests can still drain inline.
         if hasattr(self.viewer, 'engine'):
             self.viewer.acquire()
         super()._poll()
+
+    def _read_arm_sample(self):
+        service = getattr(self.viewer, 'pose_service', None)
+        if service is None:
+            return super()._read_arm_sample()
+        sample, signature, _ = service.sample(self._selected_sides())
+        return sample, signature, sample['sides'] if self._bilateral_mode() else sample['sides']['left']
+
+    def _make_ik_worker(self, solver):
+        service = getattr(self.viewer, 'pose_service', None)
+        if service is None:
+            return super()._make_ik_worker(solver)
+        return LiveIK(solver, service, self.worker, self._selected_sides(),
+                      self.arm_capture, self._transition_tolerance(), self)
+
+    def _submit_arm_sample(self, side, deadline):
+        if isinstance(self.ik_worker, LiveIK):
+            return  # The backend validates against the writer's actual phase.
+        super()._submit_arm_sample(side, deadline)
+
+    def _ik_result(self, result):
+        if isinstance(self.sender(), LiveIK):
+            # This is display only. Publication and all guards ran in the backend.
+            if self.sender() is self.ik_worker and self.busy:
+                self._display_ik_result(result)
+            return
+        super()._ik_result(result)
 
     def _ready(self):
         self.worker.recorder.flush_interval = .1
@@ -235,7 +262,7 @@ class Window(QtWidgets.QWidget):
     replay_mode = False
     control_display_interval = .1
 
-    def __init__(self, source, config):
+    def __init__(self, source, config, *, background=True):
         super().__init__()
         self.source, self.config = source, config
         self.zero_confirmed = False
@@ -247,6 +274,7 @@ class Window(QtWidgets.QWidget):
         self.preset_error = ''
         self.engine = PoseEngine(config['assignments'], config['axis_mappings'],
                                  {key: GYRO_TILT for key in config['assignments']})
+        self.pose_service = None
         self.setWindowTitle('WT901 · Jetson 轻量双臂控制')
         layout = QtWidgets.QVBoxLayout(self)
         layout.addWidget(QtWidgets.QLabel('无视觉 / 无穿戴标定 / 无手指控制；航向仍会漂移。暂停不是物理急停。'))
@@ -312,6 +340,13 @@ class Window(QtWidgets.QWidget):
         self.next_display = 0.
         self.sync_mode()
         self.resize(900, 710)
+        if background:
+            self.pose_service = PoseService(source, self.engine)
+            self.source = self.pose_service.proxy
+            self.engine = self.pose_service.engine_view()
+            self.pose_service.start()
+            self.timer.setInterval(100)
+            self.control.timer.setInterval(100)
 
     def choose_mode(self, index):
         d = self.control
@@ -395,9 +430,17 @@ class Window(QtWidgets.QWidget):
         self.zero_pending = None
         self.zero_timer.stop()
         self.zero_cancel.setEnabled(False)
-        completed = self.zero_eligible(keys)
-        for key in completed:
-            self.engine.zero(key)
+        if self.pose_service is not None:
+            try:
+                completed = self.pose_service.zero(keys)
+                self.acquire()
+            except RuntimeError as exc:
+                self.message.setText('中立位采集失败：'+str(exc))
+                return
+        else:
+            completed = self.zero_eligible(keys)
+            for key in completed:
+                self.engine.zero(key)
         self.zeroed_parts.update(completed)
         self.zero_confirmed = set(self.active_parts()).issubset(self.zeroed_parts)
         self.control._controls()
@@ -412,6 +455,9 @@ class Window(QtWidgets.QWidget):
         self.control.raise_()
 
     def acquire(self):
+        if self.pose_service is not None:
+            self.engine = self.pose_service.engine_view()
+            return
         started = time.monotonic()
         acquisition_poll(self, started)
         packets = self.source.poll_timed()
@@ -472,4 +518,9 @@ class Window(QtWidgets.QWidget):
             event.ignore()
             return
         self.timer.stop()
+        self.stop_backend()
         super().closeEvent(event)
+
+    def stop_backend(self):
+        if self.pose_service is not None:
+            self.pose_service.close()

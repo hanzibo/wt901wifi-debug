@@ -94,7 +94,7 @@ def main():
     if forward(name, action):
         return 0
     server = InstanceServer(name)
-    source = None
+    source = window = None
     try:
         config = load(args.config)
         source = GuiUdpSource(args.listen_port, args.listen_ip)
@@ -116,6 +116,8 @@ def main():
         return 1
     finally:
         server.close()
+        if window is not None:
+            window.stop_backend()
         if source is not None:
             source.close()
 
