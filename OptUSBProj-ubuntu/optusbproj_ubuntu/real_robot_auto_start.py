@@ -154,6 +154,8 @@ class AutoStartSession:
             if d.arm_capture is None:
                 self.cancel('倒计时结束时人体未稳定 ≥0.5 秒或目标锁定失败'); return
             d._start(automatic=True)
+            if self.phase == 'preparing':
+                return  # Optional board-only asynchronous initial IK; no output yet.
             if not d.busy:
                 self.cancel('接管启动失败，请检查启动诊断'); return
             self.phase = 'transition'

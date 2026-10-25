@@ -416,6 +416,18 @@ class RealRobotModesDialog(RealRobotDialog):
         if self.worker is not None:
             self.worker.recorder.record(event, **data)
 
+    def _display_due(self, channel, state=None):
+        """Optional UI-only throttle. Never gates publication or safety checks."""
+        interval = getattr(self.viewer, 'control_display_interval', 0.)
+        now = time.monotonic()
+        cache = getattr(self, '_display_times', {})
+        previous, signature = cache.get(channel, (0., None))
+        if interval and now-previous < interval and signature == state:
+            return False
+        cache[channel] = (now, state)
+        self._display_times = cache
+        return True
+
     def _ready(self):
         super()._ready()
         self._detach_acquisition_trace()
@@ -536,7 +548,7 @@ class RealRobotModesDialog(RealRobotDialog):
         return dict(human_points=np.asarray(payload['points']).tolist(), human_hand=payload['hand'].tolist(),
                     human_segments={k:v.tolist() for k,v in payload['rotations'].items()})
 
-    def _start(self, *, automatic=False):
+    def _start(self, *, automatic=False, _prepared=None):
         if not automatic and self.auto_start is not None and self.auto_start.pending:
             return
         if automatic and not (self.auto_start.authorized and self.auto_start.phase == 'locking'):
@@ -574,12 +586,13 @@ class RealRobotModesDialog(RealRobotDialog):
                     raise ValueError('请先断开独立仿真预览，避免两个写入者')
                 if self.mirror_check.isChecked() and not self.mirror_ready:
                     raise ValueError('仿真镜像尚未就绪')
-                solver = (BilateralIK(self.origin, limits,
+                solver = (_prepared[0] if _prepared is not None else
+                          BilateralIK(self.origin, limits,
                             palms={'left':self.shared_palm.isChecked(), 'right':self.right_options[0].isChecked()},
                             offsets={'left':self._palm_offset(),'right':self._right_offset()})
                           if self._bilateral_mode() else
                           SharedArmIK(self.origin, limits, palm=self.shared_palm.isChecked(), offset=self._palm_offset()))
-                initial = solver.solve(self.arm_capture[0])
+                initial = _prepared[1] if _prepared is not None else solver.solve(self.arm_capture[0])
                 control = SharedArmControl(self.origin, limits, initial['target'])
                 if self._shared_mode():
                     control.gesture = self.end_session.gesture(limits)
@@ -660,6 +673,8 @@ class RealRobotModesDialog(RealRobotDialog):
         result['timing'] = timing
         self.worker.update_arm_target(result['target'], result['deadline'], timing)
         self.worker.recorder.record('arm_ik', **result)
+        if not self._display_due('ik'):
+            return
         orientation = result['orientation_error_deg']
         orientation_text = '未启用' if orientation is None else f'{orientation:.1f}°'
         names = (tuple(f'R{i+1}' for i in range(6))+tuple(f'L{i+1}' for i in range(6))
@@ -713,6 +728,9 @@ class RealRobotModesDialog(RealRobotDialog):
             self.origin = self.last_frame
             self.arm_capture = None
             self.safety.setChecked(False)
+        if not self._display_due('progress', (state['mode'], self.shared_phase)):
+            self._controls()
+            return
         self.status.setText({'active':'勾选轴随动（指令，不是实际角度）', 'braking':'参与轴统一指令侧减速',
                              'gap':'输入短暂中断：减速等待有效新解（最多额外 250 ms）',
                              'paused':'已暂停；重新确认安全并采集参考'}[state['mode']]+ '\n' +

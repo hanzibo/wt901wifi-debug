@@ -8,6 +8,8 @@ import struct
 import sys
 import tempfile
 import time
+import threading
+import pty
 import unittest
 from unittest.mock import Mock, patch
 
@@ -20,9 +22,14 @@ from jetson_teleop.run import smoke
 from wt901.gui_udp import GuiUdpSource
 from optusbproj_ubuntu.real_robot_checkpoints import create, MODES as SIDES
 from optusbproj_ubuntu.real_robot_arm import ArmLimits
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtGui import QCloseEvent
 from jetson_teleop.window import Window, Preview
+from optusbproj_ubuntu.real_robot_arm_gui import RealRobotModesDialog
+from optusbproj_ubuntu.real_robot_protocol import encode
+from PySide6.QtCore import QTimer
+from optusbproj_ubuntu.real_robot_recording import Recorder
+from optusbproj_ubuntu.real_robot_transport import ElbowSerialWorker
 
 APP = QApplication.instance() or QApplication([])
 
@@ -61,6 +68,26 @@ def packet(device, tick=0, gyro=0):
     struct.pack_into('<h', frame, 26, gyro)
     frame[52:] = b'\r\n'
     return bytes(frame)
+
+
+class RecordingTests(unittest.TestCase):
+    def test_batched_telemetry_flushes_when_idle_and_closes_without_loss(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'batch.jsonl'
+            recorder = Recorder(path); recorder.flush_interval = .1
+            try:
+                for i in range(30): recorder.record('telemetry', sequence=i)
+                until = time.monotonic()+2
+                while len(path.read_text().splitlines()) < 30 and time.monotonic() < until:
+                    time.sleep(.01)
+                self.assertEqual(len(path.read_text().splitlines()), 30)
+                recorder.record('error', message='test critical flush')
+            finally:
+                recorder.close()
+            self.assertIsNone(recorder.error)
+            rows = [json.loads(row) for row in path.read_text().splitlines()]
+            self.assertEqual([row['sequence'] for row in rows[:-1]], list(range(30)))
+            self.assertEqual(rows[-1]['event'], 'error')
 
 
 class ConfigTests(unittest.TestCase):
@@ -131,6 +158,159 @@ class GuiTests(ConfigTests):
             ip, stamp = self.source._devices[device]
             self.source._devices[device] = (ip, time.monotonic()-seconds)
             self.window.engine.received_at[device] = time.monotonic()-seconds
+
+    def prepare_async_start(self):
+        w = self.window; d = w.control
+        w.review.setChecked(True); self.feed(PARTS); self.zero_both()
+        d._poll()
+        self.assertIsNotNone(d.arm_sample)
+        d.arm_capture = copy.deepcopy(d.arm_sample)
+        d.worker = Mock(active=False, pending_start=None, quit_requested=False)
+        d.worker.return_snapshot.return_value = (None, None, False)
+        d.worker.isRunning.return_value = True
+        d.origin = d.last_frame = encode([90.]*15, [0]*10)
+        d.connected = True; d.safety.setChecked(True)
+        d._poll = Mock()
+        # This tests the async preparation, not a physical transport.
+        self.addCleanup(self.cleanup_async_start)
+        return d
+
+    def cleanup_async_start(self):
+        d = self.window.control
+        d.auto_start.cancel('test cleanup')
+        if d.ik_worker is not None:
+            d.ik_worker.shutdown(); d.ik_worker.wait(3000)
+            APP.processEvents()
+        d.worker = None; d.ik_worker = None; d.busy = False
+
+    def wait_gui(self, predicate, timeout=3):
+        until = time.monotonic()+timeout
+        while not predicate() and time.monotonic() < until:
+            APP.processEvents(); time.sleep(.002)
+        self.assertTrue(predicate())
+
+    def test_display_throttle_does_not_drop_valid_target_publication(self):
+        d = self.prepare_async_start(); d.busy = True
+        d.ik_worker = Mock()
+        result = dict(target=[90.]*6, deadline=time.monotonic()+1.,
+                      orientation_error_deg=None, position_error_mm=0., ik_ms=1.)
+        with patch.object(d, 'sender', return_value=d.ik_worker), patch.object(
+                d, '_read_arm_sample', return_value=(None,d.arm_capture[2],None)), patch.object(
+                    d, '_display_due', return_value=False):
+            d._ik_result(copy.deepcopy(result)); d._ik_result(copy.deepcopy(result))
+        self.assertEqual(d.worker.update_arm_target.call_count, 2)
+
+    def test_async_auto_rejected_by_original_guards_consumes_authorization(self):
+        d = self.prepare_async_start()
+        d.auto_start.phase = 'locking'; d.auto_start.authorized = True
+        solver = Mock(); solver.solve.return_value = dict(target=[90.]*6)
+        with patch('jetson_teleop.window.SharedArmIK', return_value=solver), patch.object(
+                RealRobotModesDialog, '_start') as original:
+            d._start(automatic=True)
+            self.wait_gui(lambda:d.ik_worker is None)
+            original.assert_called_once()
+            self.assertFalse(d.auto_start.authorized)
+            self.assertFalse(d.auto_start.pending)
+            d.worker.begin_control.assert_not_called()
+
+    def test_board_async_automatic_takeover_virtual_uart_both_modes(self):
+        w = self.window; d = w.control
+        for mode in (2, 3):
+            with self.subTest(mode=mode):
+                d.mode_select.setCurrentIndex(mode)
+                w.review.setChecked(True); self.feed(PARTS); self.zero_both(); d._poll()
+                side = copy.deepcopy(d.arm_sample[0])
+                sides = side if mode == 3 else {'left':side}
+                def sample(*args):
+                    return dict(at=time.monotonic(), sides=copy.deepcopy(sides),
+                                device_ages_ms={'u':1., 'f':1., 'h':1.}), ('stable',)
+                master, slave = pty.openpty()
+                path = self.path.parent/f'virtual-{mode}.jsonl'
+                try:
+                    with patch('optusbproj_ubuntu.real_robot_arm_gui.pose_sample', side_effect=sample), patch.object(
+                            QMessageBox, 'warning', return_value=QMessageBox.Yes):
+                        d.shared_palm.setChecked(False); d.right_options[0].setChecked(False)
+                        for rows in (d.axis_rows, d.right_axis_rows):
+                            for i,row in enumerate(rows):
+                                row[0].setChecked(i == 3)
+                        d.auto_start.widgets['countdown'].setValue(1.)
+                        d.auto_start.widgets['settle'].setValue(.1)
+                        worker = ElbowSerialWorker(os.ttyname(slave), Recorder(path), d)
+                        d.worker = worker
+                        for signal, slot in ((worker.ready,d._ready), (worker.progress,d._progress),
+                                             (worker.sent,d._sent), (worker.failed,d._failed),
+                                             (worker.finished,d._finished)):
+                            signal.connect(slot)
+                        writes = []; worker.sent.connect(writes.append)
+                        d.timer.start(20); worker.start(); self.wait_gui(lambda:d.connected)
+                        baseline = encode([90.]*15, [0]*10)
+                        d.origin = d.last_frame = baseline; d.safety.setChecked(True)
+                        self.wait_gui(lambda:d.arm_sample is not None)
+                        d.auto_start.arm(); self.assertEqual(writes, [])
+                        self.wait_gui(lambda:d.shared_phase == 'following', timeout=15)
+                        self.assertEqual(writes[0], baseline)
+                        d._pause('virtual test'); self.wait_gui(lambda:not d.busy and d.ik_worker is None)
+                        d._disconnect(); self.wait_gui(lambda:d.worker is None)
+                        events = [json.loads(s)['event'] for s in path.read_text().splitlines()]
+                        for name in ('initial_ik_started','initial_ik_finished','auto_start_completed'):
+                            self.assertEqual(events.count(name), 1)
+                finally:
+                    d.timer.stop(); d._disconnect()
+                    self.wait_gui(lambda:d.worker is None and d.ik_worker is None)
+                    os.close(master); os.close(slave)
+
+    def test_initial_ik_background_keeps_gui_responsive_and_reuses_result(self):
+        d = self.prepare_async_start()
+        threads = []; ticks = []
+        def solve(side):
+            threads.append(threading.get_ident()); time.sleep(.12)
+            return dict(target=[90.]*6)
+        solver = Mock(); solver.solve.side_effect = solve
+        timer = QTimer(); timer.setInterval(5); timer.timeout.connect(lambda:ticks.append(1))
+        with patch('jetson_teleop.window.SharedArmIK', return_value=solver), patch.object(
+                RealRobotModesDialog, '_start') as original:
+            timer.start(); d._start()
+            self.assertFalse(d.busy)
+            d.worker.begin_control.assert_not_called()
+            self.wait_gui(lambda:original.called)
+            timer.stop()
+            self.assertGreater(len(ticks), 3)
+            self.assertNotEqual(threads[0], threading.get_ident())
+            self.assertIs(original.call_args.kwargs['_prepared'][0], solver)
+            self.assertEqual(solver.solve.call_count, 1)
+
+    def test_cancelled_initial_ik_never_enters_original_start(self):
+        d = self.prepare_async_start()
+        event = threading.Event()
+        solver = Mock()
+        solver.solve.side_effect = lambda side:(event.wait(.5) or dict(target=[90.]*6))
+        with patch('jetson_teleop.window.SharedArmIK', return_value=solver), patch.object(
+                RealRobotModesDialog, '_start') as original:
+            d._start(); worker = d.ik_worker
+            d._invalidate_capture(); event.set()
+            self.wait_gui(lambda:d.ik_worker is None)
+            self.assertTrue(worker.cancelled.is_set())
+            original.assert_not_called(); d.worker.begin_control.assert_not_called()
+
+    def test_initial_ik_context_change_discards_result(self):
+        d = self.prepare_async_start()
+        solver = Mock(); solver.solve.side_effect = lambda side:(time.sleep(.05) or dict(target=[90.]*6))
+        with patch('jetson_teleop.window.SharedArmIK', return_value=solver), patch.object(
+                RealRobotModesDialog, '_start') as original:
+            d._start()
+            # Even a programmatic change without a UI signal must be rejected.
+            d.origin = None
+            self.wait_gui(lambda:d.ik_worker is None)
+            original.assert_not_called(); d.worker.begin_control.assert_not_called()
+
+    def test_control_poll_drains_existing_socket_before_pose_read(self):
+        with patch.object(self.window, 'acquire') as read, patch.object(
+                RealRobotModesDialog, '_poll') as control:
+            order = []
+            read.side_effect = lambda:order.append('read')
+            control.side_effect = lambda:order.append('control')
+            self.window.control._poll()
+            self.assertEqual(order, ['read','control'])
 
     def test_no_auto_uart_and_explicit_fresh_zero(self):
         w = self.window; d = w.control

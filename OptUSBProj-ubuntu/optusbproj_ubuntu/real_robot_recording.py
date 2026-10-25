@@ -17,6 +17,7 @@ class Recorder:
         self.closed = False
         self.done = threading.Event()
         self.thread = threading.Thread(target=self._run, daemon=True)
+        self.flush_interval = 0.  # PC default: every row; board may batch telemetry.
         self.thread.start()
 
     def record(self, event, **data):
@@ -27,12 +28,23 @@ class Recorder:
         except queue.Full:self.error = '日志队列已满，后续记录停用；记录不完整'
 
     def _run(self):
+        flushed = time.monotonic()
+        critical = {'error', 'engage', 'paused', 'input_gap_started', 'input_gap_recovered',
+                    'input_timeout', 'auto_start_cancelled', 'initial_ik_started',
+                    'initial_ik_finished', 'arm_start_rejected', 'connected'}
         try:
             while not self.done.is_set() or not self.queue.empty():
                 try:item = self.queue.get(timeout=.1)
-                except queue.Empty:continue
+                except queue.Empty:
+                    if time.monotonic()-flushed >= self.flush_interval:
+                        self.file.flush()
+                        flushed = time.monotonic()
+                    continue
                 self.file.write(json.dumps(item, ensure_ascii=False, allow_nan=False)+'\n')
-                self.file.flush()
+                now = time.monotonic()
+                if now-flushed >= self.flush_interval or item['event'] in critical:
+                    self.file.flush()
+                    flushed = now
         except Exception as exc:
             self.error = f'日志写入失败：{exc}；记录不完整'
         finally:

@@ -1,6 +1,7 @@
 """Small Qt shell around the validated PC control state machine; no VTK/vision."""
 import json
 import time
+from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,10 @@ from optusbproj_ubuntu.real_robot_arm import load_profile
 from optusbproj_ubuntu.real_robot_protocol import decode
 from optusbproj_ubuntu.scene_robot_model import SceneArm
 from optusbproj_ubuntu.real_robot_checkpoints import CheckpointStore
+from optusbproj_ubuntu.real_robot_shared import SharedArmIK
+from optusbproj_ubuntu.real_robot_bilateral import BilateralIK
+from optusbproj_ubuntu.real_robot_timing import acquisition_poll, acquisition_feed
+from .initial_ik import InitialIKWorker
 
 
 class ControlDialog(RealRobotModesDialog):
@@ -75,6 +80,99 @@ class ControlDialog(RealRobotModesDialog):
         ready = super()._motion_controls_ready(connected)
         return ready if self.manual.isChecked() else (False, False)
 
+    def _poll(self):
+        # Drain the ONE existing socket before reading the control snapshot.
+        # Both timers run in the GUI thread; no concurrent PoseEngine access.
+        if hasattr(self.viewer, 'engine'):
+            self.viewer.acquire()
+        super()._poll()
+
+    def _ready(self):
+        self.worker.recorder.flush_interval = .1
+        super()._ready()
+
+    def _initial_context(self):
+        return (self.worker, self.origin, self._limits(), self.mode_select.currentIndex(),
+                self.shared_palm.isChecked(), self.right_options[0].isChecked(),
+                self._palm_offset(), self._right_offset(), self.auto_start.values())
+
+    def _start(self, *, automatic=False):
+        if not self._shared_mode():
+            return super()._start(automatic=automatic)
+        if self.ik_worker is not None or self.busy:
+            return
+        if automatic and not (self.auto_start.authorized and self.auto_start.phase == 'locking'):
+            return
+        if not automatic and self.auto_start.pending:
+            return
+        try:
+            self._poll()
+            if (not self.connected or self.worker is None or not self.worker.isRunning()
+                    or not self.safety.isChecked() or self.arm_capture is None
+                    or self.arm_sample is None or self.origin is None
+                    or time.monotonic() > self.arm_sample[1]
+                    or self.arm_sample[2] != self.arm_capture[2]
+                    or self.end_session.await_home or self.end_session.returning):
+                raise ValueError('连接、安全许可、参考或新鲜输入无效')
+            self._pose_guard(self.arm_capture[0], self.arm_sample[0], '启动前人体超差')
+            context = self._initial_context()
+            _, baseline, limits, mode, left_palm, right_palm, left_offset, right_offset, _ = context
+            def factory():
+                if mode == 3:
+                    return BilateralIK(baseline, limits,
+                        palms={'left': left_palm, 'right': right_palm},
+                        offsets={'left': left_offset, 'right': right_offset})
+                return SharedArmIK(baseline, limits, palm=left_palm, offset=left_offset)
+            worker = InitialIKWorker(factory, deepcopy(self.arm_capture[0]), self)
+            worker.context, worker.capture, worker.automatic = context, self.arm_capture, automatic
+            worker.prepared.connect(self._initial_ready)
+            worker.failed.connect(self._ik_failed)
+            worker.finished.connect(self._ik_finished)
+            self.ik_worker = worker
+            if automatic:
+                self.auto_start.phase = 'preparing'
+                self.auto_start.label.setText('后台计算初始双臂 / 单臂 IK；尚未发送，请保持姿态。')
+            self._arm_event('initial_ik_started', asynchronous=True)
+            self.start_notice.setText('后台计算初始 IK；尚未发送，请保持姿态。')
+            worker.start()
+        except Exception as exc:
+            self.auto_start.cancel(str(exc))
+            self.start_notice.setText('初始 IK 未启动：'+str(exc))
+        self._controls()
+
+    def _initial_ready(self, prepared):
+        worker = self.sender()
+        if worker is not self.ik_worker or worker.cancelled.is_set():
+            return
+        try:
+            if (self.arm_capture is not worker.capture or self._initial_context() != worker.context
+                    or not self.safety.isChecked() or not self.connected
+                    or (worker.automatic and not (self.auto_start.authorized
+                                                   and self.auto_start.phase == 'preparing'))):
+                raise ValueError('初始求解期间配置、授权或参考变化，结果已丢弃')
+            self._arm_event('initial_ik_finished', solve_ms=prepared[2], asynchronous=True)
+            # Re-enter all original start gates, including current input/pose
+            # revalidation and manual modal confirmation. No worker writes UART.
+            self.ik_worker = None
+            if worker.automatic:
+                self.auto_start.phase = 'locking'
+            super()._start(automatic=worker.automatic, _prepared=prepared[:2])
+            if worker.automatic:
+                if self.busy:
+                    self.auto_start.phase = 'transition'
+                    self.auto_start.label.setText('自动平滑过渡中：保持人体姿态；等待不代表真机到位。')
+                else:
+                    self.auto_start.cancel('接管启动失败，请检查启动诊断')
+        except Exception as exc:
+            self.auto_start.cancel(str(exc))
+            self.start_notice.setText('初始 IK 已取消：'+str(exc))
+        self._controls()
+
+    def _invalidate_capture(self, *args):
+        if isinstance(getattr(self, 'ik_worker', None), InitialIKWorker):
+            self.ik_worker.shutdown()
+        super()._invalidate_capture(*args)
+
 
 class Preview(QtWidgets.QWidget):
     def __init__(self, window):
@@ -135,6 +233,7 @@ class Preview(QtWidgets.QWidget):
 
 class Window(QtWidgets.QWidget):
     replay_mode = False
+    control_display_interval = .1
 
     def __init__(self, source, config):
         super().__init__()
@@ -312,9 +411,18 @@ class Window(QtWidgets.QWidget):
         self.control.show()
         self.control.raise_()
 
-    def poll(self):
-        for stamp, packet in self.source.poll_timed():
+    def acquire(self):
+        started = time.monotonic()
+        acquisition_poll(self, started)
+        packets = self.source.poll_timed()
+        acquisition_poll(self, started, packets)
+        for stamp, packet in packets:
+            before = time.monotonic()
             self.engine.feed(packet, stamp/1e9)
+            acquisition_feed(self, packet, stamp, before)
+
+    def poll(self):
+        self.acquire()
         now = time.monotonic()
         if now >= self.next_display:
             lines = []
