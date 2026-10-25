@@ -295,6 +295,12 @@ class GuiTests(ConfigTests):
             sender.close()
         self.assertTrue(w.engine.tilt_status(device)['bias_ready'])
         self.assertFalse(w.engine.tilt_status(device)['static'])
+        w.next_display = 0; w.poll()
+        device_line = next(line for line in w.devices.text().splitlines() if device in line)
+        self.assertIn('重力：已建立', device_line)
+        self.assertIn('零偏：已完成', device_line)
+        self.assertNotIn('运动', device_line)
+        self.assertNotIn('静止', device_line)
         group, keys, deadline = w.zero_pending
         w.zero_pending = (group, keys, time.monotonic()-1)
         with patch.object(w.engine, 'zero') as capture:

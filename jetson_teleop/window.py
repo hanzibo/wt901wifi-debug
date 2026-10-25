@@ -344,8 +344,11 @@ class Window(QtWidgets.QWidget):
                 bias = ('已完成' if state['bias_ready'] else
                         f"学习 {min(state['static_seconds'], state['bias_hold_seconds']):.1f}/{state['bias_hold_seconds']:.1f}s")
                 static = ('静止' if state['static'] else '运动 / 未满足静止门槛') if live else '数据超时 / 未到'
+                # Hide initialization-only stillness hints once learned, but keep
+                # offline warnings and the independent capture-time safety check.
+                motion_hint = '' if ready else f' · {static}'
                 lines.append(f'{PARTS[PART_BY_KEY[key]].label}: {device} · 距末包 {age} · '
-                             f'重力：{gravity} · 零偏：{bias} · {static} · {mapping}')
+                             f'重力：{gravity} · 零偏：{bias}{motion_hint} · {mapping}')
             self.devices.setText('\n'.join(lines))
             self.learning_summary.setText(
                 f'陀螺＋加计纠倾斜已启用；本模式初始化就绪 {ready_count}/{len(self.active_parts())} 台。'
