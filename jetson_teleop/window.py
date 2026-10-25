@@ -347,8 +347,8 @@ class Window(QtWidgets.QWidget):
                 # Hide initialization-only stillness hints once learned, but keep
                 # offline warnings and the independent capture-time safety check.
                 motion_hint = '' if ready else f' · {static}'
-                lines.append(f'{PARTS[PART_BY_KEY[key]].label}: {device} · 距末包 {age} · '
-                             f'重力：{gravity} · 零偏：{bias}{motion_hint} · {mapping}')
+                lines.append(f'{PARTS[PART_BY_KEY[key]].label}: {device} · '
+                             f'重力：{gravity} · 零偏：{bias}{motion_hint} · {mapping} · 距末包 {age}')
             self.devices.setText('\n'.join(lines))
             self.learning_summary.setText(
                 f'陀螺＋加计纠倾斜已启用；本模式初始化就绪 {ready_count}/{len(self.active_parts())} 台。'

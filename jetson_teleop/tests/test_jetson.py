@@ -262,6 +262,8 @@ class GuiTests(ConfigTests):
         w.next_display = 0; w.poll()
         self.assertIn('重力：已建立', w.devices.text())
         self.assertIn('零偏：已完成', w.devices.text())
+        for line in w.devices.text().splitlines():
+            self.assertRegex(line, r' · 距末包 (?:未收到|\d+ ms)$')
         self.assertIn('就绪 3/3', w.learning_summary.text())
         self.assertTrue(w.zero_button.isEnabled())
         self.zero_both(); self.assertTrue(w.zero_confirmed)
