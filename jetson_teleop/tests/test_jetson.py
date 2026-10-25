@@ -22,7 +22,7 @@ from optusbproj_ubuntu.real_robot_checkpoints import create, MODES as SIDES
 from optusbproj_ubuntu.real_robot_arm import ArmLimits
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QCloseEvent
-from jetson_teleop.window import Window
+from jetson_teleop.window import Window, Preview
 
 APP = QApplication.instance() or QApplication([])
 
@@ -236,6 +236,42 @@ class GuiTests(ConfigTests):
         self.assertGreater(image.width(), 0)
         for name in ('vtk', 'pyvista', 'cv2', 'torch', 'mediapipe', 'pyqtgraph'):
             self.assertNotIn(name, sys.modules)
+
+    def test_main_mode_selector_syncs_and_resets_neutral(self):
+        w = self.window
+        self.assertIn('右臂不参与', w.mode_summary.text())
+        self.feed(PARTS); w.review.setChecked(True); self.zero_both()
+        self.assertTrue(w.zero_confirmed)
+        w.mode_choice.setCurrentIndex(1)
+        self.assertTrue(w.control._bilateral_mode())
+        self.assertFalse(w.zero_confirmed)
+        self.assertFalse(w.review.isChecked())
+        self.assertIn('4 台', w.zero_buttons['arms'].text())
+        self.assertIn('2 台', w.zero_buttons['hands'].text())
+        w.review.setChecked(True); self.zero_both()
+        self.assertTrue(w.zero_confirmed)
+        self.assertIn('臂段 4/4', w.mode_summary.text())
+        w.control.mode_select.setCurrentIndex(2)
+        self.assertEqual(w.mode_choice.currentIndex(), 0)
+        self.assertIn('2 台', w.zero_buttons['arms'].text())
+        self.assertFalse(w.zero_confirmed)
+
+    def test_preview_front_left_right_and_mirror_are_display_only(self):
+        # Model +Y is anatomical left: front view puts it on screen right.
+        points = [[0, .2, 0], [0, -.2, 0]]
+        front = Preview.project(points)
+        mirror = Preview.project(points, True)
+        self.assertGreater(front[0, 0], front[1, 0])
+        self.assertLess(mirror[0, 0], mirror[1, 0])
+        w = self.window
+        self.feed(PARTS); w.review.setChecked(True); self.zero_both()
+        assignments = w.engine.assignments.copy()
+        before = w.engine.transforms()
+        self.assertFalse(w.preview_mirror.isChecked())
+        w.preview_mirror.setChecked(True)
+        self.assertTrue(w.zero_confirmed)
+        self.assertEqual(w.engine.assignments, assignments)
+        self.assertTrue(all((a == b).all() for a, b in zip(before, w.engine.transforms())))
 
     def test_parent_close_waits_for_control_shutdown(self):
         # Keep input flowing while the original transport brakes asynchronously.

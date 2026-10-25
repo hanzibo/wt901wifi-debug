@@ -62,6 +62,8 @@ class ControlDialog(RealRobotModesDialog):
         if self.mode_select is not None:
             self.manual.setEnabled(False)  # This entry deliberately has no wearing calibration.
             self.mirror_check.setEnabled(False)
+        if hasattr(self.viewer, 'mode_choice'):
+            self.viewer.sync_mode()
 
     def _connect(self):
         if not self.viewer.zero_confirmed or self.viewer.preset_error or not self.manual.isChecked():
@@ -82,12 +84,19 @@ class Preview(QtWidgets.QWidget):
                        for s in ('left', 'right')}
         self.setMinimumSize(600, 330)
 
+    @staticmethod
+    def project(points, mirror=False):
+        points = np.asarray(points)
+        horizontal = points[..., 1]+.35*points[..., 0]
+        return np.stack((-horizontal if mirror else horizontal, -points[..., 2]), axis=-1)
+
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
         painter.fillRect(self.rect(), QtGui.QColor('#171d29'))
         transforms = self.window.engine.transforms(include_natural=False)
-        human = [[transforms[p.parent][:3, 3], transforms[i][:3, 3]]
+        human = [(transforms[p.parent][:3, 3], transforms[i][:3, 3],
+                  'left' if p.key.startswith('left_') else 'right' if p.key.startswith('right_') else '')
                  for i, p in enumerate(PARTS) if p.parent is not None]
         robot = []
         dialog = self.window.control
@@ -98,7 +107,7 @@ class Preview(QtWidgets.QWidget):
                 signs = np.array([1 if row[5].currentIndex() == 0 else -1 for row in rows])
                 q = np.deg2rad((np.array(angles[start:start+6])-90) / signs)
                 points = self.models[side].points(q)
-                robot.extend([[points[0], points[1]], [points[1], points[2]]])
+                robot.extend([(points[0], points[1], side), (points[1], points[2], side)])
         for column, (title, segments, color) in enumerate((
                 ('人体姿态（IMU / 重力纠倾斜）', human, '#76d9f5'),
                 ('机器人：末次发送指令 FK（非实测）', robot, '#ffce75'))):
@@ -108,14 +117,19 @@ class Preview(QtWidgets.QWidget):
             if not segments:
                 painter.drawText(QtCore.QPointF(column*width+15, 65), '未发送；不会自动连接机器人')
                 continue
-            points = np.array(segments)
-            projected = np.stack((-points[..., 1]+.35*points[..., 0], -points[..., 2]), axis=-1)
+            points = np.array([[a, b] for a, b, side in segments])
+            projected = self.project(points, self.window.preview_mirror.isChecked())
             lo, hi = projected.reshape(-1, 2).min(0), projected.reshape(-1, 2).max(0)
             scale = min((width-50)/max(hi[0]-lo[0], .2), (self.height()-90)/max(hi[1]-lo[1], .2))
             projected = (projected-(lo+hi)/2)*scale + [column*width+width/2, self.height()/2+20]
-            painter.setPen(QtGui.QPen(QtGui.QColor(color), 5))
-            for a, b in projected:
+            labeled = set()
+            for (a, b), (_, _, side) in zip(projected, segments):
+                side_color = {'left':'#76d9f5', 'right':'#ffb86b'}.get(side, '#dbe3ed')
+                painter.setPen(QtGui.QPen(QtGui.QColor(side_color), 5))
                 painter.drawLine(QtCore.QPointF(*a), QtCore.QPointF(*b))
+                if side and side not in labeled:
+                    labeled.add(side)
+                    painter.drawText(QtCore.QPointF(*(b+[8, -8])), '左 L' if side == 'left' else '右 R')
         painter.end()
 
 
@@ -169,6 +183,20 @@ class Window(QtWidgets.QWidget):
         self.message.setWordWrap(True)
         layout.addWidget(self.message)
         self.control = ControlDialog(self)
+        mode_row = QtWidgets.QHBoxLayout()
+        mode_row.addWidget(QtWidgets.QLabel('当前控制 / 采集范围'))
+        self.mode_choice = QtWidgets.QComboBox()
+        self.mode_choice.addItems(['仅左臂（臂段 2 台 + 手背 1 台）', '双臂（臂段 4 台 + 手背 2 台）'])
+        self.mode_choice.currentIndexChanged.connect(self.choose_mode)
+        mode_row.addWidget(self.mode_choice, 1)
+        layout.insertLayout(1, mode_row)
+        self.mode_summary = QtWidgets.QLabel()
+        self.mode_summary.setWordWrap(True)
+        layout.insertWidget(2, self.mode_summary)
+        self.preview_mirror = QtWidgets.QCheckBox('镜像预览（仅改变画面，不交换设备或控制左右）')
+        self.preview_mirror.toggled.connect(self.update)
+        layout.addWidget(self.preview_mirror)
+        layout.addWidget(QtWidgets.QLabel('默认非镜像正视图：人体左侧在画面右侧。蓝色 = 左，橙色 = 右。'))
         self.preview = Preview(self)
         layout.addWidget(self.preview, 1)
         button = QtWidgets.QPushButton('打开真机控制 / Checkpoint / 停止手势 / 回位')
@@ -180,7 +208,33 @@ class Window(QtWidgets.QWidget):
         self.timer.timeout.connect(self.poll)
         self.timer.start()
         self.next_display = 0.
+        self.sync_mode()
         self.resize(900, 710)
+
+    def choose_mode(self, index):
+        d = self.control
+        if d.worker is not None or d.busy or d.ik_worker is not None or d.auto_start.pending:
+            self.sync_mode()
+            return
+        d.mode_select.setCurrentIndex(3 if index else 2)
+        self.sync_mode()
+
+    def sync_mode(self):
+        bilateral = self.control._bilateral_mode()
+        with QtCore.QSignalBlocker(self.mode_choice):
+            self.mode_choice.setCurrentIndex(1 if bilateral else 0)
+        d = self.control
+        self.mode_choice.setEnabled(d.worker is None and not d.busy and d.ik_worker is None
+                                    and not d.auto_start.pending)
+        arms = [k for k in self.active_parts() if not k.endswith('_hand')]
+        hands = [k for k in self.active_parts() if k.endswith('_hand')]
+        scope = '双臂' if bilateral else '仅左臂'
+        self.zero_buttons['arms'].setText(f'{scope}上臂 / 前臂自然下垂：定时采集 {len(arms)} 台（不含手背）')
+        self.zero_buttons['hands'].setText(f'{scope}手背保持参考姿态：单独定时采集 {len(hands)} 台')
+        self.mode_summary.setText(
+            f'中立参考完成：臂段 {len(self.zeroed_parts.intersection(arms))}/{len(arms)}，'
+            f'手背 {len(self.zeroed_parts.intersection(hands))}/{len(hands)}。'+
+            ('两侧均参与采集。' if bilateral else '右臂不参与本次采集 / 真机输出；右侧预览未归零不能作为姿态依据。'))
 
     def invalidate_zero(self):
         self.zero_confirmed = False
@@ -267,6 +321,7 @@ class Window(QtWidgets.QWidget):
                 self.zero_delays[group].setEnabled(self.zero_pending is None)
             self.review.setEnabled(self.control.worker is None)
             self.preview.update()
+            self.sync_mode()
             self.next_display = now+.1
 
     def closeEvent(self, event):
