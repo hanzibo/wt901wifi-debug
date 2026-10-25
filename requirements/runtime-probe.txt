@@ -1,0 +1,2 @@
+# Optional read-only performance observer; not required by robot control.
+psutil>=5.9,<8

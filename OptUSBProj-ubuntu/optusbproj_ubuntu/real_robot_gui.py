@@ -11,6 +11,7 @@ from .real_robot_control import (Limits, elbow_angle, MAX_COMMAND_SPEED,
                                  MAX_COMMAND_ACCELERATION, L4_MIN_ANGLE, L4_MAX_ANGLE)
 from .real_robot_protocol import encode, decode
 from .real_robot_recording import Recorder
+from .real_robot_runtime_gui import RuntimeRecordingSession
 from .real_robot_transport import ElbowSerialWorker
 from .scene_robot_state import pose_sample, StaleImuInput
 
@@ -100,6 +101,8 @@ class RealRobotDialog(QtWidgets.QDialog):
         self.log_label = QtWidgets.QLabel('每次连接自动记录完整指令和控制状态')
         self.log_label.setWordWrap(True)
         layout.addWidget(self.log_label)
+        self.runtime_recording = RuntimeRecordingSession(self)
+        layout.addWidget(self.runtime_recording.panel)
         self._refresh_ports(report=False)
         self.timer = QtCore.QTimer(self)
         self.timer.setInterval(20)
@@ -330,6 +333,9 @@ class RealRobotDialog(QtWidgets.QDialog):
             event.ignore()
             return
         self.closing = False
+        if not self.runtime_recording.prepare_close():
+            event.ignore()
+            return
         event.accept()
 
     def reject(self):

@@ -162,6 +162,8 @@ class RealRobotModesDialog(RealRobotDialog):
         self.content_layout.insertWidget(2, self.checkpoints.panel)
         self.hand_session = HandSession(self)
         self.content_layout.insertWidget(4, self.hand_session.panel)
+        self.content_layout.removeWidget(self.runtime_recording.panel)
+        self.content_layout.insertWidget(2, self.runtime_recording.panel)
         self._controls()
 
     def _arm_mode(self):
