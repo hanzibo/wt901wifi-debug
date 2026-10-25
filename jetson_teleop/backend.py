@@ -190,6 +190,7 @@ class PoseService:
             recorder.record('acquisition_trace_unavailable', reason='command_queue_full')
 
     def _publish(self, view=False):
+        wall, cpu = time.monotonic_ns(), time.thread_time_ns()
         entries = {}
         for side in ('right','left'):
             try:
@@ -213,6 +214,8 @@ class PoseService:
             listeners = tuple(self.listeners)
         for listener in listeners:
             listener()
+        self.record_diagnostic('pose_publish',wall_ms=(time.monotonic_ns()-wall)/1e6,
+                               thread_cpu_ms=(time.thread_time_ns()-cpu)/1e6,view=view)
 
     def _run(self):
         next_sample = next_view = next_summary = 0.
@@ -230,17 +233,21 @@ class PoseService:
                         except Exception as exc:
                             future.set_exception(exc)
                 before = time.monotonic()
+                poll_cpu = time.thread_time_ns()
                 packets = self.source.poll_timed()
                 for stamp, packet in packets:
                     feed_at = time.monotonic()
+                    feed_cpu = time.thread_time_ns()
                     self.engine.feed(packet, stamp/1e9)
                     self._diagnose('pose_feed', device=packet.device_id,
-                                   read_mono_ns=stamp, feed_ms=(time.monotonic()-feed_at)*1000)
+                                   read_mono_ns=stamp, feed_ms=(time.monotonic()-feed_at)*1000,
+                                   thread_cpu_ms=(time.thread_time_ns()-feed_cpu)/1e6)
                     if self.diagnostic is not None:
                         self.record_diagnostic('imu_packet', read_mono_ns=stamp,
                                                packet=vars(packet))
                 now = time.monotonic()
-                self._diagnose('pose_poll', packets=len(packets), duration_ms=(now-before)*1000)
+                self._diagnose('pose_poll', packets=len(packets), duration_ms=(now-before)*1000,
+                               thread_cpu_ms=(time.thread_time_ns()-poll_cpu)/1e6)
                 if now >= next_sample:
                     self._publish(view=now >= next_view)
                     next_sample = now+.02
@@ -346,6 +353,7 @@ class LiveIK(QThread):
         previous = None
         try:
             while not self.cancelled.is_set():
+                read_wall, read_cpu = time.monotonic_ns(), time.thread_time_ns()
                 try:
                     payload, deadline, version = self._read()
                 except StaleImuInput:
@@ -356,6 +364,8 @@ class LiveIK(QThread):
                     continue
                 previous = version
                 before = time.monotonic()
+                read_metrics = dict(input_read_wall_ms=(time.monotonic_ns()-read_wall)/1e6,
+                                    input_read_thread_cpu_ms=(time.thread_time_ns()-read_cpu)/1e6)
                 if before > deadline:
                     continue
                 self.sequence += 1
@@ -363,21 +373,28 @@ class LiveIK(QThread):
                                             deadline=deadline, backend=True, task_id=self.task_id)
                 self.service.record_diagnostic('ik_begin', sequence=self.sequence,
                     task_id=self.task_id, payload=payload, deadline=deadline, version=version)
+                solve_cpu = time.thread_time_ns()
                 result = self.solver.solve(payload)
                 after = time.monotonic()
+                measured = getattr(self.solver,'last_solve_timing',None)
+                solve_metrics = dict(ik_thread_cpu_ms=(time.thread_time_ns()-solve_cpu)/1e6,
+                                     solver_timing=deepcopy(measured) if isinstance(measured,dict) else None)
                 self.service.record_diagnostic('ik_solved', sequence=self.sequence,
                     task_id=self.task_id, ik_ms=(after-before)*1000, deadline=deadline,
-                    solve_finished_at=after)
+                    solve_finished_at=after, **solve_metrics, **read_metrics)
                 timing = dict(sequence=self.sequence, submitted_at=before, queue_ms=0.,
-                              solve_finished_at=after, backend=True)
+                              solve_finished_at=after, backend=True, **solve_metrics, **read_metrics)
                 result.update(deadline=deadline, ik_ms=(after-before)*1000, timing=timing)
                 with self.gate:
                     if self.cancelled.is_set():
                         return
                     try:
+                        validation_wall, validation_cpu = time.monotonic_ns(), time.thread_time_ns()
                         self._read()  # Current input and transition guard, not solve-time freshness.
                     except StaleImuInput:
                         continue
+                    timing.update(post_solve_validation_ms=(time.monotonic_ns()-validation_wall)/1e6,
+                                  post_solve_validation_thread_cpu_ms=(time.thread_time_ns()-validation_cpu)/1e6)
                     if time.monotonic() > deadline:
                         self.service.record_diagnostic('ik_expired', sequence=self.sequence,
                                                        task_id=self.task_id, deadline=deadline)

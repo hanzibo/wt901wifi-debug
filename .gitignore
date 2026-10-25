@@ -39,6 +39,7 @@ OptUSBProj-ubuntu/local_config.json.tmp
 OptUSBProj-ubuntu/recordings/
 OptUSBProj-ubuntu/calibrations/
 /recordings/wrist_udp/
+/recordings/jetson_ik/
 OptUSBProj-ubuntu/config/real_robot_checkpoints/
 OptUSBProj-ubuntu/config/real_robot_hand_checkpoints/
 

@@ -54,6 +54,35 @@ PC 原程序默认不启用该后端。编译或启动自检失败会阻止启�
 报告中位、95分位、最大耗时及两套结果的最大关节差异。
 这是离线计算基准，不是按真实时序运行的闭环测试，也不证明真机机械安全。
 
+### 在线分段计时与四组负载对照
+
+板端同源IK额外记录每侧及总求解的 `wall_ms`、`thread_cpu_ms`；
+`ik_solved` 和控制日志的 `timing` 还含输入读取、求解后校验及提交时序。
+线程CPU时间不包含未获调度的时间，但墙钟与CPU之差不能单独证明是GIL竞争。
+计时不改变求解结果、输入原始期限或250+250ms保护。
+
+使用包含实时 `ik_begin` 的动作录制及**同一次控制日志**，运行无串口对照：
+
+```bash
+QT_QPA_PLATFORM=offscreen .venv/bin/python -m jetson_teleop.benchmark_pipeline \
+  recordings/jetson_ik/<目录>/diagnostic.jsonl \
+  --control OptUSBProj-ubuntu/recordings/real_robot_imu/<目录>/control.jsonl \
+  --repeats 2
+```
+
+四组依次为IK、加录制IMU姿态处理、再加离屏Qt界面、再加诊断JSONL记录。
+第二轮反序运行，减小固定测试顺序的影响。每组采用相同首次控制指令初值、
+相同IK输入序列和录制时序；记录每次左右臂墙钟/CPU、开始延迟及CPU频率快照。
+默认最多200帧，可用 `--max-frames 1..500`、`--stages ik pose gui logging` 选择。
+JSON结果输出到stdout，进度输出到stderr。录制不完整时报告会明确标注。
+
+工具使用解码后的文件数据，强制禁止Python串口和socket打开，所有界面操作禁用；
+不占用1399，不发送设备指令。比较时保留所有固定输入，若落后则报告排程延迟，
+**这不是生产控制的旧输入排队策略**。
+IMU滤波器从文件前段初始化并复用记录的中立矩阵，但不重建录制前的全部学习历史。
+这四组不包含UDP内核/解码、真实屏幕合成、串口轨迹规划或厂商伺服执行负载，
+因此不能仅凭结果保证真机连续运行；若仍有未解释差异，须继续隔离规划器负载。
+
 也可运行 `bash jetson_teleop/launch.sh`。本目录附带 `WT901-Jetson.desktop`，
 其中路径针对当前板子用户 `mic-711on`；更换用户/仓库位置时须修改，不用于 PC 启动。
 

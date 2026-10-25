@@ -19,6 +19,7 @@ from optusbproj_ubuntu.real_robot_bilateral import BilateralIK
 from optusbproj_ubuntu.real_robot_timing import acquisition_poll, acquisition_feed
 from .initial_ik import InitialIKWorker
 from .backend import PoseService, LiveIK
+from .solve_timing import observe
 
 
 class ControlDialog(RealRobotModesDialog):
@@ -81,6 +82,7 @@ class ControlDialog(RealRobotModesDialog):
         ready = super()._motion_controls_ready(connected)
         return ready if self.manual.isChecked() else (False, False)
 
+    @observe('control_gui_poll',lambda self:getattr(self.viewer,'pose_service',None))
     def _poll(self):
         # Production reads a detached view; legacy tests can still drain inline.
         if hasattr(self.viewer, 'engine'):
@@ -217,6 +219,7 @@ class Preview(QtWidgets.QWidget):
         horizontal = points[..., 1]+.35*points[..., 0]
         return np.stack((-horizontal if mirror else horizontal, -points[..., 2]), axis=-1)
 
+    @observe('preview_paint',lambda self:getattr(self.window,'pose_service',None))
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
@@ -525,6 +528,7 @@ class Window(QtWidgets.QWidget):
             self.engine.feed(packet, stamp/1e9)
             acquisition_feed(self, packet, stamp, before)
 
+    @observe('main_gui_poll',lambda self:getattr(self,'pose_service',None))
     def poll(self):
         self.acquire()
         now = time.monotonic()

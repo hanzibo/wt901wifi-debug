@@ -77,7 +77,8 @@ def prepare(solver):
     arms = solver.solvers.values() if hasattr(solver, 'solvers') else (solver,)
     for arm in arms:
         enable(arm.model)
-    return solver
+    from .solve_timing import instrument
+    return instrument(solver)
 
 
 def warmup():

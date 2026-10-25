@@ -272,6 +272,13 @@ class BackgroundTests(unittest.TestCase):
                     events = [json.loads(r) for r in (self.root/f'gui-{mode}.jsonl').read_text().splitlines()]
                     self.assertFalse(any(r['event']=='input_timeout' for r in events))
                     self.assertTrue(any(r['event']=='arm_ik' and r['timing'].get('backend') for r in events))
+                    timing=next(r['timing'] for r in events if r['event']=='arm_ik')
+                    self.assertGreaterEqual(timing['ik_thread_cpu_ms'],0)
+                    self.assertGreaterEqual(timing['input_read_wall_ms'],0)
+                    self.assertGreaterEqual(timing['post_solve_validation_ms'],0)
+                    self.assertTrue(timing['solver_timing']['success'])
+                    self.assertIn('thread_cpu_ms',timing['solver_timing'])
+                    if mode==3:self.assertEqual(set(timing['solver_timing']['arms']),{'left','right'})
                 finally:
                     d._disconnect(); self.wait(lambda:d.worker is None and d.ik_worker is None)
                     os.close(master); os.close(slave)
