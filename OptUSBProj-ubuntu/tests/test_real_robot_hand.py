@@ -306,6 +306,9 @@ class HandVirtualTests(unittest.TestCase):
                     now=time.monotonic();worker.observe_hand('left',obs(now));APP.processEvents();time.sleep(.02)
                 wait_for(lambda:any(decode(f)[1][5]>0 for f in frames))
                 worker.pause('test global pause');wait_for(lambda:not worker.active)
+                # active may clear after wait_for's last Qt drain. Deliver the
+                # already-emitted final frame before asserting no future writes.
+                APP.processEvents()
                 count=len(frames);worker.observe_hand('left',obs(time.monotonic()));time.sleep(.08);APP.processEvents()
                 self.assertEqual(len(frames),count)
                 self.assertTrue(worker.hands.stopped)
