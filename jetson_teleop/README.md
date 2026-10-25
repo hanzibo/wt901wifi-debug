@@ -22,6 +22,7 @@ CMAKE_BUILD_PARALLEL_LEVEL=2 ~/.local/bin/uv pip install --python .venv/bin/pyth
 .venv/bin/python jetson_teleop/run.py
 ```
 
+Qt 只安装 PySide6-Essentials（Core/Gui/Widgets），无需 Addons。
 Ruckig 0.19.4 在 ARM 上需要源码编译及较新 CMake（≥3.26），不可擅自换规划算法。
 部署时可临时设置 `http_proxy` / `https_proxy`，不改系统网络配置。
 `--probe` 只接收并统计 UDP，不加载 Qt、不打开串口；与其他程序同时占用 1399 会失败。
