@@ -109,6 +109,21 @@ class PoseEngine:
     def current_for(self, device_id: str, mode: str) -> np.ndarray | None:
         return self.mode_current.get(device_id, {}).get(mode)
 
+    def tilt_status(self, device_id: str) -> dict:
+        """Read-only initialization status; readiness is not a freshness check.
+
+        Static means the latest sample passed the filter's own stillness test.
+        Bias learning and gravity feedback continue after initialization.
+        """
+        estimator = self._tilt_filters.get(device_id)
+        return {
+            'gravity_ready': estimator is not None and estimator.neutral_up is not None,
+            'bias_ready': estimator is not None and estimator.bias_ready,
+            'static': estimator is not None and estimator.static_samples > 0,
+            'static_seconds': 0.0 if estimator is None else estimator.static_duration_s,
+            'bias_hold_seconds': 0.8 if estimator is None else estimator.bias_hold_s,
+        }
+
     def calibration_orientation_for(self, device_id: str,
                                     mode: str) -> np.ndarray | None:
         """Return a gravity-vertical attitude for fitting, not model playback.

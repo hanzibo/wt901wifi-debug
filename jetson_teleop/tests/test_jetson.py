@@ -50,12 +50,15 @@ def checkpoint(mode):
                           palm_offset_enabled={side:True for side in SIDES[mode]}))
 
 
-def packet(device, tick=0):
+def packet(device, tick=0, gyro=0):
     frame = bytearray(54)
     frame[:12] = device.encode('ascii')
     frame[12:18] = bytes([26,10,25,12,0,0])
-    struct.pack_into('<H', frame, 18, tick)
+    frame[17] = (tick//1000)%60
+    frame[16] = (tick//60000)%60
+    struct.pack_into('<H', frame, 18, tick%1000)
     struct.pack_into('<h', frame, 24, 2048)
+    struct.pack_into('<h', frame, 26, gyro)
     frame[52:] = b'\r\n'
     return bytes(frame)
 
@@ -105,14 +108,16 @@ class GuiTests(ConfigTests):
         self.window.timer.stop(); self.window.control.timer.stop()
         self.addCleanup(self.window.close)
 
-    def feed(self, keys):
+    def feed(self, keys, learn=True):
         # Test only on loopback, random UDP port. Never an IMU configuration command.
         sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            for key in keys:
-                sender.sendto(packet(self.window.config['assignments'][key]), self.source.sock.getsockname())
-            time.sleep(.02)
-            self.window.poll()
+            for _ in range(45 if learn else 1):
+                self.test_tick = getattr(self, 'test_tick', 0)+20
+                for key in keys:
+                    sender.sendto(packet(self.window.config['assignments'][key], self.test_tick),
+                                  self.source.sock.getsockname())
+                self.window.poll()
         finally:
             sender.close()
 
@@ -218,8 +223,9 @@ class GuiTests(ConfigTests):
         self.assertFalse(w.zero_confirmed)
 
     def test_mode_change_cancels_pending_and_uart_blocks_capture(self):
-        w = self.window; w.review.setChecked(True)
+        w = self.window; w.review.setChecked(True); self.feed(PARTS)
         w.zero_delays['arms'].setValue(3); w.zero('arms')
+        self.assertIsNotNone(w.zero_pending)
         w.control.mode_select.setCurrentIndex(3)
         self.assertIsNone(w.zero_pending)
         self.assertFalse(w.zeroed_parts)
@@ -236,6 +242,65 @@ class GuiTests(ConfigTests):
         self.assertGreater(image.width(), 0)
         for name in ('vtk', 'pyvista', 'cv2', 'torch', 'mediapipe', 'pyqtgraph'):
             self.assertNotIn(name, sys.modules)
+
+    def test_learning_stages_gate_capture_and_render_real_filter_state(self):
+        w = self.window; w.review.setChecked(True)
+        device = w.engine.assignments[PARTS[0]]
+        self.assertFalse(w.engine.tilt_status(device)['gravity_ready'])
+        self.feed(PARTS[:3], learn=False)
+        with patch.object(w.engine, 'zero') as capture:
+            w.zero('arms'); capture.assert_not_called()
+        self.assertIsNone(w.zero_pending)
+        self.assertIn('学习未完成', w.message.text())
+        for _ in range(20): self.feed(PARTS[:3], learn=False)
+        state = w.engine.tilt_status(device)
+        self.assertTrue(state['gravity_ready'])
+        self.assertFalse(state['bias_ready'])
+        w.zero('arms'); self.assertIsNone(w.zero_pending)
+        self.feed(PARTS[:3])
+        self.assertTrue(w.engine.tilt_status(device)['bias_ready'])
+        w.next_display = 0; w.poll()
+        self.assertIn('重力：已建立', w.devices.text())
+        self.assertIn('零偏：已完成', w.devices.text())
+        self.assertIn('就绪 3/3', w.learning_summary.text())
+        self.assertTrue(w.zero_button.isEnabled())
+        self.zero_both(); self.assertTrue(w.zero_confirmed)
+        self.assertTrue(w.engine.tilt_status(device)['bias_ready'])  # zero is not reset.
+
+    def test_learning_is_group_specific_and_stale_ready_is_blocked(self):
+        w = self.window; w.review.setChecked(True)
+        self.feed(PARTS[:2])
+        w.zero('arms')
+        self.assertEqual(len(w.zeroed_parts), 2)
+        w.zero('hands'); self.assertIsNone(w.zero_pending)
+        self.assertFalse(w.zero_confirmed)
+        self.feed(PARTS[:3]); self.zero_both()
+        self.assertTrue(w.zero_confirmed)
+        device = w.engine.assignments[PARTS[0]]
+        w.engine.received_at[device] -= 1
+        self.assertTrue(w.engine.tilt_status(device)['bias_ready'])
+        w.next_display = 0; w.poll()
+        self.assertFalse(w.zero_button.isEnabled())
+        self.assertIn('超时', w.devices.text())
+
+    def test_motion_at_deadline_rejects_capture_but_retains_learning(self):
+        w = self.window; w.review.setChecked(True); self.feed(PARTS)
+        w.zero_delays['arms'].setValue(3); w.zero('arms')
+        device = w.engine.assignments[PARTS[0]]
+        sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sender.sendto(packet(device, self.test_tick+20, gyro=1024), self.source.sock.getsockname())
+            w.poll()
+        finally:
+            sender.close()
+        self.assertTrue(w.engine.tilt_status(device)['bias_ready'])
+        self.assertFalse(w.engine.tilt_status(device)['static'])
+        group, keys, deadline = w.zero_pending
+        w.zero_pending = (group, keys, time.monotonic()-1)
+        with patch.object(w.engine, 'zero') as capture:
+            w.tick_zero(); capture.assert_not_called()
+        self.assertIn('尚未静止', w.message.text())
+        self.assertFalse(w.zero_confirmed)
 
     def test_main_mode_selector_syncs_and_resets_neutral(self):
         w = self.window
