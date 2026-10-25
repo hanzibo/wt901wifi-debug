@@ -1,4 +1,4 @@
-"""Assign currently streaming WT hotspot devices to extensible body-part slots."""
+"""Assign streaming WT devices on any reachable network to body-part slots."""
 
 from __future__ import annotations
 
@@ -23,11 +23,12 @@ class DeviceAssignmentDialog(QtWidgets.QDialog):
         self.online_ids: set[str] = set()
         self._process: QtCore.QProcess | None = None
         self._last_scan = 0.0
+        self._network_note = "正在检测网络"
 
         self.setWindowTitle("身体部位与 WT 设备分配")
         self.resize(560, 350)
         layout = QtWidgets.QVBoxLayout(self)
-        self.status = QtWidgets.QLabel("正在检测电脑热点及在线 WT 设备…")
+        self.status = QtWidgets.QLabel("正在检测在线 WT 设备…")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         self.form = QtWidgets.QFormLayout()
@@ -38,7 +39,7 @@ class DeviceAssignmentDialog(QtWidgets.QDialog):
             self.form.addRow(state.name, combo)
         layout.addLayout(self.form)
         self.hint = QtWidgets.QLabel(
-            "候选列表只包含当前关联电脑热点、且最近收到 WT 数据的设备 ID。"
+            "候选列表包含最近 3 秒收到有效 WT 数据的设备 ID；支持电脑热点、外部 Wi-Fi 和局域网。"
             "同一台设备只能分配给一个部位；换绑后会重建该部位的中立位。")
         self.hint.setWordWrap(True)
         layout.addWidget(self.hint)
@@ -109,7 +110,7 @@ class DeviceAssignmentDialog(QtWidgets.QDialog):
                 self.connection = parts[3] if parts[2] == "connected" else ""
                 break
         if not self.interface or not self.connection:
-            self._clear("电脑 Wi-Fi 当前未开启热点；请先启动热点。")
+            self._clear("电脑 Wi-Fi 未连接；仍可使用其他接口收到的 WT 数据。")
             return
         self._run("nmcli", ["-g", "802-11-wireless.mode", "connection", "show",
                             self.connection], self._on_mode)
@@ -118,9 +119,10 @@ class DeviceAssignmentDialog(QtWidgets.QDialog):
         if not ok:
             self._clear(f"无法确认 Wi-Fi 模式：{err.strip()}")
         elif out.strip() != "ap":
-            self._clear(f"当前连接 {self.connection} 不是电脑热点；请先启动热点。")
+            self._clear(f"外部 Wi-Fi：{self.connection}。")
         else:
             self.hotspot_active = True
+            self._network_note = f"电脑热点：{self.connection}"
             self._run("iw", ["dev", self.interface, "station", "dump"], self._on_stations)
 
     def _on_stations(self, ok: bool, out: str, err: str):
@@ -141,23 +143,13 @@ class DeviceAssignmentDialog(QtWidgets.QDialog):
         self.hotspot_active = False
         self.stations.clear()
         self.neighbors.clear()
-        self.online_ids.clear()
-        self.status.setText(message)
+        self._network_note = message
         self._fill_choices()
 
     def _fill_choices(self):
         old_choices = {key: combo.currentData() for key, combo in self.combos.items()}
-        if self.hotspot_active:
-            ips = {self.neighbors[mac] for mac in self.stations if mac in self.neighbors}
-            self.online_ids = {
-                device_id for device_id, (ip, _port, _seen)
-                in self.source.seen_endpoints(max_age=3.0).items() if ip in ips
-            }
-            self.status.setText(
-                f"电脑热点 {self.connection}：{len(self.stations)} 个关联终端，"
-                f"其中 {len(self.online_ids)} 台 WT 设备正在发送数据。")
-        else:
-            self.online_ids.clear()
+        self.online_ids = set(self.source.seen_endpoints(max_age=3.0))
+        self.status.setText(f"{self._network_note}；{len(self.online_ids)} 台 WT 设备正在发送数据。")
         for key, combo in self.combos.items():
             chosen = old_choices.get(key)
             state = self.part_states[key]
@@ -168,17 +160,19 @@ class DeviceAssignmentDialog(QtWidgets.QDialog):
             combo.addItem("不分配", "")
             for device_id in sorted(self.online_ids):
                 combo.addItem(device_id, device_id)
+            if chosen and chosen not in self.online_ids:
+                # Keep the user's pending selection visible, but reject it at apply.
+                combo.addItem(f"{chosen}（已离线）", chosen)
             index = combo.findData(chosen)
             combo.setCurrentIndex(max(index, 0))
             combo.blockSignals(False)
 
     def _apply(self):
         if self._process is not None:
-            self.status.setText("正在刷新热点状态，请稍候再应用分配。")
+            self.status.setText("正在刷新网络状态，请稍候再应用分配。")
             return
-        if not self.hotspot_active:
-            self.status.setText("电脑热点未开启；请先启动热点并刷新设备列表。")
-            return
+        # Recheck at click time, rather than trusting the timer's cached candidates.
+        self.online_ids = set(self.source.seen_endpoints(max_age=3.0))
         assignments = {}
         for key, combo in self.combos.items():
             selected = combo.currentData()

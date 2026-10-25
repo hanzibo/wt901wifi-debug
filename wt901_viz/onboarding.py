@@ -1,4 +1,4 @@
-"""GUI wizard for moving a WT901WIFI from its own AP to the PC hotspot.
+"""Move a WT901WIFI from its AP to a PC hotspot or external Wi-Fi.
 
 NetworkManager commands are asynchronous so the wrist viewer remains usable.
 The Wi-Fi password is never included in the on-screen log.
@@ -57,6 +57,8 @@ class DeviceSetupDialog(QtWidgets.QDialog):
         self.expected_id: str | None = None
         self.sent_at = 0.0
         self.join_reported = False
+        self.join_target = None
+        self.local_network = None
         self._process: QtCore.QProcess | None = None
 
         self.setWindowTitle("接入新的 WT901 设备")
@@ -79,8 +81,9 @@ class DeviceSetupDialog(QtWidgets.QDialog):
 
         device_group = QtWidgets.QGroupBox("1. 连接新设备自带的 WT55… 热点")
         device_layout = QtWidgets.QVBoxLayout(device_group)
-        device_layout.addWidget(QtWidgets.QLabel(
-            "先关闭电脑热点，再扫描并连接设备 AP；也可以使用 Ubuntu 的 Wi-Fi 菜单连接后点“刷新状态”。"))
+        self.device_instruction = QtWidgets.QLabel()
+        self.device_instruction.setWordWrap(True)
+        device_layout.addWidget(self.device_instruction)
         device_row = QtWidgets.QHBoxLayout()
         self.scan_button = QtWidgets.QPushButton("扫描 WT 设备")
         self.scan_button.clicked.connect(self.scan_devices)
@@ -97,21 +100,45 @@ class DeviceSetupDialog(QtWidgets.QDialog):
         device_layout.addWidget(self.ap_password)
         layout.addWidget(device_group)
 
-        sta_group = QtWidgets.QGroupBox("2. 写入电脑热点与 UDP 接收地址")
+        sta_group = QtWidgets.QGroupBox("2. 写入目标 Wi-Fi 与本电脑 UDP 接收地址")
         form = QtWidgets.QFormLayout(sta_group)
+        self.network_mode = QtWidgets.QComboBox()
+        self.network_mode.addItems(["电脑热点（原模式）", "外部 Wi-Fi / 手机热点（电脑接收）"])
+        form.addRow("接入方式", self.network_mode)
         self.hotspot_ssid = QtWidgets.QLineEdit()
         self.hotspot_ssid.setPlaceholderText("电脑热点名称")
+        self.external_ssid = QtWidgets.QLineEdit()
+        self.external_ssid.setPlaceholderText("例如 Redmi K60；必须支持 2.4 GHz")
+        self.external_ip = QtWidgets.QLineEdit()
+        self.external_ip.setPlaceholderText("电脑连接该 Wi-Fi 时的 IPv4，不是板子或路由器地址")
+        self.external_port = QtWidgets.QSpinBox()
+        self.external_port.setRange(1, 65535)
+        self.external_port.setValue(self.source.sock.getsockname()[1])
+        self.external_port.setReadOnly(True)
+        self.external_port.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.capture_address = QtWidgets.QPushButton("使用当前外部 Wi-Fi 的 SSID / IP")
+        self.capture_address.clicked.connect(self._capture_external_address)
+        self.external_hint = QtWidgets.QLabel(
+            "先在电脑连接手机热点时记录 SSID / IPv4，再连接 WT 设备 AP 写入。\n"
+            "写入后用系统 Wi-Fi 菜单重新连接同一热点；电脑和 IMU 须能互访。\n"
+            "手机热点须为 2.4 GHz；单 Wi-Fi 网卡切入设备 AP 时上网会暂时中断。")
+        self.external_hint.setWordWrap(True)
         self.hotspot_password = QtWidgets.QLineEdit()
         self.hotspot_password.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
-        self.hotspot_password.setPlaceholderText("输入电脑热点密码；不会显示在日志中")
+        self.hotspot_password.setPlaceholderText("输入目标 Wi-Fi 密码；不会显示在日志中")
         self.confirm_password = QtWidgets.QLineEdit()
         self.confirm_password.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
-        self.confirm_password.setPlaceholderText("再次输入电脑热点密码，避免设备断连后无法加入")
+        self.confirm_password.setPlaceholderText("再次输入目标 Wi-Fi 密码，避免设备断连后无法加入")
         self.show_password = QtWidgets.QCheckBox("显示密码")
         self.show_password.toggled.connect(self._toggle_password_visibility)
         self.server_label = QtWidgets.QLabel("等待读取电脑热点地址…")
         form.addRow("电脑热点 SSID", self.hotspot_ssid)
-        form.addRow("电脑热点密码", self.hotspot_password)
+        form.addRow("外部 Wi-Fi SSID", self.external_ssid)
+        form.addRow("本电脑目标 IPv4", self.external_ip)
+        form.addRow("本程序 UDP 端口", self.external_port)
+        form.addRow(self.capture_address)
+        form.addRow(self.external_hint)
+        form.addRow("目标 Wi-Fi 密码", self.hotspot_password)
         form.addRow("确认热点密码", self.confirm_password)
         form.addRow("", self.show_password)
         form.addRow("电脑接收地址", self.server_label)
@@ -119,6 +146,8 @@ class DeviceSetupDialog(QtWidgets.QDialog):
         self.send_button.clicked.connect(self.send_sta_configuration)
         form.addRow(self.send_button)
         layout.addWidget(sta_group)
+        self.sta_form = form
+        self.network_mode.currentIndexChanged.connect(self._network_mode_changed)
 
         self.result_label = QtWidgets.QLabel("写入后启动电脑热点，等待设备以 STA 模式接入。")
         self.result_label.setWordWrap(True)
@@ -136,8 +165,43 @@ class DeviceSetupDialog(QtWidgets.QDialog):
         self.join_timer.setInterval(1000)
         self.join_timer.timeout.connect(self.check_join)
         self.join_timer.start()
-        self._render_buttons()
+        self._network_mode_changed()
         QtCore.QTimer.singleShot(0, self.refresh)
+
+    def _external_mode(self):
+        return self.network_mode.currentIndex() == 1
+
+    def _network_mode_changed(self):
+        external = self._external_mode()
+        self.device_instruction.setText(
+            "先记录目标外部 Wi-Fi 的 SSID / 电脑地址，再连接 WT 设备 AP；"
+            "可用 Ubuntu Wi-Fi 菜单连接后点“刷新状态”。"
+            if external else
+            "先关闭电脑热点，再扫描并连接设备 AP；也可以使用 Ubuntu 的 Wi-Fi 菜单连接后点“刷新状态”。")
+        for widget in (self.hotspot_ssid, self.server_label):
+            self.sta_form.setRowVisible(widget, not external)
+        for widget in (self.external_ssid, self.external_ip, self.external_port,
+                       self.capture_address, self.external_hint):
+            self.sta_form.setRowVisible(widget, external)
+        self.hotspot_password.clear()
+        self.confirm_password.clear()
+        if not self.expected_id:
+            self.result_label.setText(
+                "写入后请用系统 Wi-Fi 菜单回到目标外部热点，等待本电脑收到该设备数据。"
+                if external else "写入后启动电脑热点，等待设备以 STA 模式接入。")
+        self._render_status()
+
+    def _external_connection(self):
+        return (bool(self.current_ssid) and self.mode != "ap"
+                and not DEVICE_SSID.fullmatch(self.current_ssid) and bool(self.local_ip))
+
+    def _capture_external_address(self):
+        if not self._external_connection():
+            self._log("请先连接目标外部 Wi-Fi 并刷新状态，再读取本电脑地址。")
+            return
+        self.external_ssid.setText(self.current_ssid)
+        self.external_ip.setText(self.local_ip)
+        self._log(f"已填写 {self.current_ssid} / {self.local_ip}；切入设备 AP 后会保留。")
 
     def _toggle_password_visibility(self, checked: bool):
         mode = (QtWidgets.QLineEdit.EchoMode.Normal if checked
@@ -211,6 +275,13 @@ class DeviceSetupDialog(QtWidgets.QDialog):
 
     def _on_local_ip(self, ok: bool, out: str, _err: str):
         self.local_ip = out.splitlines()[0].split("/")[0].strip() if ok and out.strip() else ""
+        self.local_network = (ipaddress.IPv4Interface(out.splitlines()[0].strip()).network
+                              if self.local_ip else None)
+        if self._external_connection():
+            if not self.external_ssid.text():
+                self.external_ssid.setText(self.current_ssid)
+            if not self.external_ip.text() and self.external_ssid.text() == self.current_ssid:
+                self.external_ip.setText(self.local_ip)
         self._load_hotspot_profile()
 
     def _load_hotspot_profile(self):
@@ -254,7 +325,10 @@ class DeviceSetupDialog(QtWidgets.QDialog):
             text = f"当前：Wi-Fi 已连接 {self.current_ssid or self.connection}，但不是 WT 设备 AP。"
         else:
             text = f"当前：Wi-Fi 网卡 {self.interface} 未连接。请扫描 WT 设备。"
-        if not self.profile_ssid or not self.profile_ip:
+        if self._external_mode():
+            text += f"\n外部 Wi-Fi 模式；当前电脑 Wi-Fi IPv4：{self.local_ip or '未获取'}。"
+            text += "写入后须让电脑回到目标热点；不会自动启动电脑热点。"
+        elif not self.profile_ssid or not self.profile_ip:
             text += "\n未找到可用的电脑热点配置 WT901-LAN；请先在系统中创建热点。"
         elif self.profile_mode != "ap" or self.profile_ipv4_method != "shared":
             text += "\n已保存的 WT901-LAN 不是带地址共享的 AP 配置；不会向设备写入它。"
@@ -268,16 +342,22 @@ class DeviceSetupDialog(QtWidgets.QDialog):
         hotspot_active = self.mode == "ap" and self.connection == self.hotspot_profile
         device_connected = bool(DEVICE_SSID.fullmatch(self.current_ssid)) and self.mode != "ap"
         self.refresh_button.setEnabled(idle)
-        self.hotspot_down_button.setEnabled(idle and hotspot_active)
+        self.hotspot_down_button.setEnabled(idle and hotspot_active and not self._external_mode())
         profile_ready = (self.profile_mode == "ap" and self.profile_ipv4_method == "shared"
                          and self.profile_band == "bg" and bool(self.profile_ip))
-        self.hotspot_up_button.setEnabled(idle and profile_ready and not hotspot_active)
+        self.hotspot_up_button.setEnabled(idle and profile_ready and not hotspot_active
+                                          and not self._external_mode())
+        self.capture_address.setEnabled(idle and self._external_connection())
+        self.network_mode.setEnabled(idle)
         self.scan_button.setEnabled(idle and bool(self.interface) and self.mode != "ap")
         self.connect_button.setEnabled(idle and bool(self.device_combo.currentText())
                                        and self.mode != "ap")
-        self.send_button.setEnabled(idle and device_connected and profile_ready)
+        self.send_button.setEnabled(idle and device_connected
+                                    and (self._external_mode() or profile_ready))
 
     def stop_hotspot(self):
+        if self._external_mode():
+            return
         if self.mode != "ap" or self.connection != self.hotspot_profile:
             self._log("当前并非本程序使用的电脑热点，不会关闭其他 Wi-Fi 连接。")
             return
@@ -294,6 +374,8 @@ class DeviceSetupDialog(QtWidgets.QDialog):
         self.refresh()
 
     def start_hotspot(self):
+        if self._external_mode():
+            return
         if (self.profile_mode != "ap" or self.profile_ipv4_method != "shared"
                 or self.profile_band != "bg" or not self.profile_ssid or not self.profile_ip):
             self._log("未找到可用的 2.4 GHz 电脑热点 AP 配置。")
@@ -336,7 +418,7 @@ class DeviceSetupDialog(QtWidgets.QDialog):
         def finished(ok: bool, _out: str, err: str):
             if ok:
                 self.ap_password.clear()
-                self._log(f"已连接 {ssid}；请填写电脑热点密码并发送 STA 配置。")
+                self._log(f"已连接 {ssid}；请核对目标 Wi-Fi 与接收地址，再发送 STA 配置。")
             else:
                 safe_err = err.replace(password, "***") if password else err
                 self._log(f"连接 {ssid} 失败：{safe_err.strip()}。也可用系统 Wi-Fi 菜单连接。")
@@ -348,39 +430,51 @@ class DeviceSetupDialog(QtWidgets.QDialog):
         if not DEVICE_SSID.fullmatch(self.current_ssid) or self.mode == "ap":
             self._log("当前未连接 WT 设备 AP；不会发送指令。")
             return
-        if self.hotspot_ssid.text() != self.profile_ssid or not self.profile_ip:
+        external = self._external_mode()
+        if not external and (self.hotspot_ssid.text() != self.profile_ssid or not self.profile_ip):
             self._log("输入的热点名称与电脑已保存的热点配置不一致；请先核对。")
             return
-        if self.profile_mode != "ap" or self.profile_ipv4_method != "shared":
+        if not external and (self.profile_mode != "ap" or self.profile_ipv4_method != "shared"):
             self._log("电脑热点配置不是 AP + 地址共享模式；配置未发送。")
             return
-        if self.profile_band != "bg":
+        if not external and self.profile_band != "bg":
             self._log("电脑热点未设为 2.4 GHz（bg）；配置未发送。")
             return
         if self.hotspot_password.text() != self.confirm_password.text():
-            self._log("两次输入的电脑热点密码不一致；配置未发送。")
+            self._log("两次输入的目标 Wi-Fi 密码不一致；配置未发送。")
             return
         if not self.local_ip:
             self._log("电脑当前没有设备 AP 网段的 IP；请刷新网络状态。")
             return
         try:
+            ssid = self.external_ssid.text() if external else self.profile_ssid
+            server_ip = self.external_ip.text().strip() if external else self.profile_ip
+            address = ipaddress.IPv4Address(server_ip)
+            if (address.is_unspecified or address.is_loopback or address.is_multicast
+                    or address.is_link_local or address == ipaddress.IPv4Address('255.255.255.255')):
+                raise ValueError("接收地址须为本电脑在目标 Wi-Fi 中的有效单播 IPv4")
+            if external and (DEVICE_SSID.fullmatch(ssid) or
+                             server_ip in (DEVICE_AP_IP, self.local_ip)):
+                raise ValueError("请填写外部 Wi-Fi 与电脑地址，不要填写 WT 设备 AP 的 SSID / 地址")
             if ipaddress.IPv4Address(self.local_ip) not in ipaddress.IPv4Network("192.168.4.0/24"):
                 raise ValueError("当前连接不在设备默认的 192.168.4.0/24 网段")
             listen_ip = self.source.sock.getsockname()[0]
-            if listen_ip not in ("0.0.0.0", self.profile_ip):
+            if listen_ip not in ("0.0.0.0", server_ip):
                 raise ValueError(
                     f"GUI 正监听 {listen_ip}；请用 --listen-ip 0.0.0.0 重启后再配置")
             port = self.source.sock.getsockname()[1]
-            command = build_sta_command(self.profile_ssid, self.hotspot_password.text(),
-                                        self.profile_ip, port)
+            command = build_sta_command(ssid, self.hotspot_password.text(), server_ip, port)
         except ValueError as exc:
             self._log(f"配置未发送：{exc}")
             return
         answer = QtWidgets.QMessageBox.question(
             self, "确认写入 STA 配置",
             f"当前目标设备：{self.current_ssid}\n"
-            f"它将连接电脑热点 {self.profile_ssid}，并以 UDP 发送到 {self.profile_ip}:{port}。\n"
-            "发送后设备 AP 可能立刻消失；请再启动电脑热点。若密码错误无法入网，"
+            f"它将连接 Wi-Fi {ssid}，并以 UDP 发送到本电脑 {server_ip}:{port}。\n"
+            + ("请确认该地址是电脑在目标 Wi-Fi 中的地址，不是路由器或板子地址。\n"
+               "须启用 2.4 GHz 并允许热点终端互访。发送后请用系统菜单重新连接该 Wi-Fi。\n"
+               if external else "发送后设备 AP 可能立刻消失；请再启动电脑热点。\n") +
+            "若密码错误无法入网，"
             "可能需要按设备说明恢复 AP 后重试。确认继续？")
         if answer != QtWidgets.QMessageBox.StandardButton.Yes:
             return
@@ -392,26 +486,45 @@ class DeviceSetupDialog(QtWidgets.QDialog):
             self._log(f"发送失败：{exc}")
             return
         self.expected_id = self.current_ssid
+        self.join_target = {'external': external, 'ssid': ssid, 'ip': server_ip,
+                            'network': None if external else self.profile_network}
         self.sent_at = time.monotonic()
         self.join_reported = False
         self.hotspot_password.clear()
         self.confirm_password.clear()
         self._log(f"已向 {self.expected_id} 发送 STA + UDP 配置；发送成功不等于设备已接入。")
         self.result_label.setText(
-            f"已发送给 {self.expected_id}。请点击“启动电脑热点”，等待该 ID 的实时数据出现。")
+            f"已发送给 {self.expected_id}。" +
+            (f"请用系统 Wi-Fi 菜单连接 {ssid}，保持电脑地址 {server_ip}，等待实时数据。"
+             if external else "请点击“启动电脑热点”，等待该 ID 的实时数据出现。"))
         QtCore.QTimer.singleShot(1500, self.refresh)
 
     def check_join(self):
-        if not self.expected_id or self.join_reported or not self.profile_network:
+        if not self.expected_id or self.join_reported or not self.join_target:
+            return
+        target = self.join_target
+        network = target['network']
+        if target['external']:
+            if self.current_ssid != target['ssid'] or not self._external_connection():
+                self.result_label.setText(f"等待电脑重新连接 {target['ssid']}，再验证 {self.expected_id}。")
+                return
+            if self.local_ip != target['ip']:
+                self.result_label.setText(
+                    f"电脑当前 IP {self.local_ip} 与已写入目标 {target['ip']} 不一致；"
+                    "请恢复原地址或重新配置 IMU 的 UDP 目标。")
+                return
+            network = self.local_network
+        if network is None:
             return
         found = self.source.seen_devices(max_age=3.0).get(self.expected_id)
-        if found and found[1] > self.sent_at and ipaddress.IPv4Address(found[0]) in self.profile_network:
+        if found and found[1] > self.sent_at and ipaddress.IPv4Address(found[0]) in network:
             self.join_reported = True
             self.result_label.setText(f"接入成功：{self.expected_id} 已从 {found[0]} 发送实时数据。")
             self._log(f"接入成功：{self.expected_id}，地址 {found[0]}。")
-        elif time.monotonic() - self.sent_at > 30 and self.mode == "ap":
+        elif time.monotonic() - self.sent_at > 30 and (target['external'] or self.mode == "ap"):
             self.result_label.setText(
-                f"暂未收到 {self.expected_id} 的数据。请检查热点密码、设备电量和热点是否为 2.4 GHz。")
+                f"暂未收到 {self.expected_id} 的数据。请检查密码、2.4 GHz、设备电量、"
+                "终端互访与电脑防火墙；发送成功不代表已接入。")
 
     def closeEvent(self, event):
         if self._process is not None:

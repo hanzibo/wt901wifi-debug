@@ -14,6 +14,7 @@ import sys
 import time
 
 from .protocol import AttitudePacket, extract_packets
+from .receive_stats import ReceiveRateTracker, ReceiveStats
 from .registers import CMD_READ, UNLOCK_KEY, UNLOCK_REG
 
 
@@ -33,6 +34,7 @@ class GuiUdpSource:
         self._kernel_stamp_option = None
         self._kernel_stamp_original = None
         self._diagnostic_sink_errors = 0
+        self._receive_rates = ReceiveRateTracker()
 
     def add_diagnostic_sink(self, sink):
         """Observe the existing socket; never open a second UDP listener."""
@@ -155,12 +157,16 @@ class GuiUdpSource:
                 self._devices[packet.device_id] = (addr[0], seen)
                 self._endpoints[packet.device_id] = (addr[0], addr[1], seen)
                 self._latest_packets[packet.device_id] = packet
+                self._receive_rates.record(packet.device_id, received_ns / 1e9)
                 packets.append((received_ns, packet))
                 if diag is not None:
                     prior = diag['devices'].get(packet.device_id)
                     diag['devices'][packet.device_id] = received_ns
                     self.diagnostic_event('imu_parsed', device=packet.device_id, endpoint=endpoint,
                         read_mono_ns=received_ns, parsed_mono_ns=time.monotonic_ns(),
+                        read_wall_ns=read_wall_ns, kernel_received_wall_ns=kernel_received_wall_ns,
+                        socket_queue_ms=None if kernel_received_wall_ns is None else
+                                        (read_wall_ns-kernel_received_wall_ns)/1e6,
                         gap_ms=None if prior is None else (received_ns-prior)/1e6,
                         sensor_time=packet.time_str, rssi_dbm=packet.rssi)
         if diag is not None:
@@ -172,6 +178,10 @@ class GuiUdpSource:
         out = list(self._replies)
         self._replies.clear()
         return out
+
+    def receive_stats(self) -> dict[str, ReceiveStats]:
+        """Valid packet read rate per device; no extra socket or device command."""
+        return self._receive_rates.snapshot(time.monotonic())
 
     def seen_devices(self, max_age: float = 3.0) -> dict[str, tuple[str, float]]:
         """最近收过数据的设备 ID -> (sender IP, monotonic timestamp)。"""

@@ -370,6 +370,7 @@ class WristWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.source = source
         self.started_at = time.monotonic()
+        self._last_rate_refresh = float("-inf")
         self.setWindowTitle("WT901 双手转角试验：空格双手归零，1/2 单手归零，R 重置视角")
         self.resize(1150, 740)
 
@@ -411,11 +412,11 @@ class WristWindow(QtWidgets.QMainWindow):
         self.axes_checkbox.toggled.connect(self._toggle_axes)
         top_row.addWidget(self.axes_checkbox)
         self.assignment_button = QtWidgets.QPushButton("设备分配")
-        self.assignment_button.setToolTip("给各身体部位指定当前热点中的 WT 设备")
+        self.assignment_button.setToolTip("给各身体部位指定最近收到有效数据的在线 WT 设备")
         self.assignment_button.clicked.connect(self.open_device_assignment)
         top_row.addWidget(self.assignment_button)
-        self.devices_button = QtWidgets.QPushButton("热点设备")
-        self.devices_button.setToolTip("查看当前连接电脑热点的终端和已识别的 WT 设备端点")
+        self.devices_button = QtWidgets.QPushButton("在线设备")
+        self.devices_button.setToolTip("查看电脑热点、外部 Wi-Fi 或局域网中正在发送数据的 WT 设备")
         self.devices_button.clicked.connect(self.open_connected_devices)
         top_row.addWidget(self.devices_button)
         self.setup_button = QtWidgets.QPushButton("接入新设备")
@@ -427,6 +428,20 @@ class WristWindow(QtWidgets.QMainWindow):
         help_button.clicked.connect(self.show_help)
         top_row.addWidget(help_button)
         layout.addLayout(top_row)
+        self.receive_rate_label = QtWidgets.QLabel("有效收包频率：等待数据")
+        self.receive_rate_label.setWordWrap(True)
+        self.receive_rate_label.setStyleSheet("padding:6px 10px; background:#edf3f8; color:#152b40")
+        self.receive_rate_label.setToolTip(
+            "按设备统计近 2 秒本程序实际读到的有效姿态包数 ÷ 2 秒，每 0.25 秒刷新。"
+            "开始收包后先采样 2 秒；未分配设备也显示。"
+            "不是设备配置频率、画面帧率或无线到达时间；UI 忙碌时批量读包会影响短时统计。"
+            "无序号基准，不能据此直接计算丢包率。")
+        layout.addWidget(self.receive_rate_label)
+        from wt901_viz.receive_diagnostics import ReceiveDiagnosticsPanel
+        self.receive_diagnostics = ReceiveDiagnosticsPanel(source, self)
+        self._closing_for_receive_diagnostics = False
+        self.receive_diagnostics.finished.connect(self._receive_diagnostics_finished)
+        layout.addWidget(self.receive_diagnostics)
         self.controls_enabled = hasattr(source, "write_register")
         self.assignment_button.setEnabled(self.controls_enabled)
         self.devices_button.setEnabled(self.controls_enabled)
@@ -853,6 +868,31 @@ class WristWindow(QtWidgets.QMainWindow):
                       if state.device_id}
         return True
 
+    def _update_receive_rates(self):
+        now = time.monotonic()
+        if now - self._last_rate_refresh < 0.25:
+            return
+        self._last_rate_refresh = now
+        if not hasattr(self.source, "receive_stats"):
+            self.receive_rate_label.setText("有效收包频率：当前数据源不支持（请使用 UDP 模式）")
+            return
+        stats = self.source.receive_stats()
+        assigned = {state.device_id: state.name for state in self.part_states.values()
+                    if state.device_id}
+        ids = sorted(set(assigned) | {key for key, value in stats.items() if value.age_ms <= 3000})
+        rows = []
+        for device_id in ids:
+            name = f"{assigned[device_id]} " if device_id in assigned else "未分配 "
+            value = stats.get(device_id)
+            if value is None:
+                text = "尚未收包"
+            else:
+                rate = "采样中…" if value.rate_hz is None else f"{value.rate_hz:.1f} Hz"
+                text = f"{rate} · 距末包 {value.age_ms:.0f} ms"
+            rows.append(f"{name}{device_id}：{text}")
+        self.receive_rate_label.setText(
+            "有效收包（近 2 秒，非画面帧率）：\n" + ("  |  ".join(rows) or "等待 WT 数据"))
+
     def poll(self):
         latest = {}
         now = time.monotonic()
@@ -880,6 +920,7 @@ class WristWindow(QtWidgets.QMainWindow):
                 for i, value in enumerate((packet.mag_x, packet.mag_y, packet.mag_z)):
                     state.mag_min[i] = min(state.mag_min[i], value)
                     state.mag_max[i] = max(state.mag_max[i], value)
+        self._update_receive_rates()
         if self.controls_enabled:
             for device_id, values in self.source.take_replies():
                 state = self.hands.get(device_id)
@@ -1343,6 +1384,10 @@ class WristWindow(QtWidgets.QMainWindow):
 
         QtCore.QTimer.singleShot(int(UNLOCK_SETTLE * 1000) + 50, finish)
 
+    def _receive_diagnostics_finished(self):
+        if self._closing_for_receive_diagnostics:
+            QtCore.QTimer.singleShot(0, self.close)
+
     def closeEvent(self, event):
         if self.setup_dialog is not None and self.setup_dialog._process is not None:
             self.setup_dialog.state_label.setText("网络切换正在进行，请等待完成后再关闭主窗口。")
@@ -1360,6 +1405,11 @@ class WristWindow(QtWidgets.QMainWindow):
             for state in self.hands.values():
                 if state.setting is not None:
                     state.status.setText("设备设置正在保存/回读，请等待结束后再关闭窗口")
+            event.ignore()
+            return
+        if self.receive_diagnostics.recorder is not None:
+            self._closing_for_receive_diagnostics = True
+            self.receive_diagnostics.stop("window_close")
             event.ignore()
             return
         # Best-effort emergency exit if the user closes the window mid-calibration.

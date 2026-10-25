@@ -1,4 +1,4 @@
-"""Read-only view of WT devices associated with the computer's Wi-Fi hotspot."""
+"""Discover streaming WT devices; hotspot association is optional metadata."""
 
 from __future__ import annotations
 
@@ -66,10 +66,10 @@ class ConnectedDevicesDialog(QtWidgets.QDialog):
         self._last_scan = 0.0
         self._last_ap_command: tuple[str, float] | None = None
 
-        self.setWindowTitle("电脑热点中的 WT 设备")
+        self.setWindowTitle("在线 WT 设备（电脑热点 / 外部 Wi-Fi / 局域网）")
         self.resize(920, 400)
         layout = QtWidgets.QVBoxLayout(self)
-        self.status = QtWidgets.QLabel("正在检查电脑热点…")
+        self.status = QtWidgets.QLabel("正在检查网络；列表以最近 3 秒的有效 WT 数据为准。")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         self.table = QtWidgets.QTableWidget(0, 6)
@@ -88,7 +88,8 @@ class ConnectedDevicesDialog(QtWidgets.QDialog):
             "唯一 ID 来自实时 WT 数据；仅连接热点但尚未发送数据的终端无法确认是否为 WT。"
             "设备端点的源端口可能变化；电脑接收端点是设备应发送到的地址。"
             "电量由最新数据包的电池电压按手册档位估算，并非精确电量计读数。"
-            "切回 AP/UDP 后，设备会离开电脑热点并创建以其 ID 命名的 Wi-Fi。")
+            "列表以最近 3 秒的有效 WT 数据为准，不要求电脑开启热点。"
+            "切回 AP/UDP 后，设备会离开当前 Wi-Fi 并创建以其 ID 命名的 Wi-Fi。")
         self.note.setWordWrap(True)
         layout.addWidget(self.note)
         self.action_status = QtWidgets.QLabel("")
@@ -174,6 +175,8 @@ class ConnectedDevicesDialog(QtWidgets.QDialog):
             self._clear(f"无法确认 Wi-Fi 模式：{err.strip()}")
         elif out.strip() != "ap":
             self._clear(f"当前是 Wi-Fi 客户端连接（{self.connection}），不是电脑热点。")
+            self._run("nmcli", ["-g", "IP4.ADDRESS", "device", "show", self.interface],
+                      self._on_hotspot_ip)
         else:
             self.hotspot_active = True
             self._run("nmcli", ["-g", "IP4.ADDRESS", "device", "show", self.interface],
@@ -181,7 +184,10 @@ class ConnectedDevicesDialog(QtWidgets.QDialog):
 
     def _on_hotspot_ip(self, ok: bool, out: str, _err: str):
         self.hotspot_ip = out.splitlines()[0].split("/")[0].strip() if ok and out.strip() else ""
-        self._run("iw", ["dev", self.interface, "station", "dump"], self._on_stations)
+        if self.hotspot_active:
+            self._run("iw", ["dev", self.interface, "station", "dump"], self._on_stations)
+        else:
+            self._render()
 
     def _on_stations(self, ok: bool, out: str, err: str):
         if not ok:
@@ -202,9 +208,8 @@ class ConnectedDevicesDialog(QtWidgets.QDialog):
         self.hotspot_ip = ""
         self.stations.clear()
         self.neighbors.clear()
-        self.status.setText(message)
-        self.table.setRowCount(0)
-        self._update_switch_button()
+        self.status.setText(message + " 仍显示本程序收到的在线 WT 设备。")
+        self._render()
 
     def _selected_device(self) -> tuple[str, str] | None:
         row = self.table.currentRow()
@@ -220,13 +225,15 @@ class ConnectedDevicesDialog(QtWidgets.QDialog):
 
     def _eligible_device(self) -> tuple[str, str] | None:
         selected = self._selected_device()
-        if (not selected or not self.hotspot_active or self._process is not None
-                or time.monotonic() - self._last_scan > 5.0):
+        if not selected or self._process is not None:
             return None
         device_id, ip = selected
         associated_ips = {self.neighbors[mac] for mac in self.stations if mac in self.neighbors}
         current = self.source.seen_endpoints(max_age=3.0).get(device_id)
-        if not current or current[0] != ip or ip not in associated_ips:
+        if not current or current[0] != ip:
+            return None
+        if self.hotspot_active and (ip not in associated_ips
+                                   or time.monotonic() - self._last_scan > 5.0):
             return None
         if (self._last_ap_command is not None and self._last_ap_command[0] == device_id
                 and time.monotonic() - self._last_ap_command[1] < 5.0):
@@ -239,7 +246,7 @@ class ConnectedDevicesDialog(QtWidgets.QDialog):
     def switch_selected_to_ap(self):
         selected = self._eligible_device()
         if selected is None:
-            self.action_status.setText("所选设备已不在线或热点状态过期；请刷新并重新选择。")
+            self.action_status.setText("所选设备已不在线或网络状态过期；请刷新并重新选择。")
             return
         device_id, ip = selected
         if self.can_switch is not None and not self.can_switch(device_id):
@@ -247,7 +254,7 @@ class ConnectedDevicesDialog(QtWidgets.QDialog):
         answer = QtWidgets.QMessageBox.question(
             self, "确认切回设备热点",
             f"只对 {device_id}（{ip}）发送切换到 AP/UDP 的指令。\n"
-            "它将从电脑热点断开，并创建名称为该设备 ID 的 Wi-Fi；"
+            "它将从当前 Wi-Fi 断开，并创建名称为该设备 ID 的 Wi-Fi；"
             "其他已连接设备不受影响。\n"
             "发送本身不能证明切换成功，需要之后用电脑连接该设备热点验证。确认继续？")
         if answer != QtWidgets.QMessageBox.StandardButton.Yes:
@@ -265,32 +272,31 @@ class ConnectedDevicesDialog(QtWidgets.QDialog):
         self._last_ap_command = (device_id, time.monotonic())
         self.action_status.setText(
             f"已向 {device_id} 发送 AP/UDP 切换指令。等待它从列表消失；"
-            "可在另一台电脑的 Wi-Fi 列表中查找同名热点进行验证；本电脑热点无需关闭。"
+            "可在 Wi-Fi 列表中查找同名热点进行验证；本程序不会切换电脑网络。"
             "UDP 无确认回执，列表消失也不能单独证明切换成功。")
         self._update_switch_button()
 
     def _render(self):
-        if not self.hotspot_active:
-            return
         selected = self._selected_device()
         endpoints = self.source.seen_endpoints(max_age=3.0)
         listen_port = self.source.sock.getsockname()[1]
         listen_ip = self.hotspot_ip or self.source.sock.getsockname()[0]
         rows = []
-        for mac in self.stations:
+        mac_by_ip = {ip: mac for mac, ip in self.neighbors.items()}
+        # A parsed, fresh UDP stream is the discovery authority on every network.
+        # ARP/association information must never hide an otherwise online device.
+        for device_id, (ip, source_port, _seen) in sorted(endpoints.items()):
+            packet = self.source.latest_packet(device_id)
+            charge = ("未知" if packet is None or packet.battery_percent is None else
+                      f"{packet.battery_v:.2f} V（约 {packet.battery_percent}%）")
+            rows.append((device_id, f"{ip}:{source_port}",
+                         f"{listen_ip}:{listen_port}", mac_by_ip.get(ip, "未知"),
+                         charge, "WT 数据在线"))
+        for mac in self.stations if self.hotspot_active else []:
             ip = self.neighbors.get(mac, "")
             matching = [(device_id, source_port) for device_id, (sender_ip, source_port, _seen)
                         in endpoints.items() if sender_ip == ip] if ip else []
-            if matching:
-                for device_id, source_port in matching:
-                    packet = self.source.latest_packet(device_id)
-                    if packet is None or packet.battery_percent is None:
-                        charge = "未知"
-                    else:
-                        charge = f"{packet.battery_v:.2f} V（约 {packet.battery_percent}%）"
-                    rows.append((device_id, f"{ip}:{source_port}",
-                                 f"{listen_ip}:{listen_port}", mac, charge, "WT 数据在线"))
-            else:
+            if not matching:
                 rows.append(("未识别", f"{ip}:—" if ip else "IP 未知",
                              f"{listen_ip}:{listen_port}", mac, "未知", "已关联，未收到 WT 数据"))
         self.table.clearSelection()
