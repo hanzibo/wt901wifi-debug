@@ -22,8 +22,12 @@ CMAKE_BUILD_PARALLEL_LEVEL=2 ~/.local/bin/uv pip install --python .venv/bin/pyth
 .venv/bin/python jetson_teleop/run.py
 ```
 
+也可运行 `bash jetson_teleop/launch.sh`。本目录附带 `WT901-Jetson.desktop`，
+其中路径针对当前板子用户 `mic-711on`；更换用户/仓库位置时须修改，不用于 PC 启动。
+
 Qt 只安装 PySide6-Essentials（Core/Gui/Widgets），无需 Addons。
-Ruckig 0.19.4 在 ARM 上需要源码编译及较新 CMake（≥3.26），不可擅自换规划算法。
+Ruckig 0.19.4 在 ARM 上需要源码编译（CMake ≥3.15、C++ 编译器和 Ninja）；
+该板已有的 GCC 9 / CMake 3.16 已满足构建要求，不可擅自换规划算法。
 部署时可临时设置 `http_proxy` / `https_proxy`，不改系统网络配置。
 `--probe` 只接收并统计 UDP，不加载 Qt、不打开串口；与其他程序同时占用 1399 会失败。
 `--self-test` 只离线检查 IK、轨迹和零手指协议帧。
@@ -55,3 +59,10 @@ Ruckig 0.19.4 在 ARM 上需要源码编译及较新 CMake（≥3.26），不可
 
 本软件无位置反馈，安全确认和“到位”都不是编码器实测。退出会请求原控制线程制动、
 关闭串口后再退出，但软件暂停/制动不等于独立急停。此次自动化部署不执行真实运动测试。
+
+## 私有仓库同步
+
+代码在 PC 开发、提交并推送。当前板子没有 GitHub 凭据，因此首次部署使用
+`git bundle` 经 SSH 同步同一提交，没有复制 GitHub 凭据或临时公开仓库。
+后续可继续增量 bundle，或另行配置板子的只读部署密钥后使用普通 `git pull --ff-only`。
+个人 checkpoint 与运行配置始终通过 SCP 单独复制，覆盖已有配置前应先备份。

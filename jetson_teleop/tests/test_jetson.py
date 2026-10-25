@@ -21,6 +21,7 @@ from wt901.gui_udp import GuiUdpSource
 from optusbproj_ubuntu.real_robot_checkpoints import create, MODES as SIDES
 from optusbproj_ubuntu.real_robot_arm import ArmLimits
 from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QCloseEvent
 from jetson_teleop.window import Window
 
 APP = QApplication.instance() or QApplication([])
@@ -165,6 +166,22 @@ class GuiTests(ConfigTests):
         self.assertGreater(image.width(), 0)
         for name in ('vtk', 'pyvista', 'cv2', 'torch', 'mediapipe', 'pyqtgraph'):
             self.assertNotIn(name, sys.modules)
+
+    def test_parent_close_waits_for_control_shutdown(self):
+        # Keep input flowing while the original transport brakes asynchronously.
+        self.window.timer.start()
+        event = QCloseEvent()
+        with patch.object(self.window.control, 'close', return_value=False), \
+                patch('jetson_teleop.window.QtCore.QTimer.singleShot') as retry:
+            self.window.closeEvent(event)
+        self.assertFalse(event.isAccepted())
+        self.assertTrue(self.window.timer.isActive())
+        retry.assert_called_once()
+        event = QCloseEvent()
+        with patch.object(self.window.control, 'close', return_value=True):
+            self.window.closeEvent(event)
+        self.assertTrue(event.isAccepted())
+        self.assertFalse(self.window.timer.isActive())
 
 
 if __name__ == '__main__': unittest.main()
