@@ -36,6 +36,8 @@ class ElbowSerialWorker(QThread):
         self.target_timing = None
         self.target_received_at = None
         self.gap_deadline = None
+        self.gap_generation = 0
+        self.input_control = None
         self.hands = HandBank()
         self.authorized_hands = {}
 
@@ -81,6 +83,18 @@ class ElbowSerialWorker(QThread):
     def return_snapshot(self):
         with self.lock:
             return self.last_written, None if self.last_state is None else dict(self.last_state), self.home_pending
+
+    def input_snapshot(self):
+        """Authoritative live guard state, not a possibly delayed Qt progress row."""
+        with self.lock:
+            control = self.input_control
+            return dict(task_id=self.task_id, task=self.task, active=self.active,
+                mode=None if control is None else control.mode,
+                phase=None if control is None else getattr(control, 'phase', None),
+                reason=self.pause_reason or ('' if control is None else control.reason),
+                stop_requested=bool(self.pause_reason or self.quit_requested or self.recorder.error),
+                deadline=None if self.latest is None else self.latest[1],
+                hard_deadline=self.gap_deadline, gap_generation=self.gap_generation)
 
     def advance_return(self):
         with self.lock:
@@ -138,6 +152,8 @@ class ElbowSerialWorker(QThread):
         self.target_timing = None
         self.target_received_at = None
         self.gap_deadline = None
+        self.gap_generation = 0
+        self.input_control = control
 
     def begin_finger_return(self):
         from .real_robot_finger_return import FingerReturnControl
@@ -165,6 +181,7 @@ class ElbowSerialWorker(QThread):
         if self.gap_deadline is not None and now > self.gap_deadline:
             if control.mode == 'gap':
                 self.recorder.record('input_timeout', task_id=self.task_id,
+                    gap_generation=self.gap_generation,
                     deadline=self.gap_deadline-.25, expired_ms=(now-self.gap_deadline+.25)*1000,
                     target_age_ms=None if self.target_received_at is None else
                                   (now-self.target_received_at)*1000,
@@ -174,7 +191,9 @@ class ElbowSerialWorker(QThread):
         if now > deadline:
             if control.mode == 'active':
                 self.gap_deadline = deadline + .25
+                self.gap_generation += 1
                 self.recorder.record('input_gap_started', task_id=self.task_id,
+                    gap_generation=self.gap_generation,
                     deadline=deadline, hard_deadline=self.gap_deadline, timing=self.target_timing)
                 control.brake('输入短暂中断 / 等待新 IK；减速等待，最多额外 250 ms')
                 control.mode = 'gap'
@@ -187,6 +206,7 @@ class ElbowSerialWorker(QThread):
             if getattr(control, 'phase', None) == 'transition':
                 control.target = control.initial_target.copy()
             self.recorder.record('input_gap_recovered', task_id=self.task_id,
+                gap_generation=self.gap_generation,
                 remaining_ms=(self.gap_deadline-now)*1000, timing=self.target_timing)
             self.gap_deadline = None
         if control.mode == 'active':

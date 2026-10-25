@@ -218,6 +218,70 @@ class AutoStartTests(unittest.TestCase):
                 self.a.progress(dict(mode='active', phase='following'))
                 self.assertFalse(self.a.pending)
 
+    def live_state(self, **values):
+        self.arm(); self.d.busy = True; self.a.phase = 'settling'
+        self.a.wait_until = time.monotonic()-1
+        self.d._confirm_follow = Mock()
+        state = dict(task_id=1, task='follow', active=True, mode='active',
+                     phase='await_confirmation', reason='', stop_requested=False,
+                     deadline=time.monotonic()+1., hard_deadline=None, gap_generation=1)
+        state.update(values)
+        self.a._writer_snapshot = Mock(side_effect=lambda:dict(state))
+        return state
+
+    def test_writer_recovered_before_gui_deadline_check_or_queued_gap(self):
+        self.live_state()
+        self.a.gap_until = time.monotonic()-.1
+        # Even a stale queued gap event must consult the live recovered writer.
+        self.a.progress(dict(mode='gap', phase='await_confirmation'))
+        self.assertTrue(self.a.authorized)
+        self.assertIsNone(self.a.gap_until)
+        self.assertGreater(self.a.wait_until,time.monotonic())
+        self.a.tick()
+        self.d._confirm_follow.assert_not_called()
+        self.d.worker.pause.assert_not_called()
+
+    def test_poll_recovers_without_any_progress_delivery(self):
+        self.live_state()
+        self.a.gap_until = time.monotonic()-.1
+        self.a.tick()
+        self.assertTrue(self.a.pending)
+        self.assertIsNone(self.a.gap_until)
+        self.d._confirm_follow.assert_not_called()
+
+    def test_live_gap_uses_fixed_writer_deadline_not_gui_observation_time(self):
+        now = time.monotonic()
+        state = self.live_state(mode='gap',deadline=now-.1,hard_deadline=now+.15)
+        self.a.progress(dict(mode='active',phase='following'))  # Stale notification.
+        self.assertEqual(self.a.gap_until,state['hard_deadline'])
+        self.a.tick(now+.05)
+        self.assertEqual(self.a.gap_until,state['hard_deadline'])
+        self.d._confirm_follow.assert_not_called()
+        self.a.tick(now+.16)
+        self.assertFalse(self.a.authorized)
+        self.d.worker.pause.assert_called_once()
+
+    def test_unobserved_gap_recovery_restarts_entire_settle_period(self):
+        state = self.live_state(gap_generation=2)
+        self.a.writer_task = 1; self.a.writer_gap = 1
+        self.a.tick()
+        self.assertTrue(self.a.pending)
+        self.assertGreater(self.a.wait_until,time.monotonic())
+        self.d._confirm_follow.assert_not_called()
+        self.assertEqual(self.a.writer_gap,state['gap_generation'])
+
+    def test_live_stop_or_replaced_session_cannot_be_overridden_by_active_event(self):
+        for values in (dict(active=False,mode='paused'), dict(stop_requested=True),
+                       dict(mode='braking'), dict(task_id=2)):
+            with self.subTest(values=values):
+                self.d.busy = False
+                self.live_state(**values)
+                self.a.writer_task = 1
+                self.a.progress(dict(mode='active',phase='following'))
+                self.assertFalse(self.a.pending)
+                self.assertFalse(self.a.authorized)
+                self.d._confirm_follow.assert_not_called()
+
     def test_discontinuous_history_rejected_at_deadline(self):
         self.arm(); self.d._start = Mock()
         now = time.monotonic(); self.a.deadline = now; self.a.last_tick = now-.01

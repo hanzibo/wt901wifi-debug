@@ -20,6 +20,25 @@ class Events:
 
 
 class GapTests(unittest.TestCase):
+    def test_live_snapshot_tracks_recovery_without_waiting_for_progress_write(self):
+        w, c, target = self.setup_control('shared')
+        w.recorder.error = None
+        self.assertEqual(w.input_snapshot()['gap_generation'],0)
+        w._input_guard(c,10.26,10.25,None)
+        gap = w.input_snapshot()
+        self.assertEqual((gap['mode'],gap['hard_deadline'],gap['gap_generation']),('gap',10.5,1))
+        w.last_state = dict(mode='gap',phase='transition')  # Last emitted row stays old.
+        w.latest = (target,10.65)
+        w._input_guard(c,10.4,10.65,None)
+        active = w.input_snapshot()
+        self.assertEqual(active['mode'],'active')
+        self.assertIsNone(active['hard_deadline'])
+        self.assertEqual(active['gap_generation'],1)
+        w._input_guard(c,10.66,10.65,None)
+        self.assertEqual(w.input_snapshot()['gap_generation'],2)
+        w.pause('manual')
+        self.assertTrue(w.input_snapshot()['stop_requested'])
+
     def test_gui_stale_input_waits_but_other_faults_pause(self):
         from optusbproj_ubuntu.real_robot_arm_gui import RealRobotModesDialog
         from optusbproj_ubuntu.real_robot_gui import RealRobotDialog

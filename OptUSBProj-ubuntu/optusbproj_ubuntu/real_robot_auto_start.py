@@ -15,6 +15,7 @@ class AutoStartSession:
         self.deadline = self.last_tick = self.wait_until = None
         self.signature = None
         self.input_deadline = self.gap_until = None
+        self.writer_task = self.writer_gap = None
         self.panel = QtWidgets.QGroupBox('同源接管设置 / 倒计时自动启动（每次单独确认）')
         layout = QtWidgets.QVBoxLayout(self.panel)
         form = QtWidgets.QFormLayout()
@@ -91,6 +92,7 @@ class AutoStartSession:
             self.signature = signature
             self.input_deadline = d.arm_sample[1]
             self.gap_until = None
+            self.writer_task = self.writer_gap = None
             self.authorized = True; self.phase = 'countdown'
             self.last_tick = time.monotonic(); self.deadline = self.last_tick + settings['countdown']
             self.owner._arm_event('auto_start_authorized', settings=settings, feedback=False)
@@ -106,6 +108,7 @@ class AutoStartSession:
         self.phase = 'idle'; self.authorized = False
         self.deadline = self.last_tick = self.wait_until = None
         self.input_deadline = self.gap_until = None
+        self.writer_task = self.writer_gap = None
         d.arm_capture = None
         self.label.setText('自动流程已取消：'+reason+'；不会自动重试。')
         d.start_notice.setText(self.label.text())
@@ -124,6 +127,10 @@ class AutoStartSession:
         if self.last_tick is not None and now-self.last_tick > .5:
             self.cancel('界面调度中断超过 0.5 秒', stop=True); return
         self.last_tick = now
+        live = self._writer_snapshot()
+        if live is not None:
+            if self._writer_progress(live, now) or not self.pending:
+                return
         if d.arm_sample is not None:
             self.input_deadline = d.arm_sample[1]
         if d.arm_sample is None or now > self.input_deadline:
@@ -169,6 +176,59 @@ class AutoStartSession:
 
     def progress(self, state):
         if not self.pending: return
+        live = self._writer_snapshot()
+        if live is not None:
+            self._writer_progress(live, time.monotonic())
+            return
+        self._progress(state)
+
+    def _writer_snapshot(self):
+        d = self.owner
+        if (not d.busy or self.phase not in ('transition', 'settling', 'confirming')
+                or not callable(getattr(type(d.worker), 'input_snapshot', None))):
+            return None
+        return d.worker.input_snapshot()
+
+    def _writer_progress(self, state, now):
+        """One watchdog authority. Qt events are wakeups, not guard history."""
+        if self.writer_task is None:
+            self.writer_task = state['task_id']
+        if (state['task_id'] != self.writer_task or state['task'] != 'follow'
+                or not state['active'] or state['stop_requested']
+                or state['mode'] not in ('active', 'gap')):
+            self.cancel('控制会话已停止：'+state.get('reason', ''), stop=True)
+            return True
+        changed = self.writer_gap is not None and self.writer_gap != state['gap_generation']
+        self.writer_gap = state['gap_generation']
+        if changed and self.phase == 'settling':
+            # A whole gap/recovery may occur between GUI polls.
+            self.wait_until = now + self.values()['settle']
+        deadline = state['deadline']
+        if state['mode'] == 'gap' or deadline is None or now > deadline:
+            hard = state['hard_deadline']
+            if hard is None and deadline is not None:
+                hard = deadline + .25
+            if hard is None or now > hard:
+                self.cancel('串口输入保护期限已届满；需重新接管', stop=True)
+                return True
+            if self.gap_until is None or changed:
+                self.owner._arm_event('auto_start_gap_wait', task_id=state['task_id'],
+                    gap_generation=state['gap_generation'], hard_deadline=hard, feedback=False)
+            self.gap_until = hard  # Never now + .25; never extend the writer's window.
+            if self.phase == 'settling':
+                self.wait_until = now + self.values()['settle']
+            self.label.setText('串口线程正在减速等待新 IK；恢复后重新等待完整稳定时间。')
+            return True
+        if self.gap_until is not None:
+            self.gap_until = None  # Writer recovered, even if GUI's old deadline elapsed.
+            if self.phase == 'settling':
+                self.wait_until = now + self.values()['settle']
+            self.owner._arm_event('auto_start_gap_recovered', task_id=state['task_id'],
+                                 gap_generation=state['gap_generation'], feedback=False)
+        self._progress(state)
+        return False
+
+    def _progress(self, state):
         if (state['mode'] == 'gap' and self.owner.busy
                 and self.phase in ('transition', 'settling', 'confirming')):
             if self.gap_until is None:
