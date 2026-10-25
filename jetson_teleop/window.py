@@ -40,7 +40,7 @@ class ControlDialog(RealRobotModesDialog):
         self.resize(1000, 760)
 
     def load_preset(self):
-        self.viewer.zero_confirmed = False
+        self.viewer.invalidate_zero()
         self.viewer.review.setChecked(False)
         self.viewer.message.setText('模式改变：请重新核对设备、自然下垂归零。')
         try:
@@ -126,6 +126,11 @@ class Window(QtWidgets.QWidget):
         super().__init__()
         self.source, self.config = source, config
         self.zero_confirmed = False
+        self.zeroed_parts = set()
+        self.zero_pending = None
+        self.zero_timer = QtCore.QTimer(self)
+        self.zero_timer.setInterval(100)
+        self.zero_timer.timeout.connect(self.tick_zero)
         self.preset_error = ''
         self.engine = PoseEngine(config['assignments'], config['axis_mappings'],
                                  {key: GYRO_TILT for key in config['assignments']})
@@ -138,9 +143,28 @@ class Window(QtWidgets.QWidget):
         layout.addWidget(self.devices)
         self.review = QtWidgets.QCheckBox('已核对配置文件中的设备部位、手动轴映射、掌向偏置及六轴协议方向')
         layout.addWidget(self.review)
-        self.zero_button = QtWidgets.QPushButton('双臂自然下垂：采集当前中立参考（连接串口前）')
-        self.zero_button.clicked.connect(self.zero)
-        layout.addWidget(self.zero_button)
+        self.zero_delays = {}
+        self.zero_buttons = {}
+        for group, text in (('arms', '上臂 / 前臂自然下垂：定时采集中立位（不含手背）'),
+                            ('hands', '手背保持参考姿态：单独定时采集中立位')):
+            row = QtWidgets.QHBoxLayout()
+            delay = QtWidgets.QDoubleSpinBox()
+            delay.setRange(0, 60)
+            delay.setValue(3)
+            delay.setSuffix(' 秒')
+            delay.setToolTip('点击后等待此时间，再采集当时的最新姿态；0 秒为立即采集。')
+            button = QtWidgets.QPushButton(text)
+            button.clicked.connect(lambda checked=False, group=group: self.zero(group))
+            self.zero_delays[group] = delay
+            self.zero_buttons[group] = button
+            row.addWidget(button, 1)
+            row.addWidget(delay)
+            layout.addLayout(row)
+        self.zero_button = self.zero_buttons['arms']
+        self.zero_cancel = QtWidgets.QPushButton('取消中立位采集倒计时')
+        self.zero_cancel.clicked.connect(self.cancel_zero)
+        self.zero_cancel.setEnabled(False)
+        layout.addWidget(self.zero_cancel)
         self.message = QtWidgets.QLabel('等待 IMU；配置不会自动开启机器人串口。')
         self.message.setWordWrap(True)
         layout.addWidget(self.message)
@@ -160,24 +184,66 @@ class Window(QtWidgets.QWidget):
 
     def invalidate_zero(self):
         self.zero_confirmed = False
-        self.control._controls()
+        self.zeroed_parts.clear()
+        self.cancel_zero()
+        if hasattr(self, 'control'):
+            self.control._controls()
+
+    def cancel_zero(self):
+        pending = self.zero_pending is not None
+        self.zero_pending = None
+        self.zero_timer.stop()
+        if hasattr(self, 'zero_cancel'):
+            self.zero_cancel.setEnabled(False)
+        if pending:
+            self.message.setText('采集已取消；请重新采集未完成的组。')
 
     def active_parts(self):
         return [key for key in self.config['assignments']
                 if self.control._bilateral_mode() or key.startswith('left_')]
 
-    def zero(self):
+    def zero(self, group='arms'):
+        if group not in self.zero_buttons or self.zero_pending is not None:
+            return
         if self.control.worker is not None or not self.review.isChecked() or self.preset_error:
             self.message.setText('请先断开串口、成功加载预设并核对配置。')
             return
-        if not all(self.engine.is_live(self.engine.assignments[key], time.monotonic(), .25)
-                   for key in self.active_parts()):
-            self.message.setText('所选手臂的 IMU 必须全部在线且距末包 ≤250 ms，不能用旧数据归零。')
-            return
-        self.engine.zero()
-        self.zero_confirmed = True
+        keys = [key for key in self.active_parts() if key.endswith('_hand') == (group == 'hands')]
+        self.zeroed_parts.difference_update(keys)
+        self.zero_confirmed = False
         self.control._controls()
-        self.message.setText('自然下垂参考已采集。可打开控制面板；仍须上电确认、安全许可及明确启动。')
+        self.zero_pending = (group, keys, time.monotonic()+self.zero_delays[group].value())
+        self.zero_cancel.setEnabled(True)
+        self.zero_timer.start()
+        self.tick_zero()
+
+    def tick_zero(self):
+        if self.zero_pending is None:
+            return
+        group, keys, deadline = self.zero_pending
+        if self.control.worker is not None or not self.review.isChecked() or self.preset_error:
+            self.cancel_zero()
+            return
+        remaining = deadline-time.monotonic()
+        label = '手背' if group == 'hands' else '上臂 / 前臂'
+        if remaining > 0:
+            self.message.setText(f'{label}：{remaining:.1f} 秒后采集，请保持对应参考姿态。')
+            return
+        self.zero_pending = None
+        self.zero_timer.stop()
+        self.zero_cancel.setEnabled(False)
+        if not all(self.engine.is_live(self.engine.assignments[key], time.monotonic(), .25)
+                   for key in keys):
+            self.message.setText(f'{label}采集失败：本组 IMU 必须全部在线且距末包 ≤250 ms，请重新采集。')
+            return
+        for key in keys:
+            self.engine.zero(key)
+        self.zeroed_parts.update(keys)
+        self.zero_confirmed = set(self.active_parts()).issubset(self.zeroed_parts)
+        self.control._controls()
+        self.message.setText(f'{label} {len(keys)} 台中立参考已采集。'+
+                             ('两组均已完成，可打开控制面板；仍须上电确认、安全许可及明确启动。'
+                              if self.zero_confirmed else '请继续采集另一组；未完成两组前禁止连接串口。'))
 
     def show_control(self):
         self.control.show()
@@ -195,12 +261,16 @@ class Window(QtWidgets.QWidget):
                 mapping = '/'.join(self.config['axis_mappings'][key])
                 lines.append(f'{PARTS[PART_BY_KEY[key]].label}: {device} · {mapping} · 距末包 {age}')
             self.devices.setText('\n'.join(lines))
-            self.zero_button.setEnabled(self.control.worker is None and self.review.isChecked())
+            for group, button in self.zero_buttons.items():
+                button.setEnabled(self.control.worker is None and self.review.isChecked()
+                                  and not self.preset_error and self.zero_pending is None)
+                self.zero_delays[group].setEnabled(self.zero_pending is None)
             self.review.setEnabled(self.control.worker is None)
             self.preview.update()
             self.next_display = now+.1
 
     def closeEvent(self, event):
+        self.cancel_zero()
         if not self.control.close():
             event.ignore()
             QtCore.QTimer.singleShot(100, self.close)

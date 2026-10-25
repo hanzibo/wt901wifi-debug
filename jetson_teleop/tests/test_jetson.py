@@ -100,6 +100,8 @@ class GuiTests(ConfigTests):
         self.source = GuiUdpSource(0, '127.0.0.1')
         self.addCleanup(self.source.close)
         self.window = Window(self.source, self.read(raw_config()))
+        for delay in self.window.zero_delays.values():
+            delay.setValue(0)
         self.window.timer.stop(); self.window.control.timer.stop()
         self.addCleanup(self.window.close)
 
@@ -114,15 +116,19 @@ class GuiTests(ConfigTests):
         finally:
             sender.close()
 
+    def zero_both(self):
+        self.window.zero('arms')
+        self.window.zero('hands')
+
     def test_no_auto_uart_and_explicit_fresh_zero(self):
         w = self.window; d = w.control
         self.assertEqual(w.preset_error, '')
         self.assertIsNone(d.hand_session)
         self.assertIsNone(d.worker)
         self.assertFalse(d.connect_button.isEnabled())
-        w.review.setChecked(True); w.zero()
+        w.review.setChecked(True); self.zero_both()
         self.assertFalse(w.zero_confirmed)
-        self.feed(PARTS[:3]); w.zero()
+        self.feed(PARTS[:3]); self.zero_both()
         self.assertTrue(w.zero_confirmed)
         self.assertTrue(d.connect_button.isEnabled())
         self.assertTrue(all(w.engine.algorithm_modes[k]=='gyro_tilt' for k in PARTS))
@@ -134,14 +140,14 @@ class GuiTests(ConfigTests):
 
     def test_bilateral_requires_all_six_and_invalidates_reference(self):
         w = self.window; d = w.control
-        self.feed(PARTS[:3]); w.review.setChecked(True); w.zero()
+        self.feed(PARTS[:3]); w.review.setChecked(True); self.zero_both()
         self.assertTrue(w.zero_confirmed)
         d.mode_select.setCurrentIndex(3)
         self.assertFalse(w.zero_confirmed)
         self.assertFalse(w.review.isChecked())
-        w.review.setChecked(True); w.zero()
+        w.review.setChecked(True); self.zero_both()
         self.assertFalse(w.zero_confirmed)
-        self.feed(PARTS); w.zero()
+        self.feed(PARTS); self.zero_both()
         self.assertTrue(w.zero_confirmed)
 
     def test_stale_input_does_not_allow_zero(self):
@@ -159,6 +165,70 @@ class GuiTests(ConfigTests):
         w.review.setChecked(True); self.feed(PARTS); w.zero()
         self.assertFalse(w.zero_confirmed)
         self.assertFalse(d.connect_button.isEnabled())
+
+    def test_groups_are_independent_and_both_required(self):
+        w = self.window
+        w.control.mode_select.setCurrentIndex(3)
+        w.review.setChecked(True); self.feed(PARTS)
+        with patch.object(w.engine, 'zero', wraps=w.engine.zero) as capture:
+            w.zero('arms')
+            self.assertEqual([c.args[0] for c in capture.call_args_list],
+                             [k for k in PARTS if not k.endswith('_hand')])
+        self.assertFalse(w.zero_confirmed)
+        self.assertFalse(w.control.connect_button.isEnabled())
+        saved = {k: {m: value.copy() for m, value in w.engine.mode_neutral[
+            w.engine.assignments[k]].items()} for k in PARTS if not k.endswith('_hand')}
+        with patch.object(w.engine, 'zero', wraps=w.engine.zero) as capture:
+            w.zero('hands')
+            self.assertEqual([c.args[0] for c in capture.call_args_list],
+                             [k for k in PARTS if k.endswith('_hand')])
+        self.assertTrue(w.zero_confirmed)
+        for k, modes in saved.items():
+            for m, value in modes.items():
+                self.assertTrue((value == w.engine.mode_neutral[w.engine.assignments[k]][m]).all())
+
+    def test_countdown_captures_at_deadline_and_cancel_invalidates(self):
+        w = self.window; w.review.setChecked(True); self.feed(PARTS)
+        w.zero_delays['arms'].setValue(3)
+        with patch.object(w.engine, 'zero', wraps=w.engine.zero) as capture:
+            w.zero('arms')
+            self.assertIsNotNone(w.zero_pending)
+            capture.assert_not_called()
+            group, keys, deadline = w.zero_pending
+            w.zero_pending = (group, keys, time.monotonic()-1)
+            w.tick_zero()
+            self.assertEqual(capture.call_count, 2)
+        w.zero('hands'); self.assertTrue(w.zero_confirmed)
+        w.zero('arms'); self.assertFalse(w.zero_confirmed)
+        w.cancel_zero()
+        self.assertIsNone(w.zero_pending)
+        self.assertFalse(w.zero_timer.isActive())
+        self.assertFalse(w.control.connect_button.isEnabled())
+
+    def test_stale_group_at_deadline_does_not_capture(self):
+        w = self.window; w.review.setChecked(True); self.feed(PARTS)
+        w.zero_delays['hands'].setValue(3); w.zero('hands')
+        for key in PARTS:
+            w.engine.received_at[w.engine.assignments[key]] -= 1
+        group, keys, deadline = w.zero_pending
+        w.zero_pending = (group, keys, time.monotonic()-1)
+        with patch.object(w.engine, 'zero') as capture:
+            w.tick_zero(); capture.assert_not_called()
+        self.assertIn('采集失败', w.message.text())
+        self.assertFalse(w.zero_confirmed)
+
+    def test_mode_change_cancels_pending_and_uart_blocks_capture(self):
+        w = self.window; w.review.setChecked(True)
+        w.zero_delays['arms'].setValue(3); w.zero('arms')
+        w.control.mode_select.setCurrentIndex(3)
+        self.assertIsNone(w.zero_pending)
+        self.assertFalse(w.zeroed_parts)
+        w.review.setChecked(True)
+        w.control.worker = Mock()
+        try:
+            w.zero('hands'); self.assertIsNone(w.zero_pending)
+        finally:
+            w.control.worker = None
 
     def test_lightweight_imports_and_render(self):
         self.window.show(); self.window.poll(); APP.processEvents()
