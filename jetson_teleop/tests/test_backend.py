@@ -24,6 +24,17 @@ from PySide6.QtWidgets import QMessageBox
 
 
 class BackgroundTests(unittest.TestCase):
+    def test_network_migration_runs_in_acquisition_owner(self):
+        key = self.window.config['assignments'][PARTS[0]]
+        observed = []
+        def capture(*args):
+            observed.append((threading.current_thread(), args))
+        with patch.object(self.source, 'configure_network', side_effect=capture):
+            self.window.source.configure_network(
+                key, '127.0.0.1', 'offline-net', 'offline-password', '192.168.3.8', 1399)
+        self.assertIs(observed[0][0], self.service.thread)
+        self.assertEqual(observed[0][1][0], key)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)

@@ -97,6 +97,25 @@ class ManagerTests(unittest.TestCase):
             self.manager.network_ready(0)
         self.assertIn('eth0: 192.168.3.8/24',self.manager.network.text())
 
+    def test_batch_dialog_shared_source_default_pc_and_uart_guard(self):
+        self.feed()
+        with patch('wt901_viz.network_migration.NetworkMigrationDialog') as dialog:
+            self.manager.migrate_network()
+            args, kwargs = dialog.call_args
+            self.assertIs(args[0], self.window.source)
+            self.assertEqual(kwargs['default_target'], 1)
+            self.assertTrue(kwargs['can_switch'](self.key))
+            dialog.return_value.exec.assert_called_once()
+            self.window.control.busy = True
+            try:
+                self.assertFalse(kwargs['can_switch'](self.key))
+                self.manager.controls()
+                self.assertFalse(self.manager.migrate_button.isEnabled())
+                self.manager.migrate_network()
+                self.assertEqual(dialog.call_count, 1)
+            finally:
+                self.window.control.busy = False
+
     def test_closing_robot_window_keeps_manager_and_input_alive(self):
         self.window.imu_manager = self.manager
         self.window.timer.start()

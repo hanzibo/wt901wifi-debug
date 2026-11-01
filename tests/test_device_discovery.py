@@ -58,6 +58,16 @@ class DiscoveryTests(unittest.TestCase):
         dialog._clear("外部 Wi-Fi：Redmi K60")
         return dialog
 
+    def test_batch_entry_shares_source_and_existing_operation_guard(self):
+        dialog = self.devices()
+        guard = Mock(return_value=True)
+        dialog.can_switch = guard
+        with patch('wt901_viz.network_migration.NetworkMigrationDialog') as batch:
+            dialog.migrate_network()
+        self.assertIs(batch.call_args.args[0], self.source)
+        self.assertIs(batch.call_args.kwargs['can_switch'], guard)
+        batch.return_value.exec.assert_called_once()
+
     def assignment(self):
         callback = Mock(return_value=True)
         states = {key: SimpleNamespace(name=key, device_id="") for key in ("left", "right")}

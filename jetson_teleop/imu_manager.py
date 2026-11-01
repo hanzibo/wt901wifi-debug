@@ -42,6 +42,9 @@ class ImuManager(QtWidgets.QWidget):
         self.ap_button = QtWidgets.QPushButton('将选中的在线 IMU 切回 AP / UDP…（需要确认）')
         self.ap_button.clicked.connect(self.switch_ap)
         layout.addWidget(self.ap_button)
+        self.migrate_button = QtWidgets.QPushButton('批量迁移在线 IMU 到电脑热点 / 其他接收端…')
+        self.migrate_button.clicked.connect(self.migrate_network)
+        layout.addWidget(self.migrate_button)
         self.refresh_button = QtWidgets.QPushButton('刷新板子网卡 IPv4')
         self.refresh_button.clicked.connect(self.refresh_network)
         layout.addWidget(self.refresh_button)
@@ -93,6 +96,17 @@ class ImuManager(QtWidgets.QWidget):
         key = self.selected()
         self.ap_button.setEnabled(self.allowed() and key in self.source.seen_endpoints())
         self.ap_button.setToolTip('须先在真机控制窗口制动并断开串口；不允许控制期间切断 IMU 输入。')
+        self.migrate_button.setEnabled(self.allowed() and bool(self.source.seen_endpoints()))
+
+    def migrate_network(self):
+        from wt901_viz.network_migration import NetworkMigrationDialog
+        if not self.allowed():
+            self.status.setText('请先制动并断开真机串口。')
+            return
+        dialog = NetworkMigrationDialog(self.source, self, can_switch=lambda key: self.allowed(),
+                                        default_target=1)
+        dialog.exec()
+        dialog.deleteLater()
 
     def render(self):
         selected = self.selected()

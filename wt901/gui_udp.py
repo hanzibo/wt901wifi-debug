@@ -221,6 +221,18 @@ class GuiUdpSource:
         """Vendor ASCII command: leave STA and create the device's own AP/UDP hotspot."""
         self._send(device_id, b"WITAPUDP\r\n")
 
+    def configure_network(self, device_id: str, expected_ip: str, ssid: str,
+                          password: str, server_ip: str, port: int) -> None:
+        """Unicast to a still-fresh ID/IP binding; send success is not an ACK."""
+        from .network_config import build_sta_command
+        payload = build_sta_command(ssid, password, server_ip, port)
+        if self.device_ip(device_id) != expected_ip:
+            raise RuntimeError('设备 IP 已变化，请刷新后重试')
+        if any(key != device_id and ip == expected_ip
+               for key, (ip, _, _) in self.seen_endpoints().items()):
+            raise RuntimeError('多个在线设备共用同一 IP，未发送')
+        self._send(device_id, payload)
+
     def write_register(self, device_id: str, address: int, value: int,
                        max_age: float | None = 3.0) -> None:
         self._send(device_id, bytes((0xff, 0xaa, address & 0xff,

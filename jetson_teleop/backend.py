@@ -52,6 +52,10 @@ class SourceView:
     def switch_to_ap_udp(self, key):
         return self.owner.call(lambda:self.owner.source.switch_to_ap_udp(key))
 
+    def configure_network(self, key, expected_ip, ssid, password, server_ip, port):
+        return self.owner.call(lambda:self.owner.source.configure_network(
+            key, expected_ip, ssid, password, server_ip, port))
+
     def add_diagnostic_sink(self, sink):
         self.owner.call(lambda:self.owner.sinks.append(sink) if sink not in self.owner.sinks else None)
 

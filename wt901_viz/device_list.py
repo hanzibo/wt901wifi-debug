@@ -104,6 +104,9 @@ class ConnectedDevicesDialog(QtWidgets.QDialog):
         self.switch_ap_button.clicked.connect(self.switch_selected_to_ap)
         self.switch_ap_button.setEnabled(False)
         actions.addWidget(self.switch_ap_button)
+        self.migrate_button = QtWidgets.QPushButton("批量迁移在线 IMU…")
+        self.migrate_button.clicked.connect(self.migrate_network)
+        actions.addWidget(self.migrate_button)
         actions.addStretch(1)
         close_button = QtWidgets.QPushButton("关闭")
         close_button.clicked.connect(self.close)
@@ -222,6 +225,12 @@ class ConnectedDevicesDialog(QtWidgets.QDialog):
         device_id = id_item.text()
         ip = endpoint_item.text().split(":", 1)[0]
         return device_id, ip
+
+    def migrate_network(self):
+        from .network_migration import NetworkMigrationDialog
+        dialog = NetworkMigrationDialog(self.source, self, can_switch=self.can_switch)
+        dialog.exec()
+        dialog.deleteLater()
 
     def _eligible_device(self) -> tuple[str, str] | None:
         selected = self._selected_device()
