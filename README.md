@@ -1,5 +1,32 @@
 # WT901WIFI：人体姿态、RGB-D 纠偏与机器人遥操作预览
 
+原创源代码和项目文档采用 [MIT 许可证](LICENSE)；第三方依赖及模型素材的范围见
+[第三方材料说明](THIRD_PARTY_NOTICES.md)。Jetson / ARM 轻量双臂控制入口见
+[jetson_teleop](jetson_teleop/README.md)。个人设备配置、Checkpoint 和录制数据不随仓库发布。
+
+## 克隆与选择入口
+
+`main` 包含电脑端及 Jetson / ARM 端代码。普通克隆即可获得两者，板端代码独立位于
+`jetson_teleop/`，不替换电脑端程序。
+
+```bash
+git clone https://github.com/hanzibo/wt901wifi-debug.git
+cd wt901wifi-debug
+```
+
+先按需要选择一条路线，使用 Python 3.11 独立环境：
+
+- **设备联网、收包诊断、批量迁移与手腕预览**：安装
+  `python -m pip install -r wt901_viz/requirements.txt`，运行 `python wrist_demo.py`。
+- **电脑端人体模型、视觉融合与仿真/真机控制**：见下方主路线及
+  [Ubuntu 应用说明](OptUSBProj-ubuntu/README.md)。视觉权重、相机 SDK 和仿真场景须按文档另行准备。
+- **Jetson 轻量真机控制**：按 [板端安装与运行](jetson_teleop/README.md) 部署，
+  不需要安装电脑端视觉或仿真环境。
+
+各人的 IMU ID、安装轴映射、网络密码、关节配置和 Checkpoint 需要自行配置；
+个人配置不随 Git 发布。板端运行配置的生成流程见其 README 的“配置”部分。
+文档中历史 `/home/hzb/...`、`/home/mic-711on/...` 路径及桌面启动项须改为实际部署路径。
+
 本仓库在 Ubuntu 上实现 WT901WIFI 多设备采集、人体姿态映射、穿戴标定、RGB-D 辅助航向纠偏，以及 X1 的 **RViz 运动学预览**和新机器人的 **CoppeliaSim 遥操作预览**。当前主路线位于 [OptUSBProj Ubuntu 版](OptUSBProj-ubuntu/README.md)；根目录的 [双手手腕控制台](wrist_demo.py) 保留为独立调试入口。说明更新于 2026-10-16。另有默认不发送的实验性真机单肘 / 单臂 / 双臂控制，不代表真机安全验收。
 
 主要数据链路为：WT901 原始数据 → 姿态估计 → 穿戴轴映射与中立参考 → STL 人体模型 → 肘腕目标及 IK → X1 `/joint_states` 或 CoppeliaSim 场景关节角。双 IMU 的离散开合输入还可驱动 X1 夹爪或新机器人预先配置的手指端点。Gemini 336L 的彩色图像经二维关键点检测后，结合真实配准深度得到骨段方向，为四个臂段提供低频航向纠偏；高频传播仍由 IMU 完成。
