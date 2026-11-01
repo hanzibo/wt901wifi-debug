@@ -143,13 +143,19 @@ def pose_engine(data):
     return engine
 
 
-def run_stage(data, stage):
+def run_stage(data, stage, backend='thread'):
     global _APP
     from .backend import PoseService
     arms = solver(data['settings'], True)  # JIT/setup excluded from timing.
     if data['initial'] is not None:
         for side,arm in arms.items():
             arm.previous = arm.limits.to_sim(data['initial'][:6] if side=='right' else data['initial'][6:])
+    isolated = None
+    if backend == 'process':
+        from .process_ik import ProcessIK, describe
+        spec = dict(bilateral=True, provenance={s:a.provenance for s,a in arms.items()},
+                    arms={s:describe(a)['arms'][s] for s,a in arms.items()})
+        isolated = ProcessIK(spec)
     source = service = window = log = None
     rows = []; outputs = []; failure = []; clock_samples = []
     stop = threading.Event(); done = threading.Event(); latest = {}
@@ -191,14 +197,24 @@ def run_stage(data, stage):
                 due = origin+(frame['monotonic_ns']/1e9-data['first'])
                 if stop.wait(max(0,due-time.monotonic())):return
                 started = time.monotonic_ns();cpu = time.thread_time_ns()
-                result = {s:a.solve(human(frame['payload'][s])) for s,a in arms.items()}
+                if isolated is None:
+                    result = {s:a.solve(human(frame['payload'][s])) for s,a in arms.items()}
+                    target = result.get('right',{}).get('target',[90.]*6)+result.get('left',{}).get('target',[90.]*6)
+                    arms_timing = {s:dict(a.last_solve_timing) for s,a in arms.items()}
+                    cpu_ms = (time.thread_time_ns()-cpu)/1e6
+                else:
+                    result = isolated.solve({s:human(frame['payload'][s]) for s in arms})
+                    target = result['target']
+                    arms_timing = isolated.last_solve_timing['arms']
+                    cpu_ms = isolated.last_solve_timing['thread_cpu_ms']
                 wall = (time.monotonic_ns()-started)/1e6
                 metric = dict(sequence=frame['sequence'],wall_ms=wall,
-                              thread_cpu_ms=(time.thread_time_ns()-cpu)/1e6,
+                              thread_cpu_ms=cpu_ms,
                               start_lag_ms=max(0,(started/1e9-due)*1000),
-                              arms={s:dict(a.last_solve_timing) for s,a in arms.items()})
+                              arms=arms_timing)
+                if isolated is not None:
+                    metric['process_wall_ms'] = isolated.last_solve_timing['wall_ms']
                 rows.append(metric)
-                target = result.get('right',{}).get('target',[90.]*6)+result.get('left',{}).get('target',[90.]*6)
                 outputs.append(target);latest['target'] = target
                 if log is not None:log.record('benchmark_ik',**metric,target=target)
         except Exception as exc:failure.append(repr(exc))
@@ -220,6 +236,7 @@ def run_stage(data, stage):
     finally:
         stop.set();worker.join(timeout=5)
         if worker.is_alive():raise RuntimeError('IK线程未退出；本次测试不完整')
+        if isolated is not None:isolated.close()
         if service is not None:service.close()
         if log is not None:log.close()
         if window is not None:
@@ -229,7 +246,8 @@ def run_stage(data, stage):
     if failure:raise RuntimeError(failure[0])
     if service is not None and service.error:raise RuntimeError(service.error)
     if log is not None and (log.error or log.dropped):raise RuntimeError(log.error or '诊断丢弃')
-    return dict(stage=stage,frames=len(rows),wall_ms=stats([r['wall_ms'] for r in rows]),
+    return dict(stage=stage,backend=backend,frames=len(rows),wall_ms=stats([r['wall_ms'] for r in rows]),
+                process_wall_ms=stats([r['process_wall_ms'] for r in rows if 'process_wall_ms' in r]),
                 thread_cpu_ms=stats([r['thread_cpu_ms'] for r in rows]),
                 wall_minus_thread_cpu_ms=stats([r['wall_ms']-r['thread_cpu_ms'] for r in rows]),
                 start_lag_ms=stats([r['start_lag_ms'] for r in rows]),
@@ -240,12 +258,13 @@ def run_stage(data, stage):
                 raw_timings=rows),np.asarray(outputs)
 
 
-def benchmark(data, stages=STAGES, repeats=1):
+def benchmark(data, stages=STAGES, repeats=1, backends=('thread',)):
     runs=[];baseline=None
     for repeat in range(repeats):
-        for stage in (stages if repeat%2==0 else tuple(reversed(stages))):
-            print(f'[{repeat+1}/{repeats}] {stage}: running fixed-input replay',file=sys.stderr,flush=True)
-            result,angles=run_stage(data,stage)
+        groups = [(b,s) for b in backends for s in stages]
+        for backend,stage in (groups if repeat%2==0 else list(reversed(groups))):
+            print(f'[{repeat+1}/{repeats}] {backend}/{stage}: running fixed-input replay',file=sys.stderr,flush=True)
+            result,angles=run_stage(data,stage,backend)
             if baseline is None:baseline=angles
             result['max_joint_difference_deg']=float(np.max(np.abs(angles-baseline)))
             result['repeat']=repeat+1;runs.append(result)
@@ -267,6 +286,7 @@ def main():
     parser.add_argument('--max-frames',type=int,default=200)
     parser.add_argument('--repeats',type=int,default=1)
     parser.add_argument('--stages',nargs='+',choices=STAGES,default=STAGES)
+    parser.add_argument('--backends',nargs='+',choices=('thread','process'),default=['thread'])
     args=parser.parse_args()
     if not 1<=args.max_frames<=500 or not 1<=args.repeats<=3:parser.error('frames 1..500; repeats 1..3')
     os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
@@ -274,7 +294,7 @@ def main():
     # Defense in depth: even an accidental GUI action cannot open an IO device.
     with patch('serial.Serial',side_effect=RuntimeError('offline benchmark forbids UART')),patch(
             'socket.socket',side_effect=RuntimeError('offline benchmark forbids sockets')):
-        result=benchmark(load_recording(args.recording,args.control,args.max_frames),tuple(args.stages),args.repeats)
+        result=benchmark(load_recording(args.recording,args.control,args.max_frames),tuple(args.stages),args.repeats,tuple(args.backends))
     print(json.dumps(result,ensure_ascii=False,indent=2))
 
 

@@ -297,6 +297,8 @@ class LiveIK(QThread):
         self.task_id = None
         self.sequence = 0
         self.failure = None
+        from .process_ik import ProcessIK
+        if isinstance(solver, ProcessIK):solver.cancelled = self.cancelled
 
     def submit(self, *args):
         pass  # Compatibility only: the GUI is never the live-input producer.
@@ -379,6 +381,10 @@ class LiveIK(QThread):
                 measured = getattr(self.solver,'last_solve_timing',None)
                 solve_metrics = dict(ik_thread_cpu_ms=(time.thread_time_ns()-solve_cpu)/1e6,
                                      solver_timing=deepcopy(measured) if isinstance(measured,dict) else None)
+                if isinstance(measured,dict) and measured.get('backend') == 'spawn_process':
+                    solve_metrics['ik_proxy_thread_cpu_ms'] = solve_metrics['ik_thread_cpu_ms']
+                    solve_metrics['ik_thread_cpu_ms'] = measured['thread_cpu_ms']
+                    solve_metrics['ik_backend'] = 'spawn_process'
                 self.service.record_diagnostic('ik_solved', sequence=self.sequence,
                     task_id=self.task_id, ik_ms=(after-before)*1000, deadline=deadline,
                     solve_finished_at=after, **solve_metrics, **read_metrics)
@@ -417,3 +423,5 @@ class LiveIK(QThread):
         finally:
             self.cancelled.set()
             self.service.unsubscribe(self.monitor)
+            from .process_ik import ProcessIK
+            if isinstance(self.solver, ProcessIK):self.solver.close()

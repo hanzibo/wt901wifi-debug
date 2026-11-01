@@ -147,12 +147,17 @@ class ControlDialog(RealRobotModesDialog):
             context = self._initial_context()
             _, baseline, limits, mode, left_palm, right_palm, left_offset, right_offset, _ = context
             def factory():
+                from .process_ik import ProcessIK
                 from .fast_geometry import prepare
+                # Inline/legacy window exists only for old synthetic tests.
+                # Production always has a PoseService and uses spawn isolation.
+                isolated = getattr(self.viewer,'pose_service',None) is not None
+                finish = ProcessIK.from_solver if isolated else prepare
                 if mode == 3:
-                    return prepare(BilateralIK(baseline, limits,
+                    return finish(BilateralIK(baseline, limits,
                         palms={'left': left_palm, 'right': right_palm},
                         offsets={'left': left_offset, 'right': right_offset}))
-                return prepare(SharedArmIK(baseline, limits, palm=left_palm, offset=left_offset))
+                return finish(SharedArmIK(baseline, limits, palm=left_palm, offset=left_offset))
             worker = InitialIKWorker(factory, deepcopy(self.arm_capture[0]), self)
             worker.context, worker.capture, worker.automatic = context, self.arm_capture, automatic
             worker.prepared.connect(self._initial_ready)
@@ -173,6 +178,8 @@ class ControlDialog(RealRobotModesDialog):
     def _initial_ready(self, prepared):
         worker = self.sender()
         if worker is not self.ik_worker or worker.cancelled.is_set():
+            from .process_ik import ProcessIK
+            if isinstance(prepared[0],ProcessIK):prepared[0].close()
             return
         try:
             if (self.arm_capture is not worker.capture or self._initial_context() != worker.context
@@ -181,7 +188,7 @@ class ControlDialog(RealRobotModesDialog):
                                                    and self.auto_start.phase == 'preparing'))):
                 raise ValueError('初始求解期间配置、授权或参考变化，结果已丢弃')
             self._arm_event('initial_ik_finished', solve_ms=prepared[2], asynchronous=True,
-                            ik_backend='numba_geometry')
+                            ik_backend='spawn_process_numba_geometry')
             # Re-enter all original start gates, including current input/pose
             # revalidation and manual modal confirmation. No worker writes UART.
             self.ik_worker = None
@@ -197,6 +204,10 @@ class ControlDialog(RealRobotModesDialog):
         except Exception as exc:
             self.auto_start.cancel(str(exc))
             self.start_notice.setText('初始 IK 已取消：'+str(exc))
+        finally:
+            from .process_ik import ProcessIK
+            if isinstance(prepared[0],ProcessIK) and not (self.busy and getattr(self.ik_worker,'solver',None) is prepared[0]):
+                prepared[0].close()
         self._controls()
 
     def _invalidate_capture(self, *args):
@@ -384,7 +395,7 @@ class Window(QtWidgets.QWidget):
                 limits={s:vars(getattr(limits,s) if hasattr(limits,'sides') else limits) for s in sides},
                 palms={'left':d.shared_palm.isChecked(),'right':d.right_options[0].isChecked()},
                 offsets={'left':d._palm_offset(),'right':d._right_offset()},
-                profiles={s:load_profile(s) for s in sides}, backend='numba_geometry')
+                profiles={s:load_profile(s) for s in sides}, backend='spawn_process_numba_geometry')
             root = Path(__file__).resolve().parents[1]/'recordings'/'jetson_ik'
             log = DiagnosticLog(root,settings,self.diagnostic_seconds.value())
             try:self.pose_service.call(lambda:setattr(self.pose_service,'diagnostic',log))

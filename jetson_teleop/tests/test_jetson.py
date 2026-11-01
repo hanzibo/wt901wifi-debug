@@ -288,7 +288,7 @@ class GuiTests(ConfigTests):
         event = threading.Event()
         solver = Mock()
         solver.solve.side_effect = lambda side:(event.wait(.5) or dict(target=[90.]*6))
-        with patch('jetson_teleop.window.SharedArmIK', return_value=solver), patch.object(
+        with patch('jetson_teleop.fast_geometry.prepare', side_effect=lambda s:s), patch('jetson_teleop.window.SharedArmIK', return_value=solver), patch.object(
                 RealRobotModesDialog, '_start') as original:
             d._start(); worker = d.ik_worker
             d._invalidate_capture(); event.set()
@@ -299,7 +299,7 @@ class GuiTests(ConfigTests):
     def test_initial_ik_context_change_discards_result(self):
         d = self.prepare_async_start()
         solver = Mock(); solver.solve.side_effect = lambda side:(time.sleep(.05) or dict(target=[90.]*6))
-        with patch('jetson_teleop.window.SharedArmIK', return_value=solver), patch.object(
+        with patch('jetson_teleop.fast_geometry.prepare', side_effect=lambda s:s), patch('jetson_teleop.window.SharedArmIK', return_value=solver), patch.object(
                 RealRobotModesDialog, '_start') as original:
             d._start()
             # Even a programmatic change without a UI signal must be rejected.

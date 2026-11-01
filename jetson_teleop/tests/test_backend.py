@@ -88,6 +88,38 @@ class BackgroundTests(unittest.TestCase):
         self.assertEqual(completed,['left_hand'])
         self.assertNotEqual(signature,self.service.sample(('left',))[1])
 
+    def test_latest_snapshot_skips_intermediate_versions_without_refreshing_old_deadline(self):
+        entered=threading.Event();release=threading.Event();calls=[]
+        sample, signature, version=self.service.sample(('left',))
+        state=dict(version=1,at=time.monotonic(),token=1)
+        service=Mock()
+        def latest(sides):
+            return dict(at=state['at'], device_ages_ms={'test':0},
+                        sides={'left':dict(token=state['token'])}),signature,state['version']
+        service.sample.side_effect=latest
+        writer=self.virtual_writer()
+        limits=ArmLimits(enabled=(False,False,False,True,False,False))
+        writer.begin_control(SharedArmControl(encode([90.]*15,[0]*10),limits,[90.]*6),
+                             [90.]*6,time.monotonic()+.25)
+        # Force following only for this synthetic protocol test.
+        writer.return_snapshot=Mock(return_value=(None,dict(phase='following'),None))
+        def solve(payload):
+            calls.append(payload['token'])
+            if len(calls)==1:entered.set();release.wait(1.)
+            return dict(target=[90.]*6,position_error_mm=0.,orientation_error_deg=None)
+        captured=(dict(token=1,rotations={}),time.monotonic()+.25,signature)
+        job=LiveIK(Mock(solve=solve),service,writer,('left',),captured,2.)
+        self.jobs.append(job);job.start();self.assertTrue(entered.wait(1.))
+        # One old result expires while 99 newer versions replace one slot.
+        time.sleep(.27)
+        for i in range(2,101):state.update(version=i,token=i,at=time.monotonic())
+        release.set()
+        self.wait(lambda:writer.target_received_at is not None,gui=False)
+        job.shutdown();self.assertTrue(job.wait(2000))
+        self.assertEqual(calls,[1,100])
+        discarded=[c for c in service.record_diagnostic.call_args_list if c.args[0]=='ik_expired']
+        self.assertEqual(len(discarded),1)
+
     def test_read_only_diagnostic_button_records_live_snapshot_without_uart(self):
         from jetson_teleop.diagnostics import DiagnosticLog
         from jetson_teleop.replay_ik import replay
@@ -179,6 +211,24 @@ class BackgroundTests(unittest.TestCase):
         self.assertIsNone(writer.target_received_at)
         self.assertFalse(writer.update_arm_target([90.]*6,time.monotonic()+.25,
                                                 task_id=writer.task_id+1))
+
+    def test_process_crash_pauses_without_retry_or_gui_and_reaps_child(self):
+        from jetson_teleop.process_ik import ProcessIK
+        from optusbproj_ubuntu.real_robot_shared import SharedArmIK
+        solver=ProcessIK.from_solver(SharedArmIK(encode([90.]*15,[0]*10),ArmLimits()))
+        try:
+            writer,job,_=self.start_mock(solver)
+            self.wait(lambda:writer.target_received_at is not None,gui=False)
+            solver.process.terminate();solver.process.join(1.)
+            self.wait(lambda:job.cancelled.is_set(),gui=False)
+            self.assertTrue(job.wait(2000))
+            self.assertTrue(writer.pause_reason)
+            received=writer.target_received_at
+            time.sleep(.1)
+            self.assertEqual(writer.target_received_at,received)
+            self.assertFalse(solver.process.is_alive())
+            self.assertTrue(solver.closed)
+        finally:solver.close()
 
     def test_owner_failure_pauses_even_with_blocked_solver(self):
         entered = threading.Event(); release = threading.Event()
@@ -277,6 +327,7 @@ class BackgroundTests(unittest.TestCase):
                     self.assertGreaterEqual(timing['input_read_wall_ms'],0)
                     self.assertGreaterEqual(timing['post_solve_validation_ms'],0)
                     self.assertTrue(timing['solver_timing']['success'])
+                    self.assertEqual(timing['solver_timing']['backend'],'spawn_process')
                     self.assertIn('thread_cpu_ms',timing['solver_timing'])
                     if mode==3:self.assertEqual(set(timing['solver_timing']['arms']),{'left','right'})
                 finally:
