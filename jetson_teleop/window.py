@@ -25,7 +25,11 @@ from .solve_timing import observe
 class ControlDialog(RealRobotModesDialog):
     def __init__(self, viewer):
         super().__init__(viewer, include_fingers=False)
-        self.setWindowTitle('Jetson · 左臂 / 双臂真机控制（无反馈）')
+        self.setWindowTitle('Jetson · 左臂 / 双臂真机控制（独立进程 IK · 无反馈）')
+        self.auto_start.inline_safety = True
+        self.auto_start.start.setToolTip('点击后核对停止姿态参考，再确认安全空间、独立断电和本次输出轴；取消不会启动。')
+        for row in self.right_axis_rows:
+            row[0].setChecked(True)
         for index in (0, 1):
             self.mode_select.model().item(index).setEnabled(False)
         self.mode_select.setCurrentIndex(3 if viewer.config['mode'] == 'bilateral_shared_ik' else 2)

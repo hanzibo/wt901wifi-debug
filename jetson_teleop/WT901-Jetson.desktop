@@ -1,7 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=WT901 Jetson 双臂控制
-Comment=轻量 IMU 姿态与同源机器人控制；不自动打开串口
+Name=WT901 双臂遥操作控制台
+Comment=Jetson 轻量双臂 IMU 遥操作：姿态预览、同源 IK、停止手势与顺序回位；不自动连接真机
+Icon=/home/mic-711on/Work/WT901/jetson_teleop/assets/dual-arm-control.svg
 Exec=/home/mic-711on/Work/WT901/jetson_teleop/launch.sh
 Path=/home/mic-711on/Work/WT901
 Terminal=true

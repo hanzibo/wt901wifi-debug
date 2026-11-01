@@ -187,6 +187,45 @@ class GuiTests(ConfigTests):
             APP.processEvents()
         d.worker = None; d.ik_worker = None; d.busy = False
 
+    def test_arm_defaults_and_checkpoint_preserve_explicit_uncheck(self):
+        d = self.window.control
+        self.assertTrue(all(row[0].isChecked() for row in d.right_axis_rows))
+        d.mode_select.setCurrentIndex(3)
+        self.assertTrue(all(row[0].isChecked() for row in d.right_axis_rows))
+        d.right_axis_rows[0][0].setChecked(False)
+        d.checkpoints.apply(checkpoint('bilateral_shared_ik'))
+        self.assertFalse(d.right_axis_rows[0][0].isChecked())
+        self.assertTrue(all(row[0].isChecked() for row in d.right_axis_rows[1:]))
+
+    def test_inline_start_confirms_stop_reference_then_safety(self):
+        d = self.prepare_async_start()
+        d.safety.setChecked(False)
+        d.end_session.enable.setChecked(True)
+        self.assertFalse(d.end_session.configured)
+        self.assertTrue(d.auto_start.eligible())
+        with patch.object(QMessageBox, 'warning', return_value=QMessageBox.Yes) as warning:
+            d.auto_start.arm()
+        self.assertEqual(warning.call_count, 2)
+        self.assertEqual(warning.call_args_list[0].args[1], '停止姿态参考仅是指令角')
+        self.assertTrue(d.end_session.configured)
+        self.assertTrue(d.safety.isChecked())
+        self.assertEqual(d.auto_start.phase, 'countdown')
+        d.worker.engage.assert_not_called()
+
+    def test_inline_start_cancel_at_either_modal_never_authorizes(self):
+        d = self.prepare_async_start()
+        for answers in ([QMessageBox.Cancel], [QMessageBox.Yes, QMessageBox.Cancel]):
+            d.safety.setChecked(False)
+            d.end_session.enable.setChecked(True)
+            d.end_session.clear_checkpoint_confirmation()
+            with patch.object(QMessageBox, 'warning', side_effect=answers) as warning:
+                d.auto_start.arm()
+            self.assertEqual(warning.call_count, len(answers))
+            self.assertFalse(d.safety.isChecked())
+            self.assertFalse(d.auto_start.authorized)
+            self.assertEqual(d.auto_start.phase, 'idle')
+            d.worker.engage.assert_not_called()
+
     def wait_gui(self, predicate, timeout=3):
         until = time.monotonic()+timeout
         while not predicate() and time.monotonic() < until:

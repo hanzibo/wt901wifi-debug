@@ -10,6 +10,9 @@ from .real_robot_protocol import decode
 class AutoStartSession:
     def __init__(self, owner):
         self.owner = owner
+        # ARM entry may collect safety consent in the existing modal instead
+        # of requiring a separate checkbox first. PC behavior stays unchanged.
+        self.inline_safety = False
         self.phase = 'idle'
         self.authorized = False
         self.deadline = self.last_tick = self.wait_until = None
@@ -53,7 +56,7 @@ class AutoStartSession:
         d = self.owner
         return (d._shared_mode() and not self.pending and not d.busy and d.ik_worker is None
                 and d.connected and d.worker is not None and d.worker.isRunning()
-                and d.origin is not None and d.safety.isChecked()
+                and d.origin is not None and (d.safety.isChecked() or self.inline_safety)
                 and not d.end_session.await_home and not d.end_session.returning
                 and not d.worker.return_snapshot()[2])
 
@@ -61,6 +64,12 @@ class AutoStartSession:
         d = self.owner
         if not self.eligible(): return
         try:
+            end = d.end_session
+            if (self.inline_safety and end.enable.isChecked()
+                    and (not end.configured or end.gesture_config() != end.reference)):
+                end.configure(False)
+                if not end.configured or end.gesture_config() != end.reference:
+                    return  # Cancel is never motion authorization.
             d._poll()
             if d.arm_sample is None or time.monotonic() > d.arm_sample[1]:
                 raise ValueError('当前输入无效，不能授权倒计时')
@@ -88,6 +97,9 @@ class AutoStartSession:
                     or time.monotonic() > d.arm_sample[1]
                     or d.origin != origin or d._limits() != limits or self.values() != settings):
                 raise ValueError('确认期间配置、连接或输入变化，请重新授权')
+            d.end_session.gesture(limits)  # Modal interaction may change stop settings.
+            if self.inline_safety:
+                d.safety.setChecked(True)  # Consent was explicitly given in the warning.
             d.arm_capture = None; d.arm_history.clear()
             self.signature = signature
             self.input_deadline = d.arm_sample[1]

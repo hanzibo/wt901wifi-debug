@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>WT901 双臂遥操作控制台</title>
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="#14243b"/>
+  <rect x="91" y="43" width="74" height="53" rx="17" fill="#e8f3ff"/>
+  <path d="M128 43V29" stroke="#56d9ec" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="128" cy="27" r="6" fill="#56d9ec"/>
+  <circle cx="111" cy="68" r="6" fill="#14243b"/>
+  <circle cx="145" cy="68" r="6" fill="#14243b"/>
+  <rect x="98" y="108" width="60" height="76" rx="17" fill="#e8f3ff"/>
+  <path d="M96 121L60 139L43 105M160 121L196 139L213 105" fill="none" stroke="#56d9ec" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="#14243b" stroke="#e8f3ff" stroke-width="5">
+    <circle cx="91" cy="123" r="10"/><circle cx="60" cy="139" r="10"/>
+    <circle cx="165" cy="123" r="10"/><circle cx="196" cy="139" r="10"/>
+  </g>
+  <path d="M33 86L43 105L56 89M200 89L213 105L223 86" fill="none" stroke="#ffbf69" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M112 142H121L126 131L133 154L139 142H146" fill="none" stroke="#2587bd" stroke-width="4" stroke-linejoin="round"/>
+  <rect x="73" y="203" width="110" height="9" rx="4.5" fill="#56d9ec"/>
+</svg>
